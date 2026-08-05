@@ -3,7 +3,20 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 
 /// Friendly error message without raw server URLs.
 String friendlyError(Object? error, String fallback) {
-  final s = error?.toString().toLowerCase() ?? '';
+  if (error == null) return fallback;
+  final str = error.toString().trim();
+  if (str.isEmpty) return fallback;
+
+  // Preserve direct human-readable API messages (e.g. "Email already registered")
+  if (!str.contains('Exception') &&
+      !str.contains('HTTP ') &&
+      !str.contains('SocketException') &&
+      !str.contains('http://') &&
+      !str.contains('https://')) {
+    return str;
+  }
+
+  final s = str.toLowerCase();
   if (s.contains('socketexception') ||
       s.contains('connection refused') ||
       s.contains('connection reset') ||
@@ -30,9 +43,6 @@ String friendlyError(Object? error, String fallback) {
   }
   if (s.contains('failed to connect') || s.contains('failed connection') || s.contains('unable to access')) {
     return 'Unable to reach the server. Please try again.';
-  }
-  if (error != null && s.isNotEmpty) {
-    return 'Something went wrong. Please try again.';
   }
   return fallback;
 }

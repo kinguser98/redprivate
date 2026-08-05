@@ -340,6 +340,16 @@ class MyHttpOverrides extends HttpOverrides {
   @override
   String findProxyFromEnvironment(Uri uri, Map<String, String>? environment) {
     final host = uri.host.toLowerCase();
+    final path = uri.path.toLowerCase();
+
+    // Direct video content streams MUST ALWAYS be DIRECT (0 proxy socket overhead)
+    if (path.contains('get_video') ||
+        host.contains('tapecontent') ||
+        uri.path.endsWith('.mp4') ||
+        uri.path.endsWith('.mkv')) {
+      return 'DIRECT';
+    }
+
     for (final pattern in blocklist) {
       if (host.contains(pattern)) {
         return 'PROXY 127.0.0.1:$port';

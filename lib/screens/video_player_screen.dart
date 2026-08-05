@@ -238,23 +238,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await np.setProperty('demuxer-max-back-bytes', '8MiB');
           await np.setProperty('cache', 'yes');
         } else {
-          await np.setProperty('network-timeout', '30');
+          await np.setProperty('network-timeout', '60');
           await np.setProperty('cache', 'yes');
           await np.setProperty('cache-on-disk', 'no');
-          await np.setProperty('demuxer-max-bytes', '67108864');
-          await np.setProperty('demuxer-max-back-bytes', '16777216');
-          await np.setProperty('demuxer-readahead-secs', '15');
-          await np.setProperty('cache-secs', '15');
+          await np.setProperty('demuxer-max-bytes', '536870912');
+          await np.setProperty('demuxer-max-back-bytes', '67108864');
+          await np.setProperty('demuxer-readahead-secs', '300');
+          await np.setProperty('cache-secs', '300');
           await np.setProperty('cache-pause-wait', '0');
           await np.setProperty('stream-live', 'no');
-          await np.setProperty('demuxer-lavf-o', 'http_persistent=0');
+          await np.setProperty(
+              'demuxer-lavf-o',
+              'reconnect=1,reconnect_at_eof=1,reconnect_streamed=1,'
+              'reconnect_delay_max=2,http_persistent=1,tcp_nodelay=1');
         }
 
         await np.setProperty('force-seekable', 'yes');
-        await np.setProperty('demuxer-lavf-buffersize', '1048576');
+        await np.setProperty('demuxer-lavf-buffersize', '10485760');
         if (Platform.isAndroid) {
           await np.setProperty('ao', 'audiotrack,opensles,');
-        } else if (Platform.isIOS) {
+        } else if (Platform.isIOS || Platform.isMacOS) {
           await np.setProperty('ao', 'audiounit,');
         }
       }
