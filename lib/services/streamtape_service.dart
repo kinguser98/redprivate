@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 
 class StreamtapeService {
@@ -11,14 +12,14 @@ class StreamtapeService {
 
   static final Map<String, String> _urlCache = {};
 
-  static const List<String> _apiDomains = [
+  static const List<String> defaultApiDomains = [
     'api.strcloud.club',
     'api.streamtape.com',
     'api.streamtape.to',
     'api.streamtape.net',
   ];
 
-  static const List<String> _familyHints = [
+  static const List<String> defaultFamilyHints = [
     'streamtape',
     'strcloud',
     'tpead',
@@ -35,10 +36,34 @@ class StreamtapeService {
     'ontape',
   ];
 
+  static Future<List<String>> getApiDomains() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedStr = prefs.getString('admin_streamtape_api_domains');
+      if (savedStr != null && savedStr.trim().isNotEmpty) {
+        final list = savedStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        if (list.isNotEmpty) return list;
+      }
+    } catch (_) {}
+    return List.from(defaultApiDomains);
+  }
+
+  static Future<List<String>> getFamilyDomains() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedStr = prefs.getString('admin_streamtape_family_domains');
+      if (savedStr != null && savedStr.trim().isNotEmpty) {
+        final list = savedStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        if (list.isNotEmpty) return list;
+      }
+    } catch (_) {}
+    return List.from(defaultFamilyHints);
+  }
+
   /// True when a URL belongs to the Streamtape family (needs resolution).
   static bool isStreamtapeFamily(String url) {
     final lower = url.toLowerCase();
-    for (final h in _familyHints) {
+    for (final h in defaultFamilyHints) {
       if (lower.contains(h)) return true;
     }
     return RegExp(r'/(?:v|e|f)/[A-Za-z0-9_-]{6,}').hasMatch(lower);
@@ -89,12 +114,13 @@ class StreamtapeService {
     }
 
     // 1. Direct Official API on client (Phone IP authenticated via DNS Proxy)
+    final activeApiDomains = await getApiDomains();
     final fileId = extractFileId(streamtapeUrl);
     if (fileId != null) {
       for (final cred in _credentialSets) {
         final login = cred['login']!;
         final key = cred['key']!;
-        for (final domain in _apiDomains) {
+        for (final domain in activeApiDomains) {
           try {
             final ticketUrl =
                 'https://$domain/file/dlticket?file=$fileId&login=$login&key=$key';
@@ -113,7 +139,7 @@ class StreamtapeService {
             final dlData = json.decode(dlRes.body);
             if (dlData['status'] == 200 && dlData['result']?['url'] != null) {
               String directUrl = dlData['result']['url'];
-              debugPrint("Resolved Streamtape Stream URL via Direct API: $directUrl");
+              debugPrint("Resolved Streamtape Stream URL via Direct API ($domain): $directUrl");
               _urlCache[streamtapeUrl] = directUrl;
               return directUrl;
             }

@@ -818,7 +818,18 @@ class ApiService {
         json.encode({'action': 'get_app_settings'}),
       );
       if (res.statusCode == 200) {
-        return json.decode(res.body);
+        final data = json.decode(res.body);
+        if (data['status'] == 'success' && data['data']?['settings'] != null) {
+          final s = data['data']['settings'];
+          final prefs = await SharedPreferences.getInstance();
+          if (s['streamtape_api_domains'] != null) {
+            await prefs.setString('admin_streamtape_api_domains', s['streamtape_api_domains'].toString());
+          }
+          if (s['streamtape_family_domains'] != null) {
+            await prefs.setString('admin_streamtape_family_domains', s['streamtape_family_domains'].toString());
+          }
+        }
+        return data;
       }
     } catch (e) {
       print("fetchAppSettings error: $e");
