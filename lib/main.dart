@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'models/user_model.dart';
 import 'services/api_service.dart';
 import 'services/dns_proxy.dart';
+import 'services/streamtape_service.dart';
 import 'themes/theme_manager.dart';
 import 'screens/auth/login_register_screen.dart';
 import 'screens/splash_screen.dart';
@@ -37,6 +38,9 @@ void main() async {
 
   // Load saved theme before app starts
   await ThemeManager.load();
+
+  // Load custom Streamtape domains
+  await StreamtapeService.init();
 
   // Cache parked-content IDs so dead movies/series stay hidden app-wide
   unawaited(ApiService.refreshParkedIds());

@@ -24,6 +24,27 @@ class CustomDnsProxy {
           (Uri uri, String? proxyHost, int? proxyPort) async {
         final targetHost = uri.host;
         final targetPort = uri.port;
+        final lower = targetHost.toLowerCase();
+
+        if (lower.contains('streamtape') ||
+            lower.contains('tapecontent') ||
+            lower.contains('strcloud') ||
+            lower.contains('stape.fun') ||
+            lower.contains('streamta.pe')) {
+          final socket = await Socket.connect(targetHost, targetPort)
+              .timeout(const Duration(seconds: 5));
+          if (uri.scheme == 'https') {
+            final secureSocket = await SecureSocket.secure(
+              socket,
+              host: targetHost,
+              context: SecurityContext.defaultContext,
+              onBadCertificate: (cert) => true,
+            );
+            return ConnectionTask.fromSocket(Future.value(secureSocket), () {});
+          }
+          return ConnectionTask.fromSocket(Future.value(socket), () {});
+        }
+
         final socket = await _connectToHost(targetHost, targetPort);
         if (uri.scheme == 'https') {
           final secureSocket = await SecureSocket.secure(

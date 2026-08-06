@@ -1,6 +1,6 @@
 class ApiConfig {
-  // Single source of truth — our custom backend on ott.redapp.space
-  static String baseUrl = "https://ott.redapp.space/redapp/api";
+  // Single source of truth — our custom backend
+  static String baseUrl = "https://red.goprivate.fun/api";
   static String apiKey = "ku9qFY6XKp5OC1bG";
 
   static String get authUrl      => "$baseUrl/auth.php";

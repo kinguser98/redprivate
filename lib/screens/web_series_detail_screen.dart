@@ -84,8 +84,11 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
               ? int.tryParse(detailsData['ott_id'].toString())
               : null;
 
+          final contentMap = Map<String, dynamic>.from(content);
+          contentMap['item_type'] = 'series';
+
           setState(() {
-            _series = MovieModel.fromJson(content);
+            _series = MovieModel.fromJson(contentMap);
             _seasons = seasonsList;
             _related = relatedList;
             _castMembers = castMembers;
@@ -145,6 +148,7 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
       ottName: _ottName,
       ottLogo: _ottLogo,
       ottId: _ottId,
+      seriesOverride: true,  // Always treat as series for download picker
     );
 
     final playCallback = () {

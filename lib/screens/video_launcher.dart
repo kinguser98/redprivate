@@ -46,12 +46,10 @@ Future<void> playVideo(
   try {
     String? finalUrl;
 
-    // Direct media files play as-is; everything else MUST go through the
-    // streamtape resolver (advtpe/tpead/tapepops/streamtape & embed pages).
     if (StreamtapeService.isDirectMediaUrl(rawUrl)) {
       finalUrl = rawUrl;
     } else {
-      String? resolved = await StreamtapeService.getDirectStreamUrl(rawUrl);
+      String? resolved = await StreamtapeService.getDirectStreamUrl(rawUrl, forceRefresh: true);
       if ((resolved == null ||
               resolved.isEmpty ||
               !resolved.startsWith('http')) &&

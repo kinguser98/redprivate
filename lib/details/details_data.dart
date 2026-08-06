@@ -10,8 +10,18 @@ class DetailsData {
   final String? ottName;
   final String? ottLogo;
   final int? ottId;
+  // Explicitly set by the screen constructing DetailsData:
+  // true = web series (show episode picker on download)
+  // false = movie (resolve URL and download directly)
+  final bool seriesOverride;
 
-  bool get isMovie => movie.itemType == 'movie' || movie.itemType == '1';
+  bool get isSeries {
+    if (seriesOverride) return true;
+    final type = movie.itemType.toLowerCase().trim();
+    return type == 'series' || type == 'webseries' || type == '2';
+  }
+
+  bool get isMovie => !isSeries;
 
   int get totalSeasons => seasons.length;
   int get totalEpisodes =>
@@ -27,5 +37,6 @@ class DetailsData {
     this.ottName,
     this.ottLogo,
     this.ottId,
+    this.seriesOverride = false,
   });
 }

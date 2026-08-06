@@ -58,8 +58,7 @@ class UserModel {
         low == 'free' ||
         low == 'none' ||
         low == 'null' ||
-        low == 'false' ||
-        low == '1') {
+        low == 'false') {
       return false;
     }
     final exp = subscriptionExp.trim();

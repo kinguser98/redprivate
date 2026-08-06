@@ -24,15 +24,25 @@ Future<void> handleDownloadAction(BuildContext context, DetailsData data,
     }
   }
 
+  debugPrint("[DL] handleDownloadAction: isMovie=${data.isMovie}, isSeries=${data.isSeries}, itemType=${data.movie.itemType}, playLinks=${data.playLinks.length}, seasons=${data.seasons.length}, seriesOverride=${data.seriesOverride}");
+
   // All content is premium: only active VIP subscribers can download
   if (!AppSession.isVip) {
     _showDownloadVipGate(context, data.movie.name);
     return;
   }
 
-  // Web series: show an episode picker so the user chooses what to download
-  if (overrideUrl == null && data.seasons.isNotEmpty) {
+  // Web series: show the episode picker popup
+  if (overrideUrl == null && data.isSeries) {
+    debugPrint("[DL] → Showing series episode picker");
     _showSeriesEpisodePicker(context, data);
+    return;
+  }
+
+  // Movie with multiple server links: show link selector popup
+  if (overrideUrl == null && data.isMovie && data.playLinks.length > 1) {
+    debugPrint("[DL] → Showing movie link picker (${data.playLinks.length} links)");
+    _showMovieLinkPicker(context, data);
     return;
   }
 
@@ -44,6 +54,8 @@ Future<void> handleDownloadAction(BuildContext context, DetailsData data,
     final ep = data.seasons.first.episodes.first;
     if (ep.playLinks.isNotEmpty) url = ep.playLinks.first.url;
   }
+
+  debugPrint("[DL] → Calling _startDownload with url: $url");
 
   if (url.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -62,9 +74,18 @@ bool _isStreamtapeLike(String u) {
       l.contains('tapepops') ||
       l.contains('tpead') ||
       l.contains('tapecontent') ||
+      l.contains('advtpe') ||
+      l.contains('advtape') ||
+      l.contains('adtape') ||
+      l.contains('shavetape') ||
+      l.contains('adblocktape') ||
+      l.contains('stape.fun') ||
+      l.contains('streamta.pe') ||
       l.contains('vercel') ||
       l.contains('koyeb');
 }
+
+
 
 // Resolves Streamtape links on the phone IP so tickets match the device IP
 Future<void> _startDownload(BuildContext context, String rawUrl, String title,
@@ -76,6 +97,9 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
     return;
   }
 
+  debugPrint("[DL] _startDownload rawUrl=$rawUrl");
+  debugPrint("[DL] isStreamtapeLike=${_isStreamtapeLike(rawUrl)}, isStreamtapeFamily=${StreamtapeService.isStreamtapeFamily(rawUrl)}");
+
   showDialog(
     context: context,
     barrierDismissible: false,
@@ -85,6 +109,8 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
       subtitle: 'Preparing Download Link...',
     ),
   );
+
+  debugPrint("[DL] Resolving dialog shown");
 
   String url = rawUrl;
   try {
@@ -298,6 +324,119 @@ void _showSeriesEpisodePicker(BuildContext context, DetailsData data) {
                   ),
                 ),
               ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+void _showMovieLinkPicker(BuildContext context, DetailsData data) {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.65),
+    builder: (ctx) => Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            width: double.maxFinite,
+            constraints: const BoxConstraints(maxWidth: 430),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1E2436), Color(0xFF0D0F16)],
+              ),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.06))),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [Color(0xFF8E2DE2), Color(0xFFE50914)]),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.download_rounded, color: Colors.white, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('SELECT DOWNLOAD LINK',
+                                style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.4)),
+                            const SizedBox(height: 2),
+                            Text(data.movie.name,
+                                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ],
+                        ),
+                      ),
+                      IconButton(icon: const Icon(Icons.close_rounded, color: Colors.white60), onPressed: () => Navigator.pop(ctx)),
+                    ],
+                  ),
+                ),
+                ListView.builder(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.all(14),
+                  itemCount: data.playLinks.length,
+                  itemBuilder: (ctx, i) {
+                    final link = data.playLinks[i];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _startDownload(context, link.url, '${data.movie.name} (${link.name})', poster: data.movie.poster);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF232A3C).withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.movie_rounded, color: Colors.cyanAccent, size: 22),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(link.name.isNotEmpty ? link.name : 'Server ${i + 1}',
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                    if (link.quality.isNotEmpty)
+                                      Text(link.quality, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                  ],
+                                ),
+                              ),
+                              const Icon(Icons.download_rounded, color: Colors.greenAccent, size: 20),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ],
             ),
           ),

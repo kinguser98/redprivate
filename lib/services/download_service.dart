@@ -313,6 +313,10 @@ class DownloadManager {
       }
     }
 
+    if (task.url.contains('#')) {
+      task.url = task.url.split('#')[0];
+    }
+
     // Direct (non-proxy, non-Streamtape) downloads can use parallel segments for high speed.
     // Streamtape (tapecontent.net) requires single-threaded direct streaming.
     if (!isStreamtape &&
@@ -468,7 +472,8 @@ class DownloadManager {
         final rangeStart = task.downloaded;
         final rangeEnd = rangeStart + chunkSize - 1;
 
-        final request = http.Request('GET', Uri.parse(task.url));
+        final cleanUrl = task.url.split('#')[0];
+        final request = http.Request('GET', Uri.parse(cleanUrl));
         request.headers['Range'] = 'bytes=$rangeStart-$rangeEnd';
         request.headers['User-Agent'] =
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../config/api_config.dart';
+import '../streamtape_domains_screen.dart';
 
 class HiddenAdminScreen extends StatefulWidget {
   const HiddenAdminScreen({Key? key}) : super(key: key);
@@ -35,6 +36,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'App Settings',
     'Push Campaigns & Announcements',
     'User Reports Manager',
+    'Streamtape Domains Manager',
   ];
 
   final List<IconData> _navIcons = [
@@ -53,6 +55,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.settings_suggest_rounded,
     Icons.send_rounded,
     Icons.report_rounded,
+    Icons.dns_rounded,
   ];
 
   // Data lists
@@ -1549,6 +1552,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildPushCampaignsView();
       case 14:
         return _buildReportsManagerView();
+      case 15:
+        return const StreamtapeDomainsScreen();
       default:
         return _buildDashboardView();
     }
@@ -3715,6 +3720,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                Switch(
+                                  value: (item['status'] ?? 1) == 1,
+                                  activeColor: Colors.purpleAccent,
+                                  onChanged: (val) async {
+                                    final newStatus = val ? 1 : 0;
+                                    final res = await _adminPhpApi('toggle_network_status', {
+                                      'id': item['id'],
+                                      'status': newStatus,
+                                    });
+                                    if (res['status'] == 'success') {
+                                      setState(() {
+                                        _cast[realIndex]['status'] = newStatus;
+                                      });
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text("Failed to update status: ${res['message'] ?? 'Error'}"),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                ),
                                 _iconAction(Icons.edit_rounded, Colors.orangeAccent, () => _showEditNetworkDialog(item, realIndex)),
                                 _iconAction(Icons.delete_outline_rounded, Colors.redAccent, () async {
                                   final res = await _adminPhpApi('delete_network', {'id': item['id']});
