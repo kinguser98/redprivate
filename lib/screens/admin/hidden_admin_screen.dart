@@ -564,7 +564,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   // Level 2: Episodes of a season (add / edit / delete episode)
   void _openEpisodeManagerModal(dynamic seriesItem) {
     final String seriesTitle = seriesItem['name'] ?? 'Web Series';
-    final int seriesId = seriesItem['id'] ?? 0;
+    final int seriesId = int.tryParse(seriesItem['id']?.toString() ?? '') ?? 0;
 
     showDialog(
       context: context,

@@ -71,6 +71,7 @@ bool _isStreamtapeLike(String u) {
   final l = u.toLowerCase();
   return l.contains('streamtape') ||
       l.contains('strcloud') ||
+      l.contains('strcolud') ||
       l.contains('tapepops') ||
       l.contains('tpead') ||
       l.contains('tapecontent') ||
