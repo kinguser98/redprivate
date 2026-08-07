@@ -109,6 +109,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _tmdbIdCtrl = TextEditingController();
   final TextEditingController _skymoviesDomainCtrl = TextEditingController(text: 'https://skymovieshd.ceo');
   final TextEditingController _hdmaalDomainCtrl = TextEditingController(text: 'https://hdmaal.gg');
+  final TextEditingController _uncutmastiDomainCtrl = TextEditingController(text: 'https://uncutmasti.com');
+  final TextEditingController _hdmove99DomainCtrl = TextEditingController(text: 'https://hdmove99.com');
   List<dynamic> _skymoviesCatalog = [];
   bool _skymoviesLoading = false;
   String _skymoviesCat = 'Hot-Short-Film';
@@ -5681,10 +5683,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _v7aApkCtrl = TextEditingController();
   final _v8aApkCtrl = TextEditingController();
   final _universalApkCtrl = TextEditingController();
-  final _skymoviesDomainCtrl = TextEditingController();
-  final _hdmaalDomainCtrl = TextEditingController();
-  final _uncutmastiDomainCtrl = TextEditingController();
-  final _hdmove99DomainCtrl = TextEditingController();
 
   bool _telemetryDashboardLoading = false;
   Map<String, dynamic>? _telemetryDashboardData;
