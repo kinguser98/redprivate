@@ -9,7 +9,7 @@ import 'video_player_screen.dart';
 
 Future<void> playVideo(
     BuildContext context, String rawUrl, String title,
-    {bool premium = false}) async {
+    {bool premium = false, int? contentId, int? contentType}) async {
   // Refresh VIP status from the server so admin grants / coupon redemptions take effect
   final uid = AppSession.user?.id ?? 0;
   if (uid > 0) {
@@ -78,8 +78,12 @@ Future<void> playVideo(
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            VideoPlayerScreen(videoUrl: finalUrl!, videoTitle: title),
+        builder: (_) => VideoPlayerScreen(
+          videoUrl: finalUrl!,
+          videoTitle: title,
+          contentId: contentId,
+          contentType: contentType,
+        ),
       ),
     );
   } catch (e) {

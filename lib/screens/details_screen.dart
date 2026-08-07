@@ -144,7 +144,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _playVideo(String rawUrl, String title) async {
     ApiService.logView(widget.contentId, widget.itemType);
-    await playVideo(context, rawUrl, title, premium: _isPremium);
+    final isMovie = widget.itemType == 'movie' || widget.itemType == '1';
+    await playVideo(
+      context, 
+      rawUrl, 
+      title, 
+      premium: _isPremium,
+      contentId: widget.contentId,
+      contentType: isMovie ? 1 : 2,
+    );
   }
 
   void _navigateToRelated(int contentId, String itemType) {

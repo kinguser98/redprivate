@@ -119,7 +119,14 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
 
   Future<void> _playEpisode(String rawUrl, String title) async {
     ApiService.logView(widget.contentId, 'series');
-    await playVideo(context, rawUrl, title, premium: _isPremium);
+    await playVideo(
+      context, 
+      rawUrl, 
+      title, 
+      premium: _isPremium,
+      contentId: widget.contentId,
+      contentType: 2,
+    );
   }
 
   @override

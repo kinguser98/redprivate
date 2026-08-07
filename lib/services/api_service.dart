@@ -170,12 +170,14 @@ class ApiService {
       try {
         final client = HttpClient();
         client.badCertificateCallback = (cert, host, port) => true;
+        // Direct IP bypass if carrier DNS/SNI blocks red.goprivate.fun
+        final hostHeader = uri.host;
         final ipUrl = Uri.parse(
-            "http://92.204.162.165${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}");
-        print("POST Attempt 3 Direct IP: $ipUrl");
+            "https://red.goprivate.fun${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}");
+        print("POST Attempt 3 Direct URL: $ipUrl");
         final request =
             await client.postUrl(ipUrl).timeout(const Duration(seconds: 8));
-        request.headers.set('Host', 'ott.redapp.space');
+        request.headers.set('Host', hostHeader);
         headers.forEach((k, v) {
           if (k.toLowerCase() != 'host') request.headers.set(k, v);
         });
@@ -219,12 +221,16 @@ class ApiService {
       try {
         final client = HttpClient();
         client.badCertificateCallback = (cert, host, port) => true;
+        final hostHeader = uri.host;
         final ipUrl = Uri.parse(
-            "http://92.204.162.165${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}");
-        print("GET Attempt 3 Direct IP: $ipUrl");
+            "https://red.goprivate.fun${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}");
+        print("GET Attempt 3 Direct URL: $ipUrl");
         final request =
             await client.getUrl(ipUrl).timeout(const Duration(seconds: 8));
-        headers.forEach((k, v) => request.headers.set(k, v));
+        request.headers.set('Host', hostHeader);
+        headers.forEach((k, v) {
+          if (k.toLowerCase() != 'host') request.headers.set(k, v);
+        });
         final response =
             await request.close().timeout(const Duration(seconds: 8));
         final resBody = await response
@@ -867,5 +873,59 @@ class ApiService {
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('user_data');
+  }
+
+  // Live Telemetry / Analytics
+  static Future<void> sendHeartbeat(int userId, String currentView, {int? contentId, int? contentType}) async {
+    if (userId <= 0) return;
+    try {
+      await _postWithFallback(
+        ApiConfig.adminUrl,
+        {'Content-Type': 'application/json'},
+        json.encode({
+          'action': 'heartbeat',
+          'user_id': userId,
+          'current_view': currentView,
+          'app_version': ApiConfig.currentVersion,
+          if (contentId != null) 'content_id': contentId,
+          if (contentType != null) 'content_type': contentType,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> logPlayEvent(int userId, int contentId, int contentType, int durationSec, int completed) async {
+    if (userId <= 0 || contentId <= 0) return;
+    try {
+      await _postWithFallback(
+        ApiConfig.adminUrl,
+        {'Content-Type': 'application/json'},
+        json.encode({
+          'action': 'log_play_event',
+          'user_id': userId,
+          'content_id': contentId,
+          'content_type': contentType,
+          'duration_seconds': durationSec,
+          'completed': completed,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> logDownloadEvent(int userId, int contentId, int contentType, String status) async {
+    if (userId <= 0 || contentId <= 0) return;
+    try {
+      await _postWithFallback(
+        ApiConfig.adminUrl,
+        {'Content-Type': 'application/json'},
+        json.encode({
+          'action': 'log_download_event',
+          'user_id': userId,
+          'content_id': contentId,
+          'content_type': contentType,
+          'status': status,
+        }),
+      );
+    } catch (_) {}
   }
 }

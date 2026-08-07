@@ -7,6 +7,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/streamtape_service.dart';
+import '../models/user_model.dart';
+import '../services/api_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -15,12 +17,16 @@ class VideoPlayerScreen extends StatefulWidget {
     required this.videoTitle,
     this.movieId,
     this.resumeDirectly = false,
+    this.contentId,
+    this.contentType,
   });
 
   final String videoUrl;
   final String videoTitle;
   final String? movieId;
   final bool resumeDirectly;
+  final int? contentId;
+  final int? contentType;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -43,6 +49,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   // Live Clock
   Timer? _clockTimer;
   String _timeString = '';
+  Timer? _telemetryTimer;
 
   // Pinch Zoom & Pan Offset
   double _videoScale = 1.0;
@@ -85,6 +92,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _open();
 
     _statsTimer = Timer.periodic(const Duration(seconds: 5), (_) => _saveProgress());
+
+    // Setup periodic heartbeat tracking for video player (every 30s)
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      try {
+        final userId = AppSession.user?.id ?? 0;
+        if (userId > 0 && widget.contentId != null && widget.contentId! > 0) {
+          ApiService.sendHeartbeat(
+            userId,
+            'player',
+            contentId: widget.contentId,
+            contentType: widget.contentType ?? 1,
+          );
+        }
+      } catch (_) {}
+    });
   }
 
   void _updateClock() {
@@ -122,10 +144,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
       }
 
+      String referer = 'https://streamtape.com/';
+      if (playUrl.contains('ixifile') || playUrl.contains('uncutmasti')) {
+        referer = 'https://uncutmasti.com/';
+      }
+
       final Map<String, String> playHeaders = {
         'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://streamtape.com/',
+        'Referer': referer,
       };
 
       _controller = VideoPlayerController.networkUrl(
@@ -448,7 +475,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _statsTimer?.cancel();
     _hudTimer?.cancel();
     _hideControlsTimer?.cancel();
+    _telemetryTimer?.cancel();
     _saveProgress();
+
+    // Log play duration event
+    try {
+      final userId = AppSession.user?.id ?? 0;
+      if (userId > 0 && widget.contentId != null && widget.contentId! > 0 && _duration.inSeconds > 0) {
+        final pos = _position.inSeconds;
+        final dur = _duration.inSeconds;
+        final completed = (pos / dur) >= 0.85 ? 1 : 0;
+        ApiService.logPlayEvent(
+          userId,
+          widget.contentId!,
+          widget.contentType ?? 1,
+          pos,
+          completed,
+        );
+      }
+    } catch (_) {}
 
     _controller?.removeListener(_onControllerUpdated);
     _controller?.dispose();

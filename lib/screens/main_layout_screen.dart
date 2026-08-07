@@ -3,6 +3,9 @@ import '../models/user_model.dart';
 import 'home_screen.dart';
 import 'all_movies_series_screen.dart';
 import 'settings_screen.dart';
+import '../widgets/update_dialog.dart';
+import '../services/api_service.dart';
+import '../config/api_config.dart';
 
 class MainLayoutScreen extends StatefulWidget {
   final UserModel user;
@@ -16,6 +19,45 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> {
   int _currentIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkUpdates();
+    });
+  }
+
+  Future<void> _checkUpdates() async {
+    try {
+      final res = await ApiService.fetchAppSettings();
+      if (res['status'] == 'success' && res['data']?['settings'] != null) {
+        final s = res['data']['settings'];
+        final latest = s['latest_version']?.toString() ?? '1.0.0';
+        if (_hasUpdate(ApiConfig.currentVersion, latest)) {
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: s['update_skippable']?.toString() == '1',
+              builder: (_) => UpdateDialog(settings: s),
+            );
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  bool _hasUpdate(String current, String latest) {
+    try {
+      List<int> currParts = current.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      List<int> latParts = latest.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      for (int i = 0; i < 3; i++) {
+        int cVal = i < currParts.length ? currParts[i] : 0;
+        int lVal = i < latParts.length ? latParts[i] : 0;
+        if (lVal > cVal) return true;
+        if (cVal > lVal) return false;
+      }
+    } catch (_) {}
+    return false;
+  }
   Widget build(BuildContext context) {
     final screens = [
       HomeScreen(user: widget.user),

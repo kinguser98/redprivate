@@ -6,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'streamtape_service.dart';
+import '../models/user_model.dart';
+import 'api_service.dart';
 
 enum DownloadStatus { queued, downloading, paused, completed, error }
 
@@ -20,6 +22,8 @@ class DownloadTask {
   int downloaded;
   DownloadStatus status;
   String? error;
+  final int? contentId;
+  final int? contentType;
 
   // Runtime metrics (not persisted)
   DateTime? startedAt;
@@ -52,6 +56,8 @@ class DownloadTask {
     this.downloaded = 0,
     this.status = DownloadStatus.queued,
     this.error,
+    this.contentId,
+    this.contentType,
   }) {
     if (originalUrl.isEmpty) originalUrl = url;
   }
@@ -78,6 +84,8 @@ class DownloadTask {
         orElse: () => DownloadStatus.paused,
       ),
       error: json['error']?.toString(),
+      contentId: json['contentId'] as int?,
+      contentType: json['contentType'] as int?,
     );
   }
 
@@ -92,6 +100,8 @@ class DownloadTask {
         'downloaded': downloaded,
         'status': status.name,
         'error': error,
+        'contentId': contentId,
+        'contentType': contentType,
       };
 }
 
@@ -197,7 +207,7 @@ class DownloadManager {
   }
 
   Future<DownloadTask?> start(String url, String title,
-      {String poster = '', String originalUrl = ''}) async {
+      {String poster = '', String originalUrl = '', int? contentId, int? contentType}) async {
     await ensureLoaded();
     if (url.isEmpty) return null;
 
@@ -232,7 +242,16 @@ class DownloadManager {
       poster: poster,
       filePath: filePath,
       status: DownloadStatus.queued,
+      contentId: contentId,
+      contentType: contentType,
     );
+    // Log download start event
+    try {
+      final userId = AppSession.user?.id ?? 0;
+      if (userId > 0 && contentId != null && contentId > 0) {
+        ApiService.logDownloadEvent(userId, contentId, contentType ?? 1, 'started');
+      }
+    } catch (_) {}
     tasksNotifier.value = [...tasksNotifier.value, task];
     await _persist();
     resume(task.id);
@@ -276,7 +295,16 @@ class DownloadManager {
     for (int attempt = 1; attempt <= 3; attempt++) {
       if (task.status != DownloadStatus.downloading) return;
       final result = await _attempt(task);
-      if (result == 'completed' || result == 'paused' || result == 'error') {
+      if (result == 'completed') {
+        try {
+          final userId = AppSession.user?.id ?? 0;
+          if (userId > 0 && task.contentId != null && task.contentId! > 0) {
+            ApiService.logDownloadEvent(userId, task.contentId!, task.contentType ?? 1, 'completed');
+          }
+        } catch (_) {}
+        return;
+      }
+      if (result == 'paused' || result == 'error') {
         return;
       }
       // 'retry' — transient connection failure (e.g. CDN closing early)

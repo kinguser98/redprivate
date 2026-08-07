@@ -1,4 +1,5 @@
 class ApiConfig {
+  static const String currentVersion = "1.0.0";
   // Single source of truth — our custom backend
   static String baseUrl = "https://red.goprivate.fun/api";
   static String apiKey = "ku9qFY6XKp5OC1bG";

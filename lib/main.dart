@@ -45,6 +45,16 @@ void main() async {
   // Cache parked-content IDs so dead movies/series stay hidden app-wide
   unawaited(ApiService.refreshParkedIds());
 
+  // Setup periodic background heartbeat telemetry (every 45s)
+  Timer.periodic(const Duration(seconds: 45), (timer) {
+    try {
+      final user = AppSession.user;
+      if (user != null && user.id != null && user.id! > 0) {
+        ApiService.sendHeartbeat(user.id!, 'browsing');
+      }
+    } catch (_) {}
+  });
+
   final themeManager = DetailsThemeManager();
 
   runApp(

@@ -39,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<MovieModel> _webSeriesOnlyForYou = [];
   List<MovieModel> _moviesOnlyForYou = [];
   List<dynamic> _ottData = [];
+  List<dynamic> _allOttData = [];
   String _telegramLink = 'https://t.me/+_g20_redapp';
 
   bool get _isVip => AppSession.user?.isVip ?? widget.user.isVip;
@@ -106,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _heroSlider = ApiService.filterParked(safeList(data['hero_slider']));
         _castData = data['ott_networks'] as List? ?? [];
         _ottData = data['ott_genres'] as List? ?? [];
+        _allOttData = data['all_ott_genres'] as List? ?? _ottData;
         _newlyAdded = ApiService.filterParked(safeList(data['newly_added']));
         _continuePlaying = data['continue_playing'] as List? ?? [];
         _top10Popular = ApiService.filterParked(safeList(data['top_10'] ?? data['trending_series']));
@@ -1298,7 +1300,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => AllOttScreen(ottList: _ottData),
+                      builder: (_) => AllOttScreen(ottList: _allOttData),
                     ),
                   );
                 },
@@ -1328,7 +1330,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => AllOttScreen(ottList: _ottData),
+                        builder: (_) => AllOttScreen(ottList: _allOttData),
                       ),
                     );
                   },

@@ -64,7 +64,7 @@ Future<void> handleDownloadAction(BuildContext context, DetailsData data,
     return;
   }
 
-  await _startDownload(context, url, data.movie.name, poster: data.movie.poster);
+  await _startDownload(context, url, data.movie.name, poster: data.movie.poster, contentId: data.movie.id, contentType: data.isMovie ? 1 : 2);
 }
 
 bool _isStreamtapeLike(String u) {
@@ -90,7 +90,7 @@ bool _isStreamtapeLike(String u) {
 
 // Resolves Streamtape links on the phone IP so tickets match the device IP
 Future<void> _startDownload(BuildContext context, String rawUrl, String title,
-    {String poster = ''}) async {
+    {String poster = '', int? contentId, int? contentType}) async {
   if (rawUrl.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("No downloadable link found for this video.")),
@@ -139,7 +139,7 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
     return;
   }
 
-  final task = await DownloadManager.instance.start(url, title, poster: poster, originalUrl: rawUrl);
+  final task = await DownloadManager.instance.start(url, title, poster: poster, originalUrl: rawUrl, contentId: contentId, contentType: contentType);
   if (!context.mounted) return;
   if (task == null) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -269,9 +269,11 @@ void _showSeriesEpisodePicker(BuildContext context, DetailsData data) {
                                 onTap: hasLink
                                     ? () {
                                         Navigator.pop(ctx);
-                                        _startDownload(context, ep.playLinks.first.url,
-                                            '${data.movie.name} — ${season.seasonName} ${ep.name}',
-                                            poster: data.movie.poster);
+                                          _startDownload(context, ep.playLinks.first.url,
+                                              '${data.movie.name} — ${season.seasonName} ${ep.name}',
+                                              poster: data.movie.poster,
+                                              contentId: data.movie.id,
+                                              contentType: 2);
                                       }
                                     : null,
                                 child: Container(
@@ -406,7 +408,7 @@ void _showMovieLinkPicker(BuildContext context, DetailsData data) {
                         borderRadius: BorderRadius.circular(14),
                         onTap: () {
                           Navigator.pop(ctx);
-                          _startDownload(context, link.url, '${data.movie.name} (${link.name})', poster: data.movie.poster);
+                           _startDownload(context, link.url, '${data.movie.name} (${link.name})', poster: data.movie.poster, contentId: data.movie.id, contentType: 1);
                         },
                         child: Container(
                           padding: const EdgeInsets.all(12),

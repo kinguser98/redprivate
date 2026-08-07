@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../config/api_config.dart';
 import '../streamtape_domains_screen.dart';
 
@@ -37,6 +38,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'Push Campaigns & Announcements',
     'User Reports Manager',
     'Streamtape Domains Manager',
+    'Live Telemetry & Analytics',
+    'SkyMoviesHD Auto Importer',
   ];
 
   final List<IconData> _navIcons = [
@@ -56,6 +59,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.send_rounded,
     Icons.report_rounded,
     Icons.dns_rounded,
+    Icons.analytics_rounded,
+    Icons.cloud_download_rounded,
   ];
 
   // Data lists
@@ -102,6 +107,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _addPosterUrlCtrl = TextEditingController();
   final _addStreamUrlCtrl = TextEditingController();
   final _tmdbIdCtrl = TextEditingController();
+  final TextEditingController _skymoviesDomainCtrl = TextEditingController(text: 'https://skymovieshd.ceo');
+  final TextEditingController _hdmaalDomainCtrl = TextEditingController(text: 'https://hdmaal.gg');
+  List<dynamic> _skymoviesCatalog = [];
+  bool _skymoviesLoading = false;
+  String _skymoviesCat = 'Hot-Short-Film';
+  int _skymoviesPage = 1;
+
 
   String _addType = 'movie';
   String _addCustomTag = 'HD';
@@ -841,14 +853,45 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             }).toList(),
                           ),
                           const SizedBox(height: 10),
-                          TextField(
-                            controller: epUrlCtrl,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: "Stream URL", labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true, fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: epUrlCtrl,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: InputDecoration(
+                                    labelText: "Stream URL", labelStyle: const TextStyle(color: Colors.white70),
+                                    filled: true, fillColor: const Color(0xFF090A0F),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              ElevatedButton(
+                                onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                                  setDlgState(() {
+                                    epUrlCtrl.text = extractedUrl;
+                                    if (posterUrl != null && posterUrl.isNotEmpty) {
+                                      epImageCtrl.text = posterUrl;
+                                    }
+                                  });
+                                }, defaultSearchText: (_editingItem?['name'] ?? _addTitleCtrl.text).trim()),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.amber.withOpacity(0.15),
+                                  foregroundColor: Colors.amberAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.bolt_rounded, size: 14),
+                                    SizedBox(width: 2),
+                                    Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 10),
                           DropdownButtonFormField<String>(
@@ -1554,6 +1597,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildReportsManagerView();
       case 15:
         return const StreamtapeDomainsScreen();
+      case 16:
+        return _buildLiveTelemetryView();
+      case 17:
+        return _buildSkymoviesImporterView();
       default:
         return _buildDashboardView();
     }
@@ -1571,12 +1618,123 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     final topMovies = (_analyticsData['top_15_movies'] as List? ?? []);
     final topSeries = (_analyticsData['top_15_series'] as List? ?? []);
     final weeklyTrending = (_analyticsData['weekly_trending'] as List? ?? []);
+    final liveData = _analyticsData['live'] ?? {};
+    final int onlineUsers = liveData['online_users'] ?? 0;
+    final int streamingUsers = liveData['streaming_users'] ?? 0;
+    final int todayStreams = liveData['today_streams'] ?? 0;
+    final List<dynamic> topDownloads = liveData['top_downloads'] as List? ?? [];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Live Telemetry Board
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFFE50914).withOpacity(0.12),
+                  const Color(0xFF1E1E28).withOpacity(0.9),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE50914).withOpacity(0.2), width: 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.greenAccent,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(color: Colors.greenAccent, blurRadius: 6, spreadRadius: 1),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text("REAL-TIME TELEMETRY",
+                        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("$onlineUsers",
+                              style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          const Text("Online Now",
+                              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w500)),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("$streamingUsers",
+                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 28, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          const Text("Streaming",
+                              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w500)),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("$todayStreams",
+                              style: const TextStyle(color: Colors.amberAccent, fontSize: 28, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          const Text("Plays Today",
+                              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w500)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (topDownloads.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Divider(color: Colors.white12, height: 1),
+                  const SizedBox(height: 12),
+                  const Text("Top Downloaded Content",
+                      style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  ...topDownloads.map((dl) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            dl['name'] ?? '',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          "${dl['count']} download(s)",
+                          style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  )),
+                ],
+              ],
+            ),
+          ),
           // Header Analytics Ratio Cards
           GridView.count(
             crossAxisCount: 2,
@@ -2430,8 +2588,42 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 _buildInputField("Runtime", _addRuntimeCtrl, hint: "120 min"),
                 _buildInputField("Trailer URL (YouTube)", _addTrailerCtrl, hint: "https://www.youtube.com/watch?v=..."),
 
-                // Poster URL Field + LIVE POSTER PREVIEW
                 _buildInputField("Poster URL (500x750)", _addPosterUrlCtrl, hint: "https://..."),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _pickAndUploadImage,
+                          icon: _isUploadingPoster
+                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                              : const Icon(Icons.cloud_upload_rounded, size: 16),
+                          label: Text(_isUploadingPoster ? "UPLOADING..." : "UPLOAD POSTER", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE50914),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _showImageSearchDialog,
+                          icon: const Icon(Icons.image_search_rounded, size: 16),
+                          label: const Text("WEB SEARCH IMAGE", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E2230),
+                            foregroundColor: Colors.cyanAccent,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 if (posterUrl.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   const Text("Live Poster Preview:", style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold)),
@@ -2494,7 +2686,35 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     }).toList(),
                   ),
                   const SizedBox(height: 14),
-                  _buildInputField("Stream Playback URL", _addStreamUrlCtrl, hint: "https://... (MP4 / MKV / Streamtape)"),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildInputField("Stream Playback URL", _addStreamUrlCtrl, hint: "https://... (MP4 / MKV / Streamtape)"),
+                      ),
+                      const SizedBox(width: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 20.0, right: 12.0),
+                        child: ElevatedButton.icon(
+                          onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                            setState(() {
+                              _addStreamUrlCtrl.text = extractedUrl;
+                              if (posterUrl != null && posterUrl.isNotEmpty) {
+                                _addPosterUrlCtrl.text = posterUrl;
+                                _addThumbUrlCtrl.text = posterUrl;
+                              }
+                            });
+                          }),
+                          icon: const Icon(Icons.bolt_rounded, size: 16, color: Colors.amberAccent),
+                          label: const Text("EXTRACT", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF231F10),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
 
                 const SizedBox(height: 18),
@@ -4001,7 +4221,14 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       child: Icon(Icons.person, color: isVip ? Colors.greenAccent : Colors.cyanAccent),
                                     ),
                               title: Text(u['name'] ?? 'User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              subtitle: Text(u['email'] ?? '', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(u['email'] ?? '', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                  const SizedBox(height: 2),
+                                  Text("App Version: ${u['app_version'] ?? '1.0.0'}", style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 10, fontWeight: FontWeight.w500)),
+                                ],
+                              ),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -4113,92 +4340,353 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
   void _showUserDetailDialog(Map<String, dynamic> u) {
     final isVip = _isUserVip(u);
+    
+    // Telemetry state variables
+    bool loadingTelemetry = true;
+    Map<String, dynamic>? telemetryData;
+    String? telemetryError;
+    bool telemetryTriggered = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A2132),
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFF8E2DE2), Color(0xFFE50914)]),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.person_rounded, color: Colors.white),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(u['name'] ?? 'User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _userDetailRow("ID", "${u['id'] ?? 'N/A'}"),
-              _userDetailRow("Email", u['email'] ?? 'N/A'),
-              _userDetailRow("Role", '${u['role'] ?? 0}'),
-              _userDetailRow("Subscription", u['active_subscription'] ?? 'Free'),
-              _userDetailRow("Plan Type", '${u['subscription_type'] ?? 0}'),
-              _userDetailRow("Duration (days)", '${u['time'] ?? 0}'),
-              _userDetailRow("Amount", '₹${u['amount'] ?? 0}'),
-              _userDetailRow("Started", '${u['subscription_start'] ?? 'N/A'}'),
-              _userDetailRow("Expires", '${u['subscription_exp'] ?? 'N/A'}'),
-              _userDetailRow("Device ID", u['device_id'] ?? 'N/A'),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: isVip ? Colors.green.withOpacity(0.12) : Colors.grey.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(12),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogContext, dialogSetState) {
+            if (!telemetryTriggered) {
+              telemetryTriggered = true;
+              _adminPhpApi('get_user_telemetry', {'user_id': u['id']}).then((res) {
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    if (res['status'] == 'success' && res['data'] != null) {
+                      telemetryData = res['data'];
+                    } else {
+                      telemetryError = res['message'] ?? 'Failed to load telemetry';
+                    }
+                    loadingTelemetry = false;
+                  });
+                }
+              }).catchError((err) {
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    telemetryError = err.toString();
+                    loadingTelemetry = false;
+                  });
+                }
+              });
+            }
+
+            // Calculations for active session & playtime
+            Widget activeSessionWidget;
+            if (loadingTelemetry) {
+              activeSessionWidget = const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Row(
+                  children: [
+                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orangeAccent)),
+                    SizedBox(width: 8),
+                    Text("Loading live status...", style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ],
                 ),
-                child: Text(
-                  isVip ? "✔ VIP ACTIVE" : "NO VIP SUBSCRIPTION",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: isVip ? Colors.greenAccent : Colors.white54,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    letterSpacing: 1,
+              );
+            } else if (telemetryError != null) {
+              activeSessionWidget = Text("Telemetry Error: $telemetryError", style: const TextStyle(color: Colors.redAccent, fontSize: 12));
+            } else {
+              final active = telemetryData?['active_session'];
+              if (active != null) {
+                final lastPingStr = active['last_ping']?.toString();
+                bool isOnline = false;
+                if (lastPingStr != null) {
+                  final lp = DateTime.tryParse(lastPingStr);
+                  if (lp != null) {
+                    isOnline = DateTime.now().difference(lp).inMinutes.abs() < 3;
+                  }
+                }
+                
+                final String viewName = active['current_view']?.toString() ?? 'Browsing';
+                final String? contentName = active['content_name']?.toString();
+
+                activeSessionWidget = Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: isOnline ? Colors.greenAccent : Colors.grey,
+                        shape: BoxShape.circle,
+                        boxShadow: isOnline ? [BoxShadow(color: Colors.greenAccent.withOpacity(0.5), blurRadius: 6, spreadRadius: 1)] : null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        isOnline
+                            ? "Online • ${contentName != null ? 'Watching: $contentName' : 'View: $viewName'}"
+                            : "Offline (Last active: ${lastPingStr ?? 'N/A'})",
+                        style: TextStyle(
+                          color: isOnline ? Colors.greenAccent : Colors.white60,
+                          fontSize: 12.5,
+                          fontWeight: isOnline ? FontWeight.bold : FontWeight.normal,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                );
+              } else {
+                activeSessionWidget = Row(
+                  children: [
+                    Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                    const Text("Offline (No active pings)", style: TextStyle(color: Colors.white60, fontSize: 12.5)),
+                  ],
+                );
+              }
+            }
+
+            // Watch history helper
+            List<Widget> historyItems = [];
+            String totalPlaytimeFormatted = "0 mins";
+            if (!loadingTelemetry && telemetryData != null) {
+              final history = telemetryData!['play_history'] as List?;
+              final totalSec = int.tryParse(telemetryData!['total_playtime_seconds']?.toString() ?? '0') ?? 0;
+              
+              if (totalSec > 0) {
+                final hrs = totalSec ~/ 3600;
+                final mins = (totalSec % 3600) ~/ 60;
+                totalPlaytimeFormatted = hrs > 0 ? "$hrs hrs $mins mins" : "$mins mins";
+              }
+
+              if (history == null || history.isEmpty) {
+                historyItems.add(const Text("No play events recorded yet.", style: TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic)));
+              } else {
+                for (var h in history.take(5)) {
+                  final name = h['content_name']?.toString() ?? 'Unknown Content';
+                  final typeLabel = h['content_type']?.toString() == '1' ? 'Movie' : 'Series';
+                  final duration = int.tryParse(h['duration_seconds']?.toString() ?? '0') ?? 0;
+                  final durMins = duration ~/ 60;
+                  final completed = h['completed']?.toString() == '1';
+
+                  historyItems.add(
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: Row(
+                        children: [
+                          Icon(typeLabel == 'Movie' ? Icons.movie_outlined : Icons.live_tv_outlined, size: 14, color: Colors.orangeAccent),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            "$durMins m",
+                            style: const TextStyle(color: Colors.white54, fontSize: 11, fontFamily: 'monospace'),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: completed ? Colors.green.withOpacity(0.2) : Colors.blue.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              completed ? "COMP" : "PLAY",
+                              style: TextStyle(color: completed ? Colors.greenAccent : Colors.blueAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              }
+            }
+
+            // Downloads helper
+            List<Widget> downloadItems = [];
+            if (!loadingTelemetry && telemetryData != null) {
+              final downloads = telemetryData!['downloads'] as List?;
+              if (downloads == null || downloads.isEmpty) {
+                downloadItems.add(const Text("No downloads triggered yet.", style: TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic)));
+              } else {
+                for (var d in downloads.take(5)) {
+                  final name = d['content_name']?.toString() ?? 'Unknown Content';
+                  final typeLabel = d['content_type']?.toString() == '1' ? 'Movie' : 'Series';
+                  final status = d['status']?.toString() ?? 'started';
+                  final isDone = status == 'completed';
+
+                  downloadItems.add(
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.download_rounded, size: 14, color: Colors.cyanAccent),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: isDone ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              status.toUpperCase(),
+                              style: TextStyle(color: isDone ? Colors.greenAccent : Colors.orangeAccent, fontSize: 8, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2132),
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [Color(0xFF8E2DE2), Color(0xFFE50914)]),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.person_rounded, color: Colors.white),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(u['name'] ?? 'User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _userDetailRow("ID", "${u['id'] ?? 'N/A'}"),
+                      _userDetailRow("Email", u['email'] ?? 'N/A'),
+                      _userDetailRow("App Version", u['app_version'] ?? '1.0.0'),
+                      _userDetailRow("Role", '${u['role'] ?? 0}'),
+                      _userDetailRow("Subscription", u['active_subscription'] ?? 'Free'),
+                      _userDetailRow("Expires", '${u['subscription_exp'] ?? 'N/A'}'),
+                      _userDetailRow("Device ID", u['device_id'] ?? 'N/A'),
+                      const SizedBox(height: 8),
+                      
+                      // VIP Badge Banner
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isVip ? Colors.green.withOpacity(0.12) : Colors.grey.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          isVip ? "✔ VIP ACTIVE" : "NO VIP SUBSCRIPTION",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isVip ? Colors.greenAccent : Colors.white54,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ),
+                      
+                      // ── Telemetry View Section ──
+                      const SizedBox(height: 16),
+                      const Row(
+                        children: [
+                          Icon(Icons.query_stats_rounded, color: Colors.orangeAccent, size: 18),
+                          SizedBox(width: 6),
+                          Text("LIVE USER METRICS & TELEMETRY", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 11.5, letterSpacing: 0.5)),
+                        ],
+                      ),
+                      const Divider(color: Colors.white10, height: 12),
+                      
+                      // Active Session Status
+                      const Text("Current Live Status:", style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      activeSessionWidget,
+                      
+                      // Total Watch Playtime
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Total Watch Time:", style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+                          Text(
+                            totalPlaytimeFormatted,
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Recent Watch History List
+                      const Text("Recent Play History (Last 5):", style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      if (loadingTelemetry)
+                        const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orangeAccent))
+                      else
+                        ...historyItems,
+                        
+                      // Recent Downloads List
+                      const SizedBox(height: 12),
+                      const Text("Recent Downloads (Last 5):", style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      if (loadingTelemetry)
+                        const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                      else
+                        ...downloadItems,
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await _confirmDeleteUser(u);
-            },
-            child: const Text("Delete User", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-          ),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close", style: TextStyle(color: Colors.grey))),
-          if (isVip)
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(ctx);
-                await _confirmRevokeVip(u);
-              },
-              child: const Text("Revoke VIP", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-            )
-          else
-            TextButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                _showGrantVipDialog(u);
-              },
-              child: const Text("Grant VIP", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-            ),
-        ],
-      ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await _confirmDeleteUser(u);
+                  },
+                  child: const Text("Delete User", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                ),
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close", style: TextStyle(color: Colors.grey))),
+                if (isVip)
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await _confirmRevokeVip(u);
+                    },
+                    child: const Text("Revoke VIP", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                  )
+                else
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showGrantVipDialog(u);
+                    },
+                    child: const Text("Grant VIP", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -4920,6 +5408,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           _loadParked();
           setState(() {});
         },
+        showExtractor: _showQuickLinkExtractorDialog,
+        onEdit: (item, type) {
+          _startEdit(item, type);
+          setState(() => _selectedIndex = 2);
+        },
       ),
     );
   }
@@ -4934,6 +5427,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         onDone: () {
           _loadParked();
           setState(() {});
+        },
+        showExtractor: _showQuickLinkExtractorDialog,
+        onEdit: (item, type) {
+          _startEdit(item, type);
+          setState(() => _selectedIndex = 2);
         },
       ),
     );
@@ -5177,6 +5675,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   bool _settingsLoaded = false;
   final _telegramLinkCtrl = TextEditingController();
   final _adminPinCtrl = TextEditingController();
+  
+  bool _updateSkippable = false;
+  final _latestVersionCtrl = TextEditingController();
+  final _v7aApkCtrl = TextEditingController();
+  final _v8aApkCtrl = TextEditingController();
+  final _universalApkCtrl = TextEditingController();
+  final _skymoviesDomainCtrl = TextEditingController();
+  final _hdmaalDomainCtrl = TextEditingController();
+  final _uncutmastiDomainCtrl = TextEditingController();
+  final _hdmove99DomainCtrl = TextEditingController();
+
+  bool _telemetryDashboardLoading = false;
+  Map<String, dynamic>? _telemetryDashboardData;
+  String? _telemetryDashboardError;
+  bool _isUploadingPoster = false;
 
   Widget _buildAppSettingsView() {
     if (!_settingsLoaded) {
@@ -5184,111 +5697,285 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         if (mounted && !_settingsLoaded) _loadAppSettings();
       });
     }
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [Color(0xFF1E2230), Color(0xFF141722)]),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.cyanAccent.withOpacity(0.25)),
-            ),
-            child: Row(
-              children: const [
-                Icon(Icons.settings_suggest_rounded, color: Colors.cyanAccent, size: 24),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text("App Settings",
-                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [const Color(0xFF232A3C).withOpacity(0.9), const Color(0xFF161B28).withOpacity(0.9)],
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Color(0xFF1E2230), Color(0xFF141722)]),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.cyanAccent.withOpacity(0.25)),
               ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.07)),
-            ),
-            child: Column(
-              children: [
-                SwitchListTile(
-                  value: _loginMandatory,
-                  activeTrackColor: Colors.cyanAccent,
-                  onChanged: (v) => setState(() => _loginMandatory = v),
-                  title: const Text("Login Mandatory",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                  subtitle: const Text(
-                      "If ON, users must log in to open the app. If OFF, guests can browse without login.",
-                      style: TextStyle(color: Colors.white54, fontSize: 12)),
-                ),
-                const Divider(color: Colors.white10, height: 1),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                  child: TextField(
-                    controller: _telegramLinkCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Telegram Link",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      hintText: "https://t.me/+xxxxxxxxx",
-                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
-                      prefixIcon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9)),
-                      filled: true,
-                      fillColor: const Color(0xFF090A0F),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
+              child: Row(
+                children: const [
+                  Icon(Icons.settings_suggest_rounded, color: Colors.cyanAccent, size: 24),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text("App Settings",
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-                  child: TextField(
-                    controller: _adminPinCtrl,
-                    keyboardType: TextInputType.number,
-                    obscureText: true,
-                    maxLength: 6,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Admin Panel PIN (4-6 digits)",
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      hintText: "Leave blank to keep current",
-                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
-                      prefixIcon: const Icon(Icons.password_rounded, color: Color(0xFF8E2DE2)),
-                      filled: true,
-                      fillColor: const Color(0xFF090A0F),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      counterText: "",
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _saveAppSettings,
-                      icon: const Icon(Icons.save_rounded, color: Colors.white),
-                      label: const Text("SAVE SETTINGS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8E2DE2), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        const Spacer(),
-      ],
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [const Color(0xFF232A3C).withOpacity(0.9), const Color(0xFF161B28).withOpacity(0.9)],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withOpacity(0.07)),
+              ),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    value: _loginMandatory,
+                    activeTrackColor: Colors.cyanAccent,
+                    onChanged: (v) => setState(() => _loginMandatory = v),
+                    title: const Text("Login Mandatory",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    subtitle: const Text(
+                        "If ON, users must log in to open the app. If OFF, guests can browse without login.",
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                    child: TextField(
+                      controller: _telegramLinkCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Telegram Link",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://t.me/+xxxxxxxxx",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9)),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _adminPinCtrl,
+                      keyboardType: TextInputType.number,
+                      obscureText: true,
+                      maxLength: 6,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Admin Panel PIN (4-6 digits)",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "Leave blank to keep current",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.password_rounded, color: Color(0xFF8E2DE2)),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        counterText: "",
+                      ),
+                    ),
+                  ),
+                  
+                  // App Update Manager Settings Divider & Title
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                    child: Row(
+                      children: [
+                        Icon(Icons.cloud_upload_rounded, color: Colors.orangeAccent, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          "APP UPDATE MANAGER",
+                          style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  
+                  SwitchListTile(
+                    value: _updateSkippable,
+                    activeTrackColor: Colors.orangeAccent,
+                    onChanged: (v) => setState(() => _updateSkippable = v),
+                    title: const Text("Update Skippable",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    subtitle: const Text(
+                        "If ON, user is presented with a 'Skip Update' button. If OFF, the update is mandatory.",
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                    child: TextField(
+                      controller: _latestVersionCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Latest App Version",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "e.g. 1.0.1",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.new_releases_rounded, color: Colors.orangeAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _v7aApkCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "v7a APK URL (Normal Phones)",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://domain.com/app-v7a.apk",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.download_rounded, color: Colors.orangeAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _v8aApkCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "v8a APK URL (Newer Phones)",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://domain.com/app-v8a.apk",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.download_rounded, color: Colors.orangeAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(14, 16, 14, 6),
+                    child: Text("AUTOMATION DOMAINS", style: TextStyle(color: Colors.cyanAccent, fontSize: 13, fontWeight: FontWeight.bold)),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _hdmaalDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "HDMaal Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://hdmaal.gg",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.purpleAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _uncutmastiDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "UncutMasti Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://uncutmasti.com",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.redAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _hdmove99DomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "HDMove99 Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://hdmove99.com",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.amberAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _skymoviesDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "SkyMoviesHD Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://skymovieshd.ceo",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.cyanAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _universalApkCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Universal APK URL (High Size)",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://domain.com/app-universal.apk",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.download_rounded, color: Colors.orangeAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _saveAppSettings,
+                        icon: const Icon(Icons.save_rounded, color: Colors.white),
+                        label: const Text("SAVE SETTINGS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8E2DE2), padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+        ],
+      ),
     );
   }
 
@@ -5301,6 +5988,16 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         _loginMandatory = settings['login_mandatory']?.toString() == '1';
         _telegramLinkCtrl.text = settings['telegram_link']?.toString() ?? '';
         _adminPinCtrl.text = settings['admin_pin']?.toString() ?? '';
+        _latestVersionCtrl.text = settings['latest_version']?.toString() ?? '1.0.0';
+        _updateSkippable = settings['update_skippable']?.toString() == '1';
+        _v7aApkCtrl.text = settings['download_url_v7a']?.toString() ?? '';
+        _v8aApkCtrl.text = settings['download_url_v8a']?.toString() ?? '';
+        _universalApkCtrl.text = settings['download_url_universal']?.toString() ?? '';
+        _skymoviesDomainCtrl.text = settings['skymovies_domain']?.toString() ?? 'https://skymovieshd.ceo';
+        _hdmaalDomainCtrl.text = settings['hdmaal_domain']?.toString() ?? 'https://hdmaal.gg';
+        _uncutmastiDomainCtrl.text = settings['uncutmasti_domain']?.toString() ?? 'https://uncutmasti.com';
+        _hdmove99DomainCtrl.text = settings['hdmove99_domain']?.toString() ?? 'https://hdmove99.com';
+
         _settingsLoaded = true;
       });
     } else {
@@ -5323,6 +6020,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'login_mandatory': _loginMandatory ? '1' : '0',
         'telegram_link': _telegramLinkCtrl.text.trim(),
         if (pin.isNotEmpty) 'admin_pin': pin,
+        'latest_version': _latestVersionCtrl.text.trim(),
+        'update_skippable': _updateSkippable ? '1' : '0',
+        'download_url_v7a': _v7aApkCtrl.text.trim(),
+        'download_url_v8a': _v8aApkCtrl.text.trim(),
+        'download_url_universal': _universalApkCtrl.text.trim(),
+        'skymovies_domain': _skymoviesDomainCtrl.text.trim(),
+        'hdmaal_domain': _hdmaalDomainCtrl.text.trim(),
+        'uncutmasti_domain': _uncutmastiDomainCtrl.text.trim(),
+        'hdmove99_domain': _hdmove99DomainCtrl.text.trim(),
       },
     });
     if (!mounted) return;
@@ -5333,6 +6039,1463 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       ),
     );
   }
+
+  Future<void> _pickAndUploadImage() async {
+    if (_isUploadingPoster) return;
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty || result.files.single.path == null) {
+        return;
+      }
+
+      setState(() => _isUploadingPoster = true);
+
+      final filePath = result.files.single.path!;
+      final request = http.MultipartRequest("POST", Uri.parse(ApiConfig.adminUrl));
+      request.fields['action'] = 'upload_image';
+      request.files.add(await http.MultipartFile.fromPath('image', filePath));
+
+      final streamedResponse = await request.send().timeout(const Duration(seconds: 45));
+      final res = await http.Response.fromStream(streamedResponse);
+      
+      setState(() => _isUploadingPoster = false);
+
+      final raw = res.body.trim();
+      if (raw.startsWith('{') && raw.endsWith('}')) {
+        final decoded = json.decode(raw);
+        if (decoded['status'] == 'success' && decoded['data']?['url'] != null) {
+          final imageUrl = decoded['data']['url'];
+          setState(() {
+            _addPosterUrlCtrl.text = imageUrl;
+            _addThumbUrlCtrl.text = imageUrl;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Poster and Banner uploaded successfully!"), backgroundColor: Colors.green),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Upload failed: ${decoded['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Upload error: $raw"), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      setState(() => _isUploadingPoster = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  void _showImageSearchDialog({Function(String)? onSelected, String defaultTitle = ''}) {
+    final initialQuery = defaultTitle.trim().isNotEmpty ? defaultTitle.trim() : _addTitleCtrl.text.trim();
+    final searchCtrl = TextEditingController(text: initialQuery);
+    List<String> foundImages = [];
+    List<String> hdmove99Images = [];
+    List<String> skymoviesImages = [];
+    bool isSearchingServer = false;
+    bool isSearchingHdmove99 = false;
+    bool isSearchingSkymovies = false;
+    String? serverError;
+    String? hdmove99Error;
+    String? skymoviesError;
+    int activeTab = 0; // 0 = Bing + DDG, 1 = HDMove99, 2 = SKY
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogContext, dialogSetState) {
+
+            Future<void> runServerSearch() async {
+              if (isSearchingServer) return;
+              dialogSetState(() {
+                isSearchingServer = true;
+                serverError = null;
+                foundImages = [];
+              });
+              try {
+                final q = searchCtrl.text.trim();
+                final res = await _adminPhpApi('search_images', {'query': '$q movie poster'});
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingServer = false;
+                    if (res['status'] == 'success' && res['data']?['images'] != null) {
+                      foundImages = List<String>.from(res['data']['images']);
+                      if (foundImages.isEmpty) serverError = 'No images found. Try a different query.';
+                    } else {
+                      serverError = res['message'] ?? 'No images found';
+                    }
+                  });
+                }
+              } catch (e) {
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingServer = false;
+                    serverError = 'Server search failed: ${e.toString().split('\n').first}';
+                  });
+                }
+              }
+            }
+
+            Future<void> runHdmove99Search() async {
+              if (isSearchingHdmove99) return;
+              dialogSetState(() {
+                isSearchingHdmove99 = true;
+                hdmove99Error = null;
+                hdmove99Images = [];
+              });
+              try {
+                final q = searchCtrl.text.trim();
+                final res = await _adminPhpApi('search_hdmove99_catalog', {'query': q});
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingHdmove99 = false;
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      final items = res['data']['items'] as List;
+                      hdmove99Images = items
+                          .map((e) => (e['poster'] ?? '').toString())
+                          .where((p) => p.isNotEmpty)
+                          .toList();
+                      if (hdmove99Images.isEmpty) hdmove99Error = 'No posters found on HDMove99.';
+                    } else {
+                      hdmove99Error = res['message'] ?? 'No posters found';
+                    }
+                  });
+                }
+              } catch (e) {
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingHdmove99 = false;
+                    hdmove99Error = 'HDMove99 search failed: ${e.toString().split('\n').first}';
+                  });
+                }
+              }
+            }
+
+            Future<void> runSkymoviesSearch() async {
+              if (isSearchingSkymovies) return;
+              dialogSetState(() {
+                isSearchingSkymovies = true;
+                skymoviesError = null;
+                skymoviesImages = [];
+              });
+              try {
+                final q = searchCtrl.text.trim();
+                final res = await _adminPhpApi('search_skymovies_catalog', {'query': q});
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingSkymovies = false;
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      final items = res['data']['items'] as List;
+                      skymoviesImages = items
+                          .map((e) => (e['poster'] ?? '').toString())
+                          .where((p) => p.isNotEmpty)
+                          .toList();
+                      if (skymoviesImages.isEmpty) skymoviesError = 'No posters found on SKY.';
+                    } else {
+                      skymoviesError = res['message'] ?? 'No posters found';
+                    }
+                  });
+                }
+              } catch (e) {
+                if (dialogContext.mounted) {
+                  dialogSetState(() {
+                    isSearchingSkymovies = false;
+                    skymoviesError = 'SKY search failed: ${e.toString().split('\n').first}';
+                  });
+                }
+              }
+            }
+
+            void runSearch() {
+              if (activeTab == 0) runServerSearch();
+              else if (activeTab == 1) runHdmove99Search();
+              else runSkymoviesSearch();
+            }
+
+            // Auto-trigger search on open if title is filled
+            if (foundImages.isEmpty && hdmove99Images.isEmpty && skymoviesImages.isEmpty &&
+                !isSearchingServer && !isSearchingHdmove99 && !isSearchingSkymovies &&
+                serverError == null && hdmove99Error == null && skymoviesError == null &&
+                searchCtrl.text.trim().isNotEmpty) {
+              WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
+            }
+
+            final currentImages = activeTab == 0 ? foundImages : (activeTab == 1 ? hdmove99Images : skymoviesImages);
+            final isSearching = activeTab == 0 ? isSearchingServer : (activeTab == 1 ? isSearchingHdmove99 : isSearchingSkymovies);
+            final searchError = activeTab == 0 ? serverError : (activeTab == 1 ? hdmove99Error : skymoviesError);
+
+            return Dialog(
+              backgroundColor: const Color(0xFF0D1117),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: Colors.white12),
+              ),
+              child: Container(
+                width: MediaQuery.of(dialogContext).size.width * 0.95,
+                height: MediaQuery.of(dialogContext).size.height * 0.88,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Header ──
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.cyanAccent.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.image_search_rounded, color: Colors.cyanAccent, size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text('Poster Image Search',
+                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white60, size: 20),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // ── Search Bar ──
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF161B22),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: TextField(
+                              controller: searchCtrl,
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                              decoration: const InputDecoration(
+                                hintText: 'Movie/series title...',
+                                hintStyle: TextStyle(color: Colors.white38, fontSize: 12),
+                                prefixIcon: Icon(Icons.search_rounded, color: Colors.white38, size: 18),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              onSubmitted: (_) => runSearch(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: runSearch,
+                          icon: const Icon(Icons.search_rounded, size: 16),
+                          label: const Text('Search'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.cyanAccent,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ── Source Tabs (Bing + DDG, HDMove99, SKY) ──
+                    Container(
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161B22),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() => activeTab = 0);
+                                if (foundImages.isEmpty && !isSearchingServer && searchCtrl.text.isNotEmpty) runServerSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: activeTab == 0 ? Colors.cyanAccent.withOpacity(0.18) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'Bing + DDG (${foundImages.length})',
+                                  style: TextStyle(
+                                    color: activeTab == 0 ? Colors.cyanAccent : Colors.white54,
+                                    fontSize: 11, fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() => activeTab = 1);
+                                if (hdmove99Images.isEmpty && !isSearchingHdmove99 && searchCtrl.text.isNotEmpty) runHdmove99Search();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: activeTab == 1 ? Colors.greenAccent.withOpacity(0.18) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'HDMove99 (${hdmove99Images.length})',
+                                  style: TextStyle(
+                                    color: activeTab == 1 ? Colors.greenAccent : Colors.white54,
+                                    fontSize: 11, fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() => activeTab = 2);
+                                if (skymoviesImages.isEmpty && !isSearchingSkymovies && searchCtrl.text.isNotEmpty) runSkymoviesSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: activeTab == 2 ? Colors.purpleAccent.withOpacity(0.18) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'SKY (${skymoviesImages.length})',
+                                  style: TextStyle(
+                                    color: activeTab == 2 ? Colors.purpleAccent : Colors.white54,
+                                    fontSize: 11, fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ── Results ──
+                    Expanded(
+                      child: isSearching
+                          ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
+                          : searchError != null
+                              ? Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 32),
+                                      const SizedBox(height: 8),
+                                      Text(searchError, textAlign: TextAlign.center,
+                                          style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      TextButton.icon(
+                                        onPressed: runSearch,
+                                        icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.cyanAccent),
+                                        label: const Text('Retry Search', style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : currentImages.isEmpty
+                                  ? const Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.image_not_supported_rounded, color: Colors.white24, size: 40),
+                                          SizedBox(height: 8),
+                                          Text('Enter a title and tap Search to find posters.',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(color: Colors.white38, fontSize: 12)),
+                                        ],
+                                      ),
+                                    )
+                                  : GridView.builder(
+                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: 3,
+                                        childAspectRatio: 0.67,
+                                        crossAxisSpacing: 8,
+                                        mainAxisSpacing: 8,
+                                      ),
+                                      itemCount: currentImages.length,
+                                      itemBuilder: (context, idx) {
+                                        final imgUrl = currentImages[idx];
+                                        return GestureDetector(
+                                          onTap: () {
+                                            if (onSelected != null) {
+                                              onSelected(imgUrl);
+                                            } else {
+                                              setState(() {
+                                                _addPosterUrlCtrl.text = imgUrl;
+                                                _addThumbUrlCtrl.text = imgUrl;
+                                              });
+                                            }
+                                            Navigator.pop(ctx);
+                                          },
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(10),
+                                              border: Border.all(color: Colors.white10),
+                                            ),
+                                            clipBehavior: Clip.antiAlias,
+                                            child: Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                CachedNetworkImage(
+                                                  imageUrl: imgUrl,
+                                                  fit: BoxFit.cover,
+                                                  placeholder: (context, url) => Container(
+                                                    color: Colors.white.withOpacity(0.04),
+                                                    child: const Center(
+                                                      child: CircularProgressIndicator(
+                                                          strokeWidth: 1.5, color: Colors.white24)),
+                                                  ),
+                                                  errorWidget: (context, url, error) => Container(
+                                                    color: Colors.white.withOpacity(0.04),
+                                                    child: const Center(
+                                                      child: Icon(Icons.broken_image_rounded,
+                                                          color: Colors.white24, size: 20)),
+                                                  ),
+                                                ),
+                                                Positioned(
+                                                  bottom: 0, left: 0, right: 0,
+                                                  child: Container(
+                                                    height: 30,
+                                                    decoration: BoxDecoration(
+                                                      gradient: LinearGradient(
+                                                        begin: Alignment.bottomCenter,
+                                                        end: Alignment.topCenter,
+                                                        colors: [Colors.black.withOpacity(0.7), Colors.transparent],
+                                                      ),
+                                                    ),
+                                                    alignment: Alignment.center,
+                                                    child: const Icon(Icons.add_circle_rounded,
+                                                        color: Colors.white70, size: 18),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Direct client-side image search using DuckDuckGo API (no server needed).
+
+  // ── 18. SkyMoviesHD Auto Importer View ──
+  Widget _buildSkymoviesImporterView() {
+    if (_skymoviesCatalog.isEmpty && !_skymoviesLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadSkymoviesCatalog());
+    }
+
+    return Column(
+      children: [
+        // Category & Domain Header
+        Container(
+          padding: const EdgeInsets.all(12),
+          color: const Color(0xFF141722),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.cloud_download_rounded, color: Colors.cyanAccent, size: 22),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text("SkyMoviesHD Auto Importer Engine", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.cyanAccent),
+                    onPressed: _loadSkymoviesCatalog,
+                    tooltip: "Refresh Catalog",
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          'Hot-Short-Film',
+                          'All-Web-Series',
+                          'Bollywood-Movies',
+                          'South-Indian-Hindi-Dubbed-Movies',
+                          'Hollywood-Hindi-Dubbed-Movies'
+                        ].map((cat) {
+                          final isSelected = _skymoviesCat == cat;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6.0),
+                            child: ChoiceChip(
+                              label: Text(cat.replaceAll('-', ' '), style: TextStyle(fontSize: 11, color: isSelected ? Colors.black : Colors.white70, fontWeight: FontWeight.bold)),
+                              selected: isSelected,
+                              selectedColor: Colors.cyanAccent,
+                              backgroundColor: const Color(0xFF1E2230),
+                              onSelected: (s) {
+                                if (s) {
+                                  setState(() {
+                                    _skymoviesCat = cat;
+                                    _skymoviesPage = 1;
+                                    _skymoviesCatalog = [];
+                                  });
+                                  _loadSkymoviesCatalog();
+                                }
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        // Fast List Content (Clean text list)
+        Expanded(
+          child: _skymoviesLoading
+              ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
+              : _skymoviesCatalog.isEmpty
+                  ? const Center(child: Text("No items found in this category.", style: TextStyle(color: Colors.white54)))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _skymoviesCatalog.length,
+                      itemBuilder: (context, idx) {
+                        final item = _skymoviesCatalog[idx];
+                        return Card(
+                          color: const Color(0xFF141722),
+                          margin: const EdgeInsets.only(bottom: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(color: Colors.white10),
+                          ),
+                          child: ListTile(
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.cyanAccent.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Icon(Icons.movie_rounded, color: Colors.cyanAccent, size: 20),
+                            ),
+                            title: Text(
+                              item['title'] ?? 'Title',
+                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              item['page_url'] ?? '',
+                              style: const TextStyle(color: Colors.white38, fontSize: 10),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: ElevatedButton.icon(
+                              onPressed: () => _autoImportSkymoviesItem(item),
+                              icon: const Icon(Icons.download_rounded, size: 14),
+                              label: const Text("AUTO-IMPORT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.cyanAccent,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+        ),
+
+        // Pagination Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: const Color(0xFF141722),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: _skymoviesPage > 1
+                    ? () {
+                        setState(() => _skymoviesPage--);
+                        _loadSkymoviesCatalog();
+                      }
+                    : null,
+              ),
+              Text("Page $_skymoviesPage", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: () {
+                  setState(() => _skymoviesPage++);
+                  _loadSkymoviesCatalog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadSkymoviesCatalog() async {
+    setState(() => _skymoviesLoading = true);
+    final res = await _adminPhpApi('fetch_skymovies_catalog', {
+      'category': _skymoviesCat,
+      'page': _skymoviesPage,
+    });
+    if (!mounted) return;
+    setState(() {
+      _skymoviesLoading = false;
+      if (res['status'] == 'success' && res['data']?['items'] != null) {
+        _skymoviesCatalog = res['data']['items'];
+      } else {
+        _skymoviesCatalog = [];
+      }
+    });
+  }
+
+  Future<void> _autoImportSkymoviesItem(dynamic item) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        backgroundColor: Color(0xFF141722),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.cyanAccent),
+            SizedBox(width: 16),
+            Expanded(child: Text("Extracting details & downloading poster to your server...", style: TextStyle(color: Colors.white, fontSize: 12))),
+          ],
+        ),
+      ),
+    );
+
+    final pageUrl = item['page_url'] ?? '';
+    final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
+
+    if (!mounted) return;
+    Navigator.pop(context); // Close loading dialog
+
+    if (res['status'] == 'success' && res['data'] != null) {
+      final data = res['data'];
+      final title = data['title'] ?? item['title'] ?? '';
+      final poster = data['poster'] ?? item['poster'] ?? '';
+      final streamUrl = data['stream_url'] ?? '';
+
+      // Auto-switch to Add Content tab and fill fields
+      setState(() {
+        _addType = 'movie';
+        _addTitleCtrl.text = title;
+        _addDescCtrl.text = "Watch $title in full HD quality online.";
+        _addPosterUrlCtrl.text = poster;
+        _addThumbUrlCtrl.text = poster;
+        _addStreamUrlCtrl.text = streamUrl;
+        _streamType = 'Streamtape Stream';
+        _selectedIndex = 2; // Jump to Add Content form
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Details extracted & poster saved to your server! Review & tap PUBLISH MOVIE."),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to extract: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  // ── Quick Link Extractor Popup (Search or Paste URL) ──
+  void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
+    final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
+    final queryCtrl = TextEditingController(text: initialQuery);
+    int tab = 0; // 0 = HDMaal, 1 = Uncut, 2 = HDMove99, 3 = SKY
+    bool isSearching = false;
+    bool isExtracting = false;
+    List<dynamic> searchResults = [];
+    String? errorText;
+    bool hasAutoSearched = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, dialogSetState) {
+            Future<void> runSearch() async {
+              final q = queryCtrl.text.trim();
+              if (q.isEmpty) return;
+
+              String extractAction = 'extract_hdmaal_details';
+              if (tab == 1) extractAction = 'extract_uncutmasti_details';
+              if (tab == 2) extractAction = 'extract_hdmove99_details';
+              if (tab == 3) extractAction = 'extract_skymovies_details';
+
+              // If user pasted a full HTTP URL, directly extract!
+              if (q.startsWith('http://') || q.startsWith('https://')) {
+                dialogSetState(() {
+                  isExtracting = true;
+                  errorText = null;
+                });
+                final res = await _adminPhpApi(extractAction, {'page_url': q});
+                if (!dialogCtx.mounted) return;
+                dialogSetState(() => isExtracting = false);
+                if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                  var streamUrl = res['data']['stream_url'].toString().trim();
+                  if (streamUrl.contains(' ')) {
+                    streamUrl = streamUrl.replaceAll(' ', '%20');
+                  }
+                  if (streamUrl.isNotEmpty) {
+                    final extractedPoster = (res['data']['poster'] ?? '').toString();
+                    onLinkSelected(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(extractedPoster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    return;
+                  }
+                }
+                dialogSetState(() => errorText = res['message'] ?? "No video stream link found");
+                return;
+              }
+
+              // Otherwise perform catalog search by title
+              dialogSetState(() {
+                isSearching = true;
+                errorText = null;
+                searchResults = [];
+              });
+
+              String searchAction = 'search_hdmaal_catalog';
+              if (tab == 1) searchAction = 'search_uncutmasti_catalog';
+              if (tab == 2) searchAction = 'search_hdmove99_catalog';
+              if (tab == 3) searchAction = 'search_skymovies_catalog';
+
+              final res = await _adminPhpApi(searchAction, {'query': q});
+
+              if (!dialogCtx.mounted) return;
+              dialogSetState(() {
+                isSearching = false;
+                if (res['status'] == 'success' && res['data']?['items'] != null) {
+                  searchResults = res['data']['items'];
+                  if (searchResults.isEmpty) errorText = "No items matched your query.";
+                } else {
+                  errorText = res['message'] ?? "Search failed";
+                }
+              });
+            }
+
+            Future<void> extractFromPage(String pageUrl) async {
+              dialogSetState(() {
+                isExtracting = true;
+                errorText = null;
+              });
+
+              String extractAction = 'extract_hdmaal_details';
+              if (tab == 1) extractAction = 'extract_uncutmasti_details';
+              if (tab == 2) extractAction = 'extract_hdmove99_details';
+              if (tab == 3) extractAction = 'extract_skymovies_details';
+
+              final res = await _adminPhpApi(extractAction, {'page_url': pageUrl});
+
+              if (!dialogCtx.mounted) return;
+              dialogSetState(() => isExtracting = false);
+
+              if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                var streamUrl = res['data']['stream_url'].toString().trim();
+                if (streamUrl.contains(' ')) {
+                  streamUrl = streamUrl.replaceAll(' ', '%20');
+                }
+                if (streamUrl.isNotEmpty) {
+                  final extractedPoster = (res['data']['poster'] ?? '').toString();
+                  onLinkSelected(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(extractedPoster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } else {
+                  dialogSetState(() => errorText = "No video link found on selected page.");
+                }
+              } else {
+                dialogSetState(() => errorText = res['message'] ?? "Extraction failed");
+              }
+            }
+
+            if (!hasAutoSearched && queryCtrl.text.trim().isNotEmpty && !isSearching && !isExtracting) {
+              hasAutoSearched = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0D1117),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.white12)),
+              title: Row(
+                children: [
+                  const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 22),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text("Quick Link Search & Extractor", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
+                  IconButton(icon: const Icon(Icons.close, color: Colors.white54, size: 18), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              content: SizedBox(
+                width: MediaQuery.of(context).size.width * 0.9,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Source Tabs (HDMaal, Uncut, HDMove99, SKY)
+                    Container(
+                      height: 34,
+                      decoration: BoxDecoration(color: const Color(0xFF161B22), borderRadius: BorderRadius.circular(8)),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() {
+                                  tab = 0;
+                                  searchResults = [];
+                                  errorText = null;
+                                });
+                                runSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(color: tab == 0 ? Colors.purpleAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                alignment: Alignment.center,
+                                child: Text("HDMaal", style: TextStyle(color: tab == 0 ? Colors.purpleAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() {
+                                  tab = 1;
+                                  searchResults = [];
+                                  errorText = null;
+                                });
+                                runSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(color: tab == 1 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                alignment: Alignment.center,
+                                child: Text("Uncut", style: TextStyle(color: tab == 1 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() {
+                                  tab = 2;
+                                  searchResults = [];
+                                  errorText = null;
+                                });
+                                runSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(color: tab == 2 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                alignment: Alignment.center,
+                                child: Text("HDMove99", style: TextStyle(color: tab == 2 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() {
+                                  tab = 3;
+                                  searchResults = [];
+                                  errorText = null;
+                                });
+                                runSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(color: tab == 3 ? Colors.cyanAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                alignment: Alignment.center,
+                                child: Text("SKY", style: TextStyle(color: tab == 3 ? Colors.cyanAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Search Input
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: queryCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            decoration: InputDecoration(
+                              hintText: "Enter movie title or paste full page URL...",
+                              hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
+                              prefixIcon: const Icon(Icons.search, color: Colors.white38, size: 16),
+                              filled: true,
+                              fillColor: const Color(0xFF161B22),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            ),
+                            onSubmitted: (_) => runSearch(),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: isSearching || isExtracting ? null : runSearch,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amberAccent,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text("Search", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Status & Results
+                    if (isSearching || isExtracting) ...[
+                      const Padding(
+                        padding: EdgeInsets.all(16.0),
+                        child: CircularProgressIndicator(color: Colors.amberAccent),
+                      ),
+                    ] else if (errorText != null) ...[
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 11), textAlign: TextAlign.center),
+                      ),
+                    ] else if (searchResults.isNotEmpty) ...[
+                      SizedBox(
+                        height: 220,
+                        child: ListView.builder(
+                          itemCount: searchResults.length,
+                          itemBuilder: (context, idx) {
+                            final item = searchResults[idx];
+                            final fullTitle = item['title'] ?? 'Title';
+                            return Card(
+                              color: const Color(0xFF141722),
+                              margin: const EdgeInsets.only(bottom: 6),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.white10)),
+                              child: Tooltip(
+                                message: fullTitle,
+                                child: ListTile(
+                                  dense: true,
+                                  leading: (item['poster'] ?? '').toString().isNotEmpty
+                                      ? ClipRRect(
+                                          borderRadius: BorderRadius.circular(6),
+                                          child: CachedNetworkImage(
+                                            imageUrl: item['poster'].toString(),
+                                            width: 32,
+                                            height: 32,
+                                            fit: BoxFit.cover,
+                                            errorWidget: (c, u, e) => const Icon(Icons.movie, color: Colors.white24, size: 20),
+                                          ),
+                                        )
+                                      : const Icon(Icons.movie_outlined, color: Colors.amberAccent, size: 20),
+                                  title: Text(fullTitle, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+                                  subtitle: const Text("Hold to view full title", style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                  trailing: const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
+                                  onTap: () => extractFromPage(item['page_url'] ?? ''),
+                                  onLongPress: () {
+                                    showDialog(
+                                      context: dialogCtx,
+                                      builder: (c) => AlertDialog(
+                                        backgroundColor: const Color(0xFF161B22),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                        title: const Text("Full Item Title / Details", style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                        content: SelectableText(fullTitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(c),
+                                            child: const Text("OK", style: TextStyle(color: Colors.amberAccent)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+  Future<List<String>> _doClientSideImageSearch(String query) async {
+    final List<String> results = [];
+    try {
+      // Step 1: Get vqd token from DDG HTML
+      final htmlRes = await http.get(
+        Uri.parse('https://html.duckduckgo.com/html/?q=${Uri.encodeQueryComponent(query)}'),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      ).timeout(const Duration(seconds: 12));
+      final htmlBody = htmlRes.body;
+      String? vqd;
+      final m1 = RegExp(r'name="vqd"\s+value="([^"]+)"').firstMatch(htmlBody);
+      if (m1 != null) {
+        vqd = m1.group(1);
+      } else {
+        final m2 = RegExp(r'vqd=(\d[\d-]*)').firstMatch(htmlBody);
+        if (m2 != null) vqd = m2.group(1);
+      }
+      if (vqd == null || vqd.isEmpty) return results;
+
+      // Step 2: Get image results from DDG images API
+      final params = {
+        'l': 'us-en', 'o': 'json', 'q': query,
+        'vqd': vqd, 'f': ',,,', 'p': '1',
+      };
+      final imgRes = await http.get(
+        Uri.https('duckduckgo.com', '/i.js', params),
+        headers: {
+          'Referer': 'https://duckduckgo.com/',
+          'Accept': 'application/json, */*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      ).timeout(const Duration(seconds: 12));
+      final data = json.decode(imgRes.body);
+      if (data is Map && data['results'] != null) {
+        for (final r in data['results'] as List) {
+          final img = r['image']?.toString();
+          if (img != null && img.startsWith('http')) {
+            results.add(img);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('DDG client search error: $e');
+    }
+    return results;
+  }
+
+  Future<void> _loadLiveTelemetryData() async {
+    if (_telemetryDashboardLoading) return;
+    setState(() {
+      _telemetryDashboardLoading = true;
+      _telemetryDashboardError = null;
+    });
+
+    try {
+      final res = await _adminPhpApi('get_dashboard_telemetry', {});
+      if (mounted) {
+        setState(() {
+          _telemetryDashboardLoading = false;
+          if (res['status'] == 'success') {
+            _telemetryDashboardData = res['data'];
+          } else {
+            _telemetryDashboardError = res['message'] ?? 'Failed to load telemetry';
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _telemetryDashboardLoading = false;
+          _telemetryDashboardError = e.toString();
+        });
+      }
+    }
+  }
+
+  Widget _buildLiveTelemetryView() {
+    if (_telemetryDashboardData == null && !_telemetryDashboardLoading && _telemetryDashboardError == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadLiveTelemetryData();
+      });
+    }
+
+    if (_telemetryDashboardLoading) {
+      return const Center(child: CircularProgressIndicator(color: Colors.orangeAccent));
+    }
+
+    if (_telemetryDashboardError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                "Error: $_telemetryDashboardError",
+                style: const TextStyle(color: Colors.white70),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _loadLiveTelemetryData,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text("RETRY"),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final liveUsers = (_telemetryDashboardData?['live_users'] as List? ?? []);
+    final topUsers = (_telemetryDashboardData?['top_users'] as List? ?? []);
+    final topDownloads = (_telemetryDashboardData?['top_downloads'] as List? ?? []);
+    final topPlayed = (_telemetryDashboardData?['top_played'] as List? ?? []);
+
+    return RefreshIndicator(
+      onRefresh: _loadLiveTelemetryData,
+      color: Colors.orangeAccent,
+      backgroundColor: const Color(0xFF10121A),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header stats
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [Color(0xFFE50914), Color(0xFF8B0000)]),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.people_alt_rounded, color: Colors.white, size: 24),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Live Users (5m)", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                              Text("${liveUsers.length} Active", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [Color(0xFF1E2230), Color(0xFF141722)]),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.refresh_rounded, color: Colors.cyanAccent, size: 24),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: InkWell(
+                            onTap: _loadLiveTelemetryData,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: const [
+                                Text("Last Updated", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                                Text("Tap to Refresh", style: TextStyle(color: Colors.cyanAccent, fontSize: 13, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // 1. LIVE USERS DETAILS VIEW
+            _buildSectionHeader(Icons.sensors_rounded, "LIVE USERS PLAYING DETAILS", Colors.greenAccent),
+            const SizedBox(height: 8),
+            if (liveUsers.isEmpty)
+              _buildEmptyCard("No active users browsing or playing currently.")
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: liveUsers.length,
+                itemBuilder: (context, index) {
+                  final lu = liveUsers[index];
+                  final name = lu['user_name'] ?? 'Guest';
+                  final email = lu['user_email'] ?? 'guest@redapp.space';
+                  final view = lu['current_view'] ?? 'Browsing';
+                  final content = lu['content_name']?.toString();
+                  final ver = lu['app_version'] ?? '1.0.0';
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1F2E),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.greenAccent.withOpacity(0.15)),
+                    ),
+                    child: ListTile(
+                      dense: true,
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.greenAccent.withOpacity(0.08), shape: BoxShape.circle),
+                        child: const Icon(Icons.play_circle_outline_rounded, color: Colors.greenAccent),
+                      ),
+                      title: Row(
+                        children: [
+                          Expanded(child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))),
+                          Text("Ver $ver", style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(email, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                          const SizedBox(height: 3),
+                          Row(
+                            children: [
+                              Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  content != null ? "Watching: $content" : "Viewing: $view",
+                                  style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            const SizedBox(height: 16),
+
+            // 2. TOP 10 PLAYTIME USERS
+            _buildSectionHeader(Icons.military_tech_rounded, "TOP 10 USERS BY PLAYTIME", Colors.orangeAccent),
+            const SizedBox(height: 8),
+            if (topUsers.isEmpty)
+              _buildEmptyCard("No play statistics collected yet.")
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161924),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: topUsers.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+                  itemBuilder: (context, index) {
+                    final tu = topUsers[index];
+                    final name = tu['user_name'] ?? 'User';
+                    final email = tu['user_email'] ?? 'N/A';
+                    final ver = tu['app_version'] ?? '1.0.0';
+                    final sec = int.tryParse(tu['total_playtime_seconds']?.toString() ?? '0') ?? 0;
+                    
+                    final hrs = sec ~/ 3600;
+                    final mins = (sec % 3600) ~/ 60;
+                    final timeStr = hrs > 0 ? "$hrs hrs $mins mins" : "$mins mins";
+
+                    return ListTile(
+                      dense: true,
+                      leading: CircleAvatar(
+                        radius: 12,
+                        backgroundColor: index == 0
+                            ? Colors.amber
+                            : index == 1
+                                ? Colors.grey[400]
+                                : index == 2
+                                    ? Colors.brown[400]
+                                    : Colors.white12,
+                        child: Text(
+                          "${index + 1}",
+                          style: TextStyle(color: index < 3 ? Colors.black : Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      subtitle: Text("$email (Ver: $ver)", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                      trailing: Text(
+                        timeStr,
+                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 16),
+
+            // 3. TOP 10 PLAYED CONTENT
+            _buildSectionHeader(Icons.local_fire_department_rounded, "TOP 10 MOST WATCHED CONTENT", Colors.redAccent),
+            const SizedBox(height: 8),
+            if (topPlayed.isEmpty)
+              _buildEmptyCard("No watch history statistics yet.")
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161924),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: topPlayed.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+                  itemBuilder: (context, index) {
+                    final tp = topPlayed[index];
+                    final name = tp['content_name'] ?? 'Unknown Content';
+                    final plays = tp['play_count'] ?? 0;
+                    final type = tp['content_type']?.toString() == '1' ? 'Movie' : 'Series';
+                    
+                    final sec = int.tryParse(tp['total_playtime_seconds']?.toString() ?? '0') ?? 0;
+                    final hrs = sec ~/ 3600;
+                    final mins = (sec % 3600) ~/ 60;
+                    final playtimeStr = hrs > 0 ? "$hrs hrs $mins mins" : "$mins mins";
+
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(type == 'Movie' ? Icons.movie_rounded : Icons.live_tv_rounded, size: 18, color: Colors.redAccent),
+                      title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                      subtitle: Text("$plays play sessions • Playtime: $playtimeStr", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 16),
+
+            // 4. TOP 10 DOWNLOADS
+            _buildSectionHeader(Icons.download_for_offline_rounded, "TOP 10 MOST DOWNLOADED CONTENT", Colors.cyanAccent),
+            const SizedBox(height: 8),
+            if (topDownloads.isEmpty)
+              _buildEmptyCard("No downloads registered yet.")
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161924),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: topDownloads.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+                  itemBuilder: (context, index) {
+                    final td = topDownloads[index];
+                    final name = td['content_name'] ?? 'Unknown Content';
+                    final count = td['download_count'] ?? 0;
+                    final type = td['content_type']?.toString() == '1' ? 'Movie' : 'Series';
+
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(type == 'Movie' ? Icons.movie_outlined : Icons.live_tv_outlined, size: 18, color: Colors.cyanAccent),
+                      title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                      subtitle: Text("$count download requests recorded", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(IconData icon, String title, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 18),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyCard(String msg) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161924),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.03)),
+      ),
+      child: Text(
+        msg,
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: Colors.white30, fontSize: 12.5),
+      ),
+    );
+  }
+
   // 13. Push Campaigns & Announcements View
   Widget _buildPushCampaignsView() {
     return SingleChildScrollView(
@@ -6627,12 +8790,16 @@ class _MovieRepairDialog extends StatefulWidget {
   final Future<Map<String, dynamic>> Function(
       String action, Map<String, dynamic> body) apiCall;
   final VoidCallback onDone;
+  final Function(Function(String, {String? posterUrl}), {String defaultSearchText}) showExtractor;
+  final Function(Map<String, dynamic>, String) onEdit;
 
   const _MovieRepairDialog({
     Key? key,
     required this.item,
     required this.apiCall,
     required this.onDone,
+    required this.showExtractor,
+    required this.onEdit,
   }) : super(key: key);
 
   @override
@@ -6796,16 +8963,42 @@ class _MovieRepairDialogState extends State<_MovieRepairDialog> {
             const SizedBox(height: 12),
             const Text("NEW LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
-            TextField(
-              controller: _newUrlCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: "Paste new Streamtape / MP4 / MKV link",
-                hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
-                filled: true,
-                fillColor: const Color(0xFF090A0F),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _newUrlCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: "Paste new Streamtape / MP4 link",
+                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
+                      filled: true,
+                      fillColor: const Color(0xFF090A0F),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                ElevatedButton(
+                  onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
+                    setState(() => _newUrlCtrl.text = extractedUrl);
+                  }, defaultSearchText: widget.item['name'] ?? ''),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.withOpacity(0.15),
+                    foregroundColor: Colors.amberAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.bolt_rounded, size: 14),
+                      SizedBox(width: 2),
+                      Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ],
             ),
             if (_checkResult != null) ...[
               const SizedBox(height: 8),
@@ -6834,6 +9027,17 @@ class _MovieRepairDialogState extends State<_MovieRepairDialog> {
               : const Text("CHECK", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
         ),
         TextButton(
+          onPressed: _busy ? null : _update,
+          child: const Text("UPDATE", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+        ),
+        TextButton(
+          onPressed: _busy ? null : () {
+            Navigator.pop(context);
+            widget.onEdit(widget.item, 'movie');
+          },
+          child: const Text("EDIT DETAILS", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+        ),
+        TextButton(
           onPressed: _busy ? null : _delete,
           child: const Text("DELETE MOVIE", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
         ),
@@ -6848,12 +9052,16 @@ class _SeriesRepairDialog extends StatefulWidget {
   final Future<Map<String, dynamic>> Function(
       String action, Map<String, dynamic> body) apiCall;
   final VoidCallback onDone;
+  final Function(Function(String, {String? posterUrl}), {String defaultSearchText}) showExtractor;
+  final Function(Map<String, dynamic>, String) onEdit;
 
   const _SeriesRepairDialog({
     Key? key,
     required this.item,
     required this.apiCall,
     required this.onDone,
+    required this.showExtractor,
+    required this.onEdit,
   }) : super(key: key);
 
   @override
@@ -6863,6 +9071,7 @@ class _SeriesRepairDialog extends StatefulWidget {
 class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
   dynamic _selectedEpisode;
   final _newUrlCtrl = TextEditingController();
+  final _newImageCtrl = TextEditingController();
   bool _checking = false;
   String? _checkResult;
   bool _checkOk = false;
@@ -6882,6 +9091,7 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
   @override
   void dispose() {
     _newUrlCtrl.dispose();
+    _newImageCtrl.dispose();
     super.dispose();
   }
 
@@ -6906,13 +9116,15 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
 
   Future<void> _updateEpisode() async {
     final url = _newUrlCtrl.text.trim();
-    if (url.isEmpty || _selectedEpisode == null) return;
+    final imgUrl = _newImageCtrl.text.trim();
+    if (_selectedEpisode == null) return;
     setState(() => _busy = true);
     final res = await widget.apiCall('restore_content', {
       'type': 'series',
       'id': widget.item['id'],
       'episode_id': _selectedEpisode['episode_id'],
       'new_url': url,
+      'episoade_image': imgUrl,
     });
     if (!mounted) return;
     setState(() => _busy = false);
@@ -6920,11 +9132,12 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
     eps.removeWhere((e) => e['episode_id'] == _selectedEpisode['episode_id']);
     setState(() => _selectedEpisode = null);
     _newUrlCtrl.clear();
+    _newImageCtrl.clear();
     _checkResult = null;
     widget.onDone();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(res['status'] == 'success' ? "Episode link updated" : "Failed: ${res['message'] ?? 'Unknown error'}"),
+        content: Text(res['status'] == 'success' ? "Episode updated & saved" : "Failed: ${res['message'] ?? 'Unknown error'}"),
         backgroundColor: res['status'] == 'success' ? Colors.green : Colors.red,
       ),
     );
@@ -7037,6 +9250,7 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                               _selectedEpisode = ep;
                               _checkResult = null;
                               _newUrlCtrl.clear();
+                              _newImageCtrl.text = (ep['episoade_image'] ?? ep['image'] ?? '').toString();
                             }),
                             child: Container(
                               width: double.infinity,
@@ -7097,6 +9311,7 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                             _selectedEpisode = null;
                             _checkResult = null;
                             _newUrlCtrl.clear();
+                            _newImageCtrl.clear();
                           }),
                           icon: const Icon(Icons.arrow_back, color: Colors.white70),
                         ),
@@ -7124,19 +9339,64 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    const Text("NEW LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 10),
+                    const Text("EPISODE IMAGE URL", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
                     TextField(
-                      controller: _newUrlCtrl,
-                      style: const TextStyle(color: Colors.white),
+                      controller: _newImageCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
                       decoration: InputDecoration(
-                        hintText: "Paste new Streamtape / MP4 / MKV link",
-                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        hintText: "Episode thumbnail image URL",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
                         filled: true,
                         fillColor: const Color(0xFF090A0F),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text("NEW STREAM LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _newUrlCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            decoration: InputDecoration(
+                              hintText: "Paste new Streamtape / MP4 link",
+                              hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
+                              filled: true,
+                              fillColor: const Color(0xFF090A0F),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
+                            setState(() {
+                              _newUrlCtrl.text = extractedUrl;
+                              if (posterUrl != null && posterUrl.isNotEmpty) {
+                                _newImageCtrl.text = posterUrl;
+                              }
+                            });
+                          }, defaultSearchText: widget.item['name'] ?? ''),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber.withOpacity(0.15),
+                            foregroundColor: Colors.amberAccent,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.bolt_rounded, size: 14),
+                              SizedBox(width: 2),
+                              Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                     if (_checkResult != null) ...[
                       const SizedBox(height: 8),
@@ -7159,6 +9419,13 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
               TextButton(
                 onPressed: _busy ? null : () => Navigator.pop(context),
                 child: const Text("Close", style: TextStyle(color: Colors.grey)),
+              ),
+              TextButton(
+                onPressed: _busy ? null : () {
+                  Navigator.pop(context);
+                  widget.onEdit(widget.item, 'series');
+                },
+                child: const Text("EDIT SERIES", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
               ),
               TextButton(
                 onPressed: _busy ? null : _deleteSeries,

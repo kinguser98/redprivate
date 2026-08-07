@@ -90,28 +90,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           MaterialPageRoute(builder: (_) => MainLayoutScreen(user: merged)),
         );
       } else {
-        // No saved session — check login_mandatory setting
-        final loginMandatory = settings['login_mandatory']?.toString() == '1';
-
-        if (loginMandatory) {
-          // Admin requires login before anything
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const LoginRegisterScreen()),
-          );
-        } else {
-          // Guest browse mode — user can see the app but will be gated at play
-          final guestUser = UserModel(
-            id: 0,
-            name: 'Guest',
-            email: 'guest@redapp.space',
-            role: 'user',
-            activeSubscription: 'Free',
-          );
-          AppSession.user = guestUser;
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => MainLayoutScreen(user: guestUser)),
-          );
-        }
+        // First install/no saved session — launch fresh to Login/Register screen
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const LoginRegisterScreen()),
+        );
       }
     });
   }

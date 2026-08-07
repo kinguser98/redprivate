@@ -102,8 +102,8 @@ class _WebSeriesScreenState extends State<WebSeriesScreen> {
     }
   }
 
-  Future<void> _playEpisode(dynamic rawUrl, String title) async {
-    await playVideo(context, rawUrl?.toString() ?? '', title);
+  Future<void> _playEpisode(dynamic rawUrl, String title, int seriesId) async {
+    await playVideo(context, rawUrl?.toString() ?? '', title, contentId: seriesId, contentType: 2);
   }
 
   @override
@@ -237,14 +237,14 @@ class _WebSeriesScreenState extends State<WebSeriesScreen> {
                 child: CircularProgressIndicator(color: Color(0xFFE50914)),
               )
             else
-              ...series.seasons.map((season) => _buildSeasonSection(season)),
+              ...series.seasons.map((season) => _buildSeasonSection(series.id, season)),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildSeasonSection(SeriesSeasonModel season) {
+  Widget _buildSeasonSection(int seriesId, SeriesSeasonModel season) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: ExpansionTile(
@@ -259,15 +259,15 @@ class _WebSeriesScreenState extends State<WebSeriesScreen> {
               fontWeight: FontWeight.w600,
               fontSize: 13),
         ),
-        children: season.episodes.map((ep) => _buildEpisodeTile(ep)).toList(),
+        children: season.episodes.map((ep) => _buildEpisodeTile(seriesId, ep)).toList(),
       ),
     );
   }
 
-  Widget _buildEpisodeTile(SeriesEpisodeModel ep) {
+  Widget _buildEpisodeTile(int seriesId, SeriesEpisodeModel ep) {
     final hasLink = ep.playLink != null && ep.playLink!.url.isNotEmpty;
     return InkWell(
-      onTap: hasLink ? () => _playEpisode(ep.playLink!.url, ep.name) : null,
+      onTap: hasLink ? () => _playEpisode(ep.playLink!.url, ep.name, seriesId) : null,
       child: Padding(
         padding: const EdgeInsets.only(left: 16, right: 8, top: 6, bottom: 6),
         child: Row(
