@@ -35,6 +35,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Red App uses the local network to stream video content inside the app.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Red App needs access to your photo library to save downloaded videos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Red App needs permission to save downloaded videos to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

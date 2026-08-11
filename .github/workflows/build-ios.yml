@@ -31,9 +31,12 @@ jobs:
       - name: Generate app icons
         run: dart run flutter_launcher_icons
 
-      - name: Disable code signing in Xcode project
+      - name: Install CocoaPods dependencies
+        run: cd ios && pod install --repo-update
+
+      - name: Configure Xcode for unsigned build
         run: |
-          xcodebuild -project ios/Runner.xcodeproj -scheme Runner -configuration Release \
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             -quiet
 
