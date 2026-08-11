@@ -4,7 +4,7 @@ import '../models/user_model.dart';
 import 'home_screen.dart';
 import 'all_movies_series_screen.dart';
 import 'settings_screen.dart';
-import '../widgets/update_dialog.dart'
+import '../widgets/update_dialog.dart';
 import '../services/api_service.dart';
 import '../config/api_config.dart';
 
