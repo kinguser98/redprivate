@@ -18,6 +18,7 @@ import 'subscription_vip_screen.dart';
 import 'all_ott_screen.dart';
 import 'navigation_helper.dart';
 import 'downloads_screen.dart';
+import 'foreign_trip_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final UserModel user;
@@ -86,8 +87,8 @@ class _HomeScreenState extends State<HomeScreen> {
     await ApiService.loadParkedIdsFromCache();
     unawaited(ApiService.refreshParkedIds());
     final res = await ApiService.fetchHomeData(widget.user.id);
-    if (res['status'] == 'success' && res['data'] != null) {
-      final data = res['data'];
+    if (res['status'] == 'success') {
+      final data = (res['data'] is Map<String, dynamic>) ? res['data'] : res;
       List<MovieModel> safeList(List? list) {
         if (list == null) return [];
         return list
@@ -138,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // 1. Check Push Campaign
       final campaignData = data['push_campaign'];
       if (campaignData is Map<String, dynamic>) {
-        final cId = campaignData['id']?.toString() ?? '';
+        final cId = "${campaignData['id']}_${campaignData['title']}_${campaignData['expiry_at'] ?? ''}";
         final seenCampaigns = prefs.getStringList('seen_push_campaigns') ?? [];
         if (cId.isNotEmpty && !seenCampaigns.contains(cId)) {
           seenCampaigns.add(cId);
@@ -154,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // 2. Check Announcement
       final annData = data['announcement'];
       if (annData is Map<String, dynamic>) {
-        final aId = annData['id']?.toString() ?? '';
+        final aId = "${annData['id']}_${annData['title']}_${annData['message'] ?? ''}";
         final seenAnnouncements = prefs.getStringList('seen_announcements') ?? [];
         if (aId.isNotEmpty && !seenAnnouncements.contains(aId)) {
           seenAnnouncements.add(aId);
@@ -293,7 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, index) {
                         final item = items[index];
                         final itemId = int.tryParse('${item['id']}') ?? 0;
-                        final itemType = (item['type'] ?? 'movie').toString();
+                        final itemType = (item['item_type'] ?? item['type'] ?? 'movie').toString();
                         final name = (item['name'] ?? 'Untitled').toString();
                         final poster = (item['poster'] ?? '').toString();
                         final rawOtt = (item['ott_name'] ?? item['network_name'] ?? item['genre_name'] ?? 'RED EXCLUSIVE').toString();
@@ -720,6 +721,42 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const Spacer(),
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ForeignTripScreen()),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF00c6ff), Color(0xFF0072ff)],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.cyanAccent.withOpacity(0.4),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.flight_takeoff_rounded, color: Colors.white, size: 18),
+                          SizedBox(width: 4),
+                          Text(
+                            "TRIP",
+                            style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.8),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   IconButton(
                     icon: const Icon(Icons.search_rounded, color: Colors.white70, size: 22),
                     tooltip: 'Search Catalog',
@@ -1029,7 +1066,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 24),
                   ),
                 ),
               ],

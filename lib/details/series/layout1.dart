@@ -7,6 +7,7 @@ import '../../widgets/more_like_this_row.dart';
 import '../details_data.dart';
 import '../../services/api_service.dart';
 import '../../models/user_model.dart';
+import '../../screens/video_launcher.dart';
 
 class AuroraGlassSeriesLayout extends StatefulWidget {
   final DetailsData data;
@@ -516,9 +517,21 @@ class _AuroraGlassSeriesLayoutState extends State<AuroraGlassSeriesLayout> {
                                   color: Colors.white70,
                                   size: 36,
                                 ),
-                                onPressed: rawUrl.isNotEmpty
-                                    ? () => widget.onPlayEpisode(rawUrl, ep.name)
-                                    : widget.onPlay,
+                                onPressed: () {
+                                  if (ep.playLinks.length > 1) {
+                                    playVideoWithServerSelection(
+                                      context,
+                                      ep.playLinks.map((l) => {'name': l.name, 'url': l.url, 'quality': l.quality}).toList(),
+                                      ep.name,
+                                      contentId: widget.data.movie.id,
+                                      contentType: 2,
+                                    );
+                                  } else if (rawUrl.isNotEmpty) {
+                                    widget.onPlayEpisode(rawUrl, ep.name);
+                                  } else {
+                                    widget.onPlay();
+                                  }
+                                },
                               ),
                             ],
                           ),

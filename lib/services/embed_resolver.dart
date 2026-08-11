@@ -63,7 +63,17 @@ class EmbedResolver {
       return rawUrl;
     }
 
-    final embedUrl = rawUrl.replaceAll(RegExp(r'/(?:v|f)/'), '/e/');
+    String embedUrl = rawUrl.replaceAll(RegExp(r'/(?:v|f)/'), '/e/');
+    if (embedUrl.contains('luluvdo.com')) {
+      embedUrl = embedUrl.replaceAll('luluvdo.com', 'lulucdn.com');
+    } else if (embedUrl.contains('lulustream.com')) {
+      embedUrl = embedUrl.replaceAll('lulustream.com', 'lulucdn.com');
+    }
+    if ((rawUrl.contains('luluvdo') || rawUrl.contains('lulustream') || rawUrl.contains('lulucdn')) && !embedUrl.contains('/e/')) {
+      final cleanUrl = embedUrl.replaceAll(RegExp(r'/+$'), '');
+      final code = cleanUrl.split('/').last;
+      embedUrl = 'https://lulucdn.com/e/$code';
+    }
     final completer = Completer<String?>();
     bool dialogOpen = true;
     HeadlessInAppWebView? headlessWebView;
@@ -133,6 +143,26 @@ class EmbedResolver {
                   } catch(e) {}
                 }
 
+                var checkJw = setInterval(function() {
+                  try {
+                    if (window.jwplayer && typeof window.jwplayer === 'function') {
+                      var jw = window.jwplayer();
+                      if (jw && typeof jw.getPlaylist === 'function') {
+                        var pl = jw.getPlaylist();
+                        if (pl && pl.length > 0 && pl[0].sources) {
+                          pl[0].sources.forEach(function(src) {
+                            if (src.file && src.file.indexOf('.m3u8') !== -1) {
+                              clearInterval(checkJw);
+                              window.flutter_inappwebview.callHandler('videoFound', src.file);
+                            }
+                          });
+                        }
+                      }
+                      try { jw.play(); } catch(e) {}
+                    }
+                  } catch(e) {}
+                }, 250);
+
                 var checkVideo = setInterval(function() {
                   try {
                     var vids = document.querySelectorAll('video');
@@ -143,21 +173,21 @@ class EmbedResolver {
                       }
                     });
                   } catch(e) {}
-                }, 500);
+                }, 400);
 
                 var count = 0;
                 var interval = setInterval(function() {
                   count++;
-                  if (count > 20) {
+                  if (count > 30) {
                     clearInterval(interval);
                     return;
                   }
-                  ['.vjs-big-play-button', '#robotlink', '#norobotlink', '#ideoolink', '#ideoooolink', '#captchalink', '.play-button', '#play', '.play'].forEach(function(sel) {
+                  ['.jw-display-icon-container', '.jw-icon-display', '.jw-display-icon-display', '.vjs-big-play-button', '#robotlink', '#norobotlink', '#ideoolink', '#ideoooolink', '#captchalink', '.play-button', '#play', '.play'].forEach(function(sel) {
                     try {
                       document.querySelectorAll(sel).forEach(function(el) { simulateClick(el); });
                     } catch(e) {}
                   });
-                }, 400);
+                }, 300);
               })();
             """,
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,

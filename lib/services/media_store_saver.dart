@@ -5,12 +5,12 @@ import 'package:flutter/services.dart';
 class MediaStoreSaver {
   static const MethodChannel _channel = MethodChannel('com.red.app/save');
 
-  static Future<bool> saveToDownloads(String path, String name) async {
-    return _invoke('saveToDownloads', path, name, 'video/mp4');
+  static Future<bool> saveToDownloads(String path, String name, {String mime = 'video/mp4'}) async {
+    return _invoke('saveToDownloads', path, name, mime);
   }
 
-  static Future<bool> saveToMovies(String path, String name) async {
-    return _invoke('saveToMovies', path, name, 'video/mp4');
+  static Future<bool> saveToMovies(String path, String name, {String mime = 'video/mp4'}) async {
+    return _invoke('saveToMovies', path, name, mime);
   }
 
   static Future<bool> _invoke(

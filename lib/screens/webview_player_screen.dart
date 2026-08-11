@@ -64,25 +64,32 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                     window.open = function() { return null; };
                     
                     function autoPlayVideo() {
-                      var v = document.querySelector('video');
-                      if (v) {
-                        v.play().catch(function(e) {});
-                        v.setAttribute('controls', 'true');
-                        v.style.width = '100vw';
-                        v.style.height = '100vh';
-                        v.style.objectFit = 'contain';
-                      }
+                      try {
+                        if (window.jwplayer && typeof window.jwplayer === 'function') {
+                          try { window.jwplayer().play(); } catch(e) {}
+                        }
+                        var v = document.querySelector('video');
+                        if (v) {
+                          v.play().catch(function(e) {});
+                          v.setAttribute('controls', 'true');
+                          v.style.width = '100vw';
+                          v.style.height = '100vh';
+                          v.style.objectFit = 'contain';
+                        }
+                      } catch(e) {}
                     }
 
                     var timer = setInterval(function() {
                       autoPlayVideo();
-                      ['.vjs-big-play-button', '#robotlink', '.play-button', '#play'].forEach(function(s) {
-                        var el = document.querySelector(s);
-                        if (el) el.click();
+                      ['.jw-display-icon-container', '.jw-icon-display', '.vjs-big-play-button', '#robotlink', '.play-button', '#play'].forEach(function(s) {
+                        try {
+                          var el = document.querySelector(s);
+                          if (el) el.click();
+                        } catch(e) {}
                       });
-                    }, 500);
+                    }, 400);
 
-                    setTimeout(function() { clearInterval(timer); }, 10000);
+                    setTimeout(function() { clearInterval(timer); }, 12000);
                   })();
                 """,
                 injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,

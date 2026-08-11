@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../config/api_config.dart';
 import '../streamtape_domains_screen.dart';
 
@@ -40,6 +41,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'Streamtape Domains Manager',
     'Live Telemetry & Analytics',
     'SkyMoviesHD Auto Importer',
+    'HDMove99 Auto Importer',
   ];
 
   final List<IconData> _navIcons = [
@@ -61,6 +63,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.dns_rounded,
     Icons.analytics_rounded,
     Icons.cloud_download_rounded,
+    Icons.video_library_rounded,
   ];
 
   // Data lists
@@ -96,6 +99,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   bool _scanDone = false;
   int _movieChecked = 0, _movieTotal = 0, _movieDead = 0;
   int _epChecked = 0, _epTotal = 0, _epDead = 0;
+
+
+  // HDMove99 Auto Importer State
+  List<dynamic> _hdmove99Catalog = [];
+  bool _hdmove99Loading = false;
+  int _hdmove99Page = 1;
+  final _hdmove99SearchCtrl = TextEditingController();
 
   // Form Controllers
   final _addTitleCtrl = TextEditingController();
@@ -145,6 +155,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _annImageUrlCtrl = TextEditingController();
   int _annHoursValid = 72;
   List<dynamic> _announcementsList = [];
+  List<Map<String, dynamic>> _extraMovieServers = [];
 
   @override
   void initState() {
@@ -393,7 +404,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     final existingUrl = (firstLink['url'] ?? item['stream_url'] ?? '').toString();
     final existingType = (firstLink['type'] ?? '').toString().toLowerCase();
     String guessedStreamType = _streamType;
-    if (existingType.contains('hls') ||
+    if (existingType.contains('xhamster') ||
+        existingUrl.contains('xhamster') ||
+        existingUrl.contains('xhvid') ||
+        existingUrl.contains('xh.video')) {
+      guessedStreamType = 'xHamster Stream';
+    } else if (existingType.contains('luluvdo') ||
+        existingUrl.contains('luluvdo') ||
+        existingUrl.contains('lulustream') ||
+        existingUrl.contains('lulucdn')) {
+      guessedStreamType = 'Luluvdo Stream';
+    } else if (existingType.contains('hls') ||
         existingType.contains('m3u8') ||
         existingUrl.contains('.m3u8')) {
       guessedStreamType = 'HLS/M3U8 Stream';
@@ -481,6 +502,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
     final isEdit = _editingItem != null;
 
+    final List<Map<String, String>> moviePlayLinksPayload = [];
+    if (_addStreamUrlCtrl.text.trim().isNotEmpty) {
+      moviePlayLinksPayload.add({
+        'name': 'Server 1',
+        'type': _streamType,
+        'quality': '720p',
+        'url': _addStreamUrlCtrl.text.trim(),
+      });
+    }
+    for (int i = 0; i < _extraMovieServers.length; i++) {
+      final s = _extraMovieServers[i];
+      final ctrl = s['ctrl'] as TextEditingController;
+      final url = ctrl.text.trim();
+      if (url.isNotEmpty) {
+        moviePlayLinksPayload.add({
+          'name': (s['name'] ?? 'Server ${i + 2}').toString(),
+          'type': (s['type'] ?? 'MP4/MKV Direct Link').toString(),
+          'quality': '720p',
+          'url': url,
+        });
+      }
+    }
+
     if (isEdit) {
       // Update existing content
       final action = _addType == 'movie' ? 'edit_movie' : 'edit_series';
@@ -496,6 +540,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'network': _selectedCastNetworkIds.join(','),
         'stream_url': _addStreamUrlCtrl.text.trim(),
         'stream_type': _streamType,
+        'play_links': moviePlayLinksPayload,
       });
       if (res['status'] != 'success') {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -533,6 +578,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'downloadable': _enableDownload ? 1 : 0,
         'stream_url': _addStreamUrlCtrl.text.trim(),
         'stream_type': _streamType,
+        'play_links': moviePlayLinksPayload,
         'status': 1,
         'genres': _selectedOttGenreIds.join(','),
         'network': _selectedCastNetworkIds.join(','),
@@ -682,6 +728,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           final name = selectedName.trim();
                           if (name.isEmpty) return;
                           Map<String, dynamic> res;
+                          if (seriesId <= 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Please publish or save the Web Series first before adding seasons."), backgroundColor: Colors.orangeAccent),
+                            );
+                            return;
+                          }
                           if (isEdit) {
                             res = await _adminPhpApi('edit_season', {
                               'id': existing['id'],
@@ -786,6 +838,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   text: existing != null ? (existing['episoade_image'] ?? '').toString() : '');
               final epUrlCtrl = TextEditingController(
                   text: existing != null ? (firstLink?['url'] ?? '').toString() : '');
+              final epOrderCtrl = TextEditingController(
+                  text: existing != null ? '${existing['episoade_order'] ?? existing['order'] ?? 1}' : '${currentEpisodes.length + 1}');
+              bool checkingEpLink = false;
 
               String epStreamType = existing != null
                   ? (firstLink?['type'] ?? 'MP4/MKV Direct Link').toString()
@@ -829,30 +884,65 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           ),
                           const SizedBox(height: 10),
                           TextField(
+                            controller: epOrderCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              labelText: "Episode Order (1, 2, 3...)", labelStyle: const TextStyle(color: Colors.white70),
+                              filled: true, fillColor: const Color(0xFF090A0F),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
                             controller: epImageCtrl,
                             style: const TextStyle(color: Colors.white),
+                            onChanged: (val) => setDlgState(() {}),
                             decoration: InputDecoration(
                               labelText: "Image URL", labelStyle: const TextStyle(color: Colors.white70),
                               filled: true, fillColor: const Color(0xFF090A0F),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                             ),
                           ),
+                          if (epImageCtrl.text.trim().isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: AspectRatio(
+                                aspectRatio: 16 / 9,
+                                child: Container(
+                                  color: const Color(0xFF090A0F),
+                                  child: CachedNetworkImage(
+                                    imageUrl: epImageCtrl.text.trim(),
+                                    fit: BoxFit.cover,
+                                    placeholder: (c, u) => const Center(child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2)),
+                                    errorWidget: (c, u, e) => const Center(child: Text("Invalid / Broken Image URL", style: TextStyle(color: Colors.redAccent, fontSize: 11))),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 10),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text("Stream Source Format", style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                          ),
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 8, runSpacing: 8,
-                            children: ['MP4/MKV Direct Link', 'Streamtape Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
-                              final isSelected = epStreamType == st;
-                              return ChoiceChip(
-                                label: Text(st), selected: isSelected,
-                                selectedColor: const Color(0xFF8E2DE2),
-                                onSelected: (s) => setDlgState(() => epStreamType = st),
+                          DropdownButtonFormField<String>(
+                            value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(epStreamType) ? epStreamType : 'MP4/MKV Direct Link',
+                            dropdownColor: const Color(0xFF161A26),
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                            decoration: InputDecoration(
+                              labelText: "Stream Source Format",
+                              labelStyle: const TextStyle(color: Colors.white70),
+                              filled: true,
+                              fillColor: const Color(0xFF090A0F),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                              return DropdownMenuItem<String>(
+                                value: st,
+                                child: Text(st, style: const TextStyle(color: Colors.white)),
                               );
                             }).toList(),
+                            onChanged: (val) {
+                              if (val != null) setDlgState(() => epStreamType = val);
+                            },
                           ),
                           const SizedBox(height: 10),
                           Row(
@@ -862,13 +952,49 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   controller: epUrlCtrl,
                                   style: const TextStyle(color: Colors.white),
                                   decoration: InputDecoration(
-                                    labelText: "Stream URL", labelStyle: const TextStyle(color: Colors.white70),
+                                    labelText: "Primary Stream URL (Server 1)", labelStyle: const TextStyle(color: Colors.white70),
                                     filled: true, fillColor: const Color(0xFF090A0F),
                                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                                   ),
                                 ),
                               ),
                               const SizedBox(width: 6),
+                              ElevatedButton(
+                                onPressed: checkingEpLink ? null : () async {
+                                  final url = epUrlCtrl.text.trim();
+                                  if (url.isEmpty) return;
+                                  setDlgState(() => checkingEpLink = true);
+                                  final res = await _adminPhpApi('check_link', {'url': url});
+                                  setDlgState(() => checkingEpLink = false);
+                                  if (res['status'] == 'success') {
+                                    final ok = res['data']?['ok'] == true;
+                                    final code = res['data']?['code'] ?? 0;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(ok ? "Link is LIVE (HTTP $code)" : "Link is DEAD / Failed (HTTP $code)"),
+                                        backgroundColor: ok ? Colors.green : Colors.red,
+                                      ),
+                                    );
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.cyan.withOpacity(0.15),
+                                  foregroundColor: Colors.cyanAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
+                                ),
+                                child: checkingEpLink
+                                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                                    : const Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.search_rounded, size: 14),
+                                          SizedBox(width: 2),
+                                          Text("CHECK", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                              ),
+                              const SizedBox(width: 4),
                               ElevatedButton(
                                 onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
                                   setDlgState(() {
@@ -877,11 +1003,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       epImageCtrl.text = posterUrl;
                                     }
                                   });
-                                }, defaultSearchText: (_editingItem?['name'] ?? _addTitleCtrl.text).trim()),
+                                }, defaultSearchText: (seriesTitle.isNotEmpty ? seriesTitle : (_editingItem?['name'] ?? _addTitleCtrl.text)).trim()),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.amber.withOpacity(0.15),
                                   foregroundColor: Colors.amberAccent,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
                                 ),
                                 child: const Row(
@@ -926,6 +1052,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Episode name and stream URL required")));
                             return;
                           }
+                          final epOrder = int.tryParse(epOrderCtrl.text.trim()) ?? (currentEpisodes.length + 1);
+
+                          final List<Map<String, String>> epPlayLinksPayload = [
+                            {
+                              'name': 'Server 1',
+                              'type': epStreamType,
+                              'quality': selectedQuality,
+                              'url': epUrlCtrl.text.trim(),
+                            }
+                          ];
+
                           Map<String, dynamic> res;
                           if (isEdit) {
                             res = await _adminPhpApi('update_episode', {
@@ -933,7 +1070,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               'Episoade_Name': selectedEpName.trim(),
                               'episoade_image': epImageCtrl.text.trim(),
                               'url': epUrlCtrl.text.trim(),
+                              'stream_type': epStreamType,
                               'quality': selectedQuality,
+                              'order': epOrder,
+                              'play_links': epPlayLinksPayload,
                             });
                           } else {
                             res = await _adminPhpApi('add_episode_link', {
@@ -944,6 +1084,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               'stream_type': epStreamType,
                               'episode_image': epImageCtrl.text.trim(),
                               'quality': selectedQuality,
+                              'order': epOrder,
+                              'play_links': epPlayLinksPayload,
                             });
                           }
                           if (dctx.mounted) Navigator.pop(dctx);
@@ -1369,7 +1511,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   // Dead Scanner Logic
-  Future<void> _startScan() async {
+  Future<void> _startScan({String? ottFilter}) async {
+    final ott = ottFilter ?? _deadOttFilter;
     setState(() {
       _scanning = true;
       _scanDone = false;
@@ -1382,8 +1525,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     });
 
     // Reset server-side scan state so totals are stable across batches
-    await _adminPhpApi('reset_scan', {}, timeout: 30);
-    final init = await _adminPhpApi('get_scan_progress', {}, timeout: 30);
+    await _adminPhpApi('reset_scan', {'ott': ott}, timeout: 30);
+    final init = await _adminPhpApi('get_scan_progress', {'ott': ott}, timeout: 30);
     if (init['status'] == 'success' && init['data']?['movie'] != null) {
       setState(() {
         _movieTotal = int.tryParse('${init['data']['movie']['total']}') ?? 0;
@@ -1395,7 +1538,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     bool movieDone = false;
 
     while (!movieDone && _scanning) {
-      final d = await _adminPhpApi('scan_movie_links', {'offset': 0, 'limit': batchSize}, timeout: 120);
+      final d = await _adminPhpApi('scan_movie_links', {'offset': 0, 'limit': batchSize, 'ott': ott}, timeout: 120);
       if (d['status'] == 'success') {
         final parked = (d['data']['parked_movies'] as List? ?? []);
         setState(() {
@@ -1416,7 +1559,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
     bool epDone = false;
     while (!epDone && _scanning) {
-      final d = await _adminPhpApi('scan_episode_links', {'offset': 0, 'limit': batchSize}, timeout: 120);
+      final d = await _adminPhpApi('scan_episode_links', {'offset': 0, 'limit': batchSize, 'ott': ott}, timeout: 120);
       if (d['status'] == 'success') {
         final parked = (d['data']['parked_series'] as List? ?? []);
         setState(() {
@@ -1435,7 +1578,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
 
     if (_scanning) {
-      await _adminPhpApi('park_dead_content', {}, timeout: 120);
+      await _adminPhpApi('park_dead_content', {'ott': ott}, timeout: 120);
       setState(() {
         _scanning = false;
         _scanDone = true;
@@ -1603,6 +1746,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildLiveTelemetryView();
       case 17:
         return _buildSkymoviesImporterView();
+      case 18:
+        return _buildHdmove99ImporterView();
       default:
         return _buildDashboardView();
     }
@@ -2672,26 +2817,32 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                 // Stream Source Selector & Input
                 if (_addType == 'movie') ...[
-                  const Text("Stream Source Format", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: ['MP4/MKV Direct Link', 'Streamtape Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
-                      final isSelected = _streamType == st;
-                      return ChoiceChip(
-                        label: Text(st),
-                        selected: isSelected,
-                        selectedColor: const Color(0xFF00C6FF),
-                        onSelected: (s) => setState(() => _streamType = st),
+                  DropdownButtonFormField<String>(
+                    value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(_streamType) ? _streamType : 'MP4/MKV Direct Link',
+                    dropdownColor: const Color(0xFF161A26),
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      labelText: "Stream Source Format",
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: const Color(0xFF0F121C),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                      return DropdownMenuItem<String>(
+                        value: st,
+                        child: Text(st, style: const TextStyle(color: Colors.white)),
                       );
                     }).toList(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => _streamType = val);
+                    },
                   ),
                   const SizedBox(height: 14),
                   Row(
                     children: [
                       Expanded(
-                        child: _buildInputField("Stream Playback URL", _addStreamUrlCtrl, hint: "https://... (MP4 / MKV / Streamtape)"),
+                        child: _buildInputField("Primary Stream URL (Server 1)", _addStreamUrlCtrl, hint: "https://..."),
                       ),
                       const SizedBox(width: 8),
                       Padding(
@@ -2716,6 +2867,118 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Dynamic Extra Movie Servers List
+                  ..._extraMovieServers.asMap().entries.map((entry) {
+                    final idx = entry.key;
+                    final server = entry.value;
+                    final ctrl = server['ctrl'] as TextEditingController;
+                    final sType = (server['type'] ?? 'MP4/MKV Direct Link').toString();
+                    final sNum = idx + 2;
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F131E),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text("Server $sNum Link", style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                onPressed: () {
+                                  setState(() {
+                                    ctrl.dispose();
+                                    _extraMovieServers.removeAt(idx);
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          DropdownButtonFormField<String>(
+                            value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(sType) ? sType : 'MP4/MKV Direct Link',
+                            dropdownColor: const Color(0xFF161A26),
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            decoration: InputDecoration(
+                              labelText: "Server $sNum Stream Type",
+                              labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: const Color(0xFF090A0F),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            ),
+                            items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                              return DropdownMenuItem<String>(value: st, child: Text(st, style: const TextStyle(color: Colors.white)));
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) setState(() => server['type'] = val);
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: ctrl,
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  decoration: InputDecoration(
+                                    labelText: "Server $sNum URL",
+                                    labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                                    filled: true,
+                                    fillColor: const Color(0xFF090A0F),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              ElevatedButton(
+                                onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                                  setState(() => ctrl.text = extractedUrl);
+                                }),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.amber.withOpacity(0.15),
+                                  foregroundColor: Colors.amberAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                                ),
+                                child: const Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+
+                  // Button: Add Extra Server Link
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _extraMovieServers.add({
+                          'name': 'Server ${_extraMovieServers.length + 2}',
+                          'type': 'MP4/MKV Direct Link',
+                          'ctrl': TextEditingController(),
+                        });
+                      });
+                    },
+                    icon: const Icon(Icons.add_circle_outline, color: Colors.cyanAccent, size: 18),
+                    label: const Text("+ Add Extra Server / Link", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.cyanAccent, width: 1),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    ),
                   ),
                 ],
 
@@ -5005,20 +5268,30 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      if (!_scanning)
+                      if (!_scanning) ...[
                         ElevatedButton.icon(
-                          onPressed: _startScan,
+                          onPressed: () => _startScan(),
                           icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                          label: const Text("SCAN", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          label: const Text("FULL SCAN", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                           style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
-                        )
-                      else
+                        ),
+                        if (_deadOttFilter.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            onPressed: () => _startScan(ottFilter: _deadOttFilter),
+                            icon: const Icon(Icons.filter_alt_rounded, size: 16),
+                            label: Text("SCAN '$_deadOttFilter'", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
+                          ),
+                        ],
+                      ] else ...[
                         ElevatedButton.icon(
                           onPressed: _cancelScan,
                           icon: const Icon(Icons.stop_rounded, size: 16),
                           label: const Text("STOP", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.amber[800], foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9)),
                         ),
+                      ],
                       const SizedBox(width: 8),
                       ElevatedButton.icon(
                         onPressed: () => setState(() {
@@ -6103,13 +6376,26 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     String? serverError;
     String? hdmove99Error;
     String? skymoviesError;
-    int activeTab = 0; // 0 = Bing + DDG, 1 = HDMove99, 2 = SKY
+    List<String> googleImages = [];
+    bool isSearchingGoogle = false;
+    String? googleError;
+    int activeTab = 0; // 0 = Google Images, 1 = Bing + DDG, 2 = HDMove99, 3 = SKY
 
     showDialog(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (dialogContext, dialogSetState) {
+
+            Future<void> runGoogleSearch() async {
+              // Google tab uses WebView — no async fetch needed,
+              // but we trigger a dialogSetState so the WebView rebuilds with the new query.
+              dialogSetState(() {
+                isSearchingGoogle = false;
+                googleError = null;
+                googleImages = []; // unused for WebView tab
+              });
+            }
 
             Future<void> runServerSearch() async {
               if (isSearchingServer) return;
@@ -6120,7 +6406,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               });
               try {
                 final q = searchCtrl.text.trim();
-                final res = await _adminPhpApi('search_images', {'query': '$q movie poster'});
+                final res = await _adminPhpApi('search_images', {'query': '$q poster'});
                 if (dialogContext.mounted) {
                   dialogSetState(() {
                     isSearchingServer = false;
@@ -6213,22 +6499,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             }
 
             void runSearch() {
-              if (activeTab == 0) runServerSearch();
-              else if (activeTab == 1) runHdmove99Search();
+              if (activeTab == 0) runGoogleSearch();
+              else if (activeTab == 1) runServerSearch();
+              else if (activeTab == 2) runHdmove99Search();
               else runSkymoviesSearch();
             }
 
             // Auto-trigger search on open if title is filled
-            if (foundImages.isEmpty && hdmove99Images.isEmpty && skymoviesImages.isEmpty &&
-                !isSearchingServer && !isSearchingHdmove99 && !isSearchingSkymovies &&
-                serverError == null && hdmove99Error == null && skymoviesError == null &&
+            if (googleImages.isEmpty && foundImages.isEmpty && hdmove99Images.isEmpty && skymoviesImages.isEmpty &&
+                !isSearchingGoogle && !isSearchingServer && !isSearchingHdmove99 && !isSearchingSkymovies &&
+                googleError == null && serverError == null && hdmove99Error == null && skymoviesError == null &&
                 searchCtrl.text.trim().isNotEmpty) {
               WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
             }
 
-            final currentImages = activeTab == 0 ? foundImages : (activeTab == 1 ? hdmove99Images : skymoviesImages);
-            final isSearching = activeTab == 0 ? isSearchingServer : (activeTab == 1 ? isSearchingHdmove99 : isSearchingSkymovies);
-            final searchError = activeTab == 0 ? serverError : (activeTab == 1 ? hdmove99Error : skymoviesError);
+            final currentImages = activeTab == 0 ? googleImages : (activeTab == 1 ? foundImages : (activeTab == 2 ? hdmove99Images : skymoviesImages));
+            final isSearching = activeTab == 0 ? isSearchingGoogle : (activeTab == 1 ? isSearchingServer : (activeTab == 2 ? isSearchingHdmove99 : isSearchingSkymovies));
+            final searchError = activeTab == 0 ? googleError : (activeTab == 1 ? serverError : (activeTab == 2 ? hdmove99Error : skymoviesError));
 
             return Dialog(
               backgroundColor: const Color(0xFF0D1117),
@@ -6308,7 +6595,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // ── Source Tabs (Bing + DDG, HDMove99, SKY) ──
+                    // ── Source Tabs (Google Images, Bing+DDG, HDMove99, SKY) ──
                     Container(
                       height: 36,
                       decoration: BoxDecoration(
@@ -6318,44 +6605,51 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       ),
                       child: Row(
                         children: [
+                          // Google Images tab
                           Expanded(
                             child: GestureDetector(
                               onTap: () {
                                 dialogSetState(() => activeTab = 0);
-                                if (foundImages.isEmpty && !isSearchingServer && searchCtrl.text.isNotEmpty) runServerSearch();
+                                if (googleImages.isEmpty && !isSearchingGoogle && searchCtrl.text.isNotEmpty) runGoogleSearch();
                               },
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: activeTab == 0 ? Colors.cyanAccent.withOpacity(0.18) : Colors.transparent,
+                                  color: activeTab == 0 ? Colors.redAccent.withOpacity(0.18) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 alignment: Alignment.center,
-                                child: Text(
-                                  'Bing + DDG (${foundImages.length})',
-                                  style: TextStyle(
-                                    color: activeTab == 0 ? Colors.cyanAccent : Colors.white54,
-                                    fontSize: 11, fontWeight: FontWeight.w600,
-                                  ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text('G', style: TextStyle(color: activeTab == 0 ? const Color(0xFF4285F4) : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('o', style: TextStyle(color: activeTab == 0 ? const Color(0xFFEA4335) : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('o', style: TextStyle(color: activeTab == 0 ? const Color(0xFFFBBC05) : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('g', style: TextStyle(color: activeTab == 0 ? const Color(0xFF4285F4) : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('le', style: TextStyle(color: activeTab == 0 ? const Color(0xFF34A853) : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    if (googleImages.isNotEmpty)
+                                      Text(' (${googleImages.length})', style: TextStyle(color: activeTab == 0 ? Colors.white70 : Colors.white38, fontSize: 10)),
+                                  ],
                                 ),
                               ),
                             ),
                           ),
+                          // Bing+DDG tab
                           Expanded(
                             child: GestureDetector(
                               onTap: () {
                                 dialogSetState(() => activeTab = 1);
-                                if (hdmove99Images.isEmpty && !isSearchingHdmove99 && searchCtrl.text.isNotEmpty) runHdmove99Search();
+                                if (foundImages.isEmpty && !isSearchingServer && searchCtrl.text.isNotEmpty) runServerSearch();
                               },
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: activeTab == 1 ? Colors.greenAccent.withOpacity(0.18) : Colors.transparent,
+                                  color: activeTab == 1 ? Colors.cyanAccent.withOpacity(0.18) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
-                                  'HDMove99 (${hdmove99Images.length})',
+                                  'Bing+DDG${foundImages.isNotEmpty ? " (${foundImages.length})" : ""}',
                                   style: TextStyle(
-                                    color: activeTab == 1 ? Colors.greenAccent : Colors.white54,
+                                    color: activeTab == 1 ? Colors.cyanAccent : Colors.white54,
                                     fontSize: 11, fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -6366,18 +6660,40 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             child: GestureDetector(
                               onTap: () {
                                 dialogSetState(() => activeTab = 2);
-                                if (skymoviesImages.isEmpty && !isSearchingSkymovies && searchCtrl.text.isNotEmpty) runSkymoviesSearch();
+                                if (hdmove99Images.isEmpty && !isSearchingHdmove99 && searchCtrl.text.isNotEmpty) runHdmove99Search();
                               },
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: activeTab == 2 ? Colors.purpleAccent.withOpacity(0.18) : Colors.transparent,
+                                  color: activeTab == 2 ? Colors.greenAccent.withOpacity(0.18) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
-                                  'SKY (${skymoviesImages.length})',
+                                  'HD${hdmove99Images.isNotEmpty ? " (${hdmove99Images.length})" : ""}',
                                   style: TextStyle(
-                                    color: activeTab == 2 ? Colors.purpleAccent : Colors.white54,
+                                    color: activeTab == 2 ? Colors.greenAccent : Colors.white54,
+                                    fontSize: 11, fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() => activeTab = 3);
+                                if (skymoviesImages.isEmpty && !isSearchingSkymovies && searchCtrl.text.isNotEmpty) runSkymoviesSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: activeTab == 3 ? Colors.purpleAccent.withOpacity(0.18) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'SKY${skymoviesImages.isNotEmpty ? " (${skymoviesImages.length})" : ""}',
+                                  style: TextStyle(
+                                    color: activeTab == 3 ? Colors.purpleAccent : Colors.white54,
                                     fontSize: 11, fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -6391,7 +6707,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                     // ── Results ──
                     Expanded(
-                      child: isSearching
+                      child: activeTab == 0
+                          // ── Google Images WebView ──
+                          ? _GoogleImagesWebView(
+                              query: searchCtrl.text.trim(),
+                              onImageSelected: (imgUrl) {
+                                if (onSelected != null) {
+                                  onSelected(imgUrl);
+                                } else {
+                                  setState(() {
+                                    _addPosterUrlCtrl.text = imgUrl;
+                                    _addThumbUrlCtrl.text = imgUrl;
+                                  });
+                                }
+                                Navigator.pop(ctx);
+                              },
+                            )
+                          : isSearching
                           ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
                           : searchError != null
                               ? Center(
@@ -6400,7 +6732,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     children: [
                                       const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 32),
                                       const SizedBox(height: 8),
-                                      Text(searchError, textAlign: TextAlign.center,
+                                      Text(searchError!, textAlign: TextAlign.center,
                                           style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
                                       const SizedBox(height: 12),
                                       TextButton.icon(
@@ -6665,11 +6997,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
   }
 
-  Future<void> _loadSkymoviesCatalog() async {
+  Future<void> _loadSkymoviesCatalog({bool forceRefresh = false}) async {
     setState(() => _skymoviesLoading = true);
     final res = await _adminPhpApi('fetch_skymovies_catalog', {
       'category': _skymoviesCat,
       'page': _skymoviesPage,
+      'refresh': forceRefresh ? 1 : 0,
     });
     if (!mounted) return;
     setState(() {
@@ -6736,6 +7069,357 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+
+  // 18. HDMove99 Auto Importer View (Grid View with Poster Cards & Instant Caching)
+  Widget _buildHdmove99ImporterView() {
+    if (_hdmove99Catalog.isEmpty && !_hdmove99Loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _hdmove99Catalog.isEmpty && !_hdmove99Loading) _loadHdmove99Catalog();
+      });
+    }
+
+    final isWide = MediaQuery.of(context).size.width > 600;
+    final crossCount = isWide ? (MediaQuery.of(context).size.width > 1000 ? 5 : 4) : 2;
+
+    return Column(
+      children: [
+        // Header Banner
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF1E2230), Color(0xFF141722)]),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.amberAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.video_library_rounded, color: Colors.amberAccent, size: 22),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("HDMove99 Auto Importer", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                      Text("Grid View • Poster Gallery • Auto-Import Details & Links", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => _loadHdmove99Catalog(forceRefresh: true),
+                  icon: const Icon(Icons.refresh_rounded, size: 14),
+                  label: const Text("REFRESH LATEST", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amberAccent.withOpacity(0.2),
+                    foregroundColor: Colors.amberAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Search Bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _hdmove99SearchCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: "Search HDMove99 catalog...",
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: Colors.amberAccent),
+                    suffixIcon: _hdmove99SearchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white38),
+                            onPressed: () {
+                              _hdmove99SearchCtrl.clear();
+                              _hdmove99Page = 1;
+                              _loadHdmove99Catalog();
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF141722),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                  onSubmitted: (_) {
+                    _hdmove99Page = 1;
+                    _loadHdmove99Catalog();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () {
+                  _hdmove99Page = 1;
+                  _loadHdmove99Catalog();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amberAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text("SEARCH", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+
+        // Poster Grid View
+        Expanded(
+          child: _hdmove99Loading
+              ? const Center(child: CircularProgressIndicator(color: Colors.amberAccent))
+              : _hdmove99Catalog.isEmpty
+                  ? const Center(child: Text("No items found in HDMove99 catalog", style: TextStyle(color: Colors.white54)))
+                  : GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossCount,
+                        childAspectRatio: 0.65,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: _hdmove99Catalog.length,
+                      itemBuilder: (context, index) {
+                        final item = _hdmove99Catalog[index];
+                        final poster = (item['poster'] ?? '').toString();
+                        final title = (item['title'] ?? 'Untitled').toString();
+                        final date = (item['date'] ?? '').toString();
+
+                        return Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF1F2636), Color(0xFF141722)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 6, offset: const Offset(0, 3)),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Poster Image
+                              Expanded(
+                                child: Stack(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                      child: poster.isNotEmpty
+                                          ? CachedNetworkImage(
+                                              imageUrl: poster,
+                                              width: double.infinity,
+                                              height: double.infinity,
+                                              fit: BoxFit.cover,
+                                              errorWidget: (c, u, e) => Container(color: const Color(0xFF2A3145), child: const Icon(Icons.movie, color: Colors.white24, size: 36)),
+                                            )
+                                          : Container(color: const Color(0xFF2A3145), child: const Icon(Icons.movie, color: Colors.white24, size: 36)),
+                                    ),
+                                    if (date.isNotEmpty)
+                                      Positioned(
+                                        top: 6,
+                                        right: 6,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(color: Colors.black.withOpacity(0.75), borderRadius: BorderRadius.circular(6)),
+                                          child: Text(date, style: const TextStyle(color: Colors.amberAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              // Title & Auto-Import Button
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _autoImportHdmove99Item(item),
+                                        icon: const Icon(Icons.download_rounded, size: 13),
+                                        label: const Text("AUTO-IMPORT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.amberAccent,
+                                          foregroundColor: Colors.black,
+                                          padding: const EdgeInsets.symmetric(vertical: 6),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+        ),
+
+        // Pagination Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: const Color(0xFF141722),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: _hdmove99Page > 1
+                    ? () {
+                        setState(() => _hdmove99Page--);
+                        _loadHdmove99Catalog();
+                      }
+                    : null,
+              ),
+              Text("Page $_hdmove99Page", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: () {
+                  setState(() => _hdmove99Page++);
+                  _loadHdmove99Catalog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadHdmove99Catalog({bool forceRefresh = false}) async {
+    setState(() => _hdmove99Loading = true);
+    final q = _hdmove99SearchCtrl.text.trim();
+    final res = await _adminPhpApi('fetch_hdmove99_catalog', {
+      'query': q,
+      'page': _hdmove99Page,
+      'refresh': forceRefresh ? 1 : 0,
+    });
+    if (!mounted) return;
+    setState(() {
+      _hdmove99Loading = false;
+      if (res['status'] == 'success' && res['data']?['items'] != null) {
+        _hdmove99Catalog = res['data']['items'];
+      } else {
+        _hdmove99Catalog = [];
+      }
+    });
+  }
+
+  Future<void> _autoImportHdmove99Item(dynamic item) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        backgroundColor: Color(0xFF141722),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.amberAccent),
+            SizedBox(width: 16),
+            Expanded(child: Text("Extracting HDMove99 details & downloading poster to server...", style: TextStyle(color: Colors.white, fontSize: 12))),
+          ],
+        ),
+      ),
+    );
+
+    final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': item['page_url']});
+
+    if (mounted) Navigator.pop(context);
+
+    if (res['status'] == 'success' && res['data'] != null) {
+      final d = res['data'];
+      final playLinks = (d['play_links'] as List<dynamic>? ?? []);
+      final primaryUrl = (d['stream_url'] ?? '').toString().trim();
+
+      setState(() {
+        _addType = 'movie';
+        _addTitleCtrl.text = d['title'] ?? item['title'] ?? '';
+        _addDescCtrl.text = d['description'] ?? "Watch ${d['title'] ?? item['title']} online in HD.";
+        _addPosterUrlCtrl.text = d['poster'] ?? d['raw_poster'] ?? item['poster'] ?? '';
+        _addThumbUrlCtrl.text = d['poster'] ?? d['raw_poster'] ?? item['poster'] ?? '';
+        if (d['release_date'] != null && (d['release_date'] as String).isNotEmpty) {
+          _addReleaseDateCtrl.text = d['release_date'];
+        } else if (item['date'] != null) {
+          _addReleaseDateCtrl.text = item['date'];
+        }
+        final mainUrl = (playLinks.isNotEmpty && playLinks.first['url'] != null && playLinks.first['url'].toString().isNotEmpty)
+            ? playLinks.first['url'].toString().trim()
+            : primaryUrl;
+
+        if (mainUrl.isNotEmpty) {
+          _addStreamUrlCtrl.text = mainUrl;
+          // Auto-guess stream type
+          if (mainUrl.contains('lulu') || primaryUrl.contains('tnmr.org')) {
+            _streamType = 'Luluvdo Stream';
+          } else if (mainUrl.contains('streamtape') || mainUrl.contains('tpead')) {
+            _streamType = 'Streamtape Stream';
+          } else if (mainUrl.endsWith('.mp4') || mainUrl.endsWith('.mkv')) {
+            _streamType = 'MP4/MKV Direct Link';
+          } else {
+            _streamType = 'Luluvdo Stream';
+          }
+        } else {
+          _addStreamUrlCtrl.clear();
+        }
+
+        _extraMovieServers.clear();
+        for (int i = 1; i < playLinks.length; i++) {
+          final pl = playLinks[i];
+          _extraMovieServers.add({
+            'name': pl['name'] ?? 'Server ${i + 1}',
+            'type': pl['type'] ?? 'Luluvdo Stream',
+            'ctrl': TextEditingController(text: pl['url'] ?? ''),
+          });
+        }
+        _selectedIndex = 2; // Switch to Add Content studio tab
+      });
+
+      final serverCount = playLinks.length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(serverCount > 0
+              ? "HDMove99: Extracted $serverCount server link(s)! ${serverCount > 1 ? 'Multiple servers found. Review & Publish.' : 'Review & tap Publish.'}"
+              : "HDMove99 details extracted (No stream links found on page)."),
+          backgroundColor: serverCount > 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Extraction failed: ${res['message'] ?? 'Unknown error'}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+
   // ── Quick Link Extractor Popup (Search or Paste URL) ──
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
@@ -6767,6 +7451,30 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   isExtracting = true;
                   errorText = null;
                 });
+
+                // Server-side resolver for Luluvdo / LuluStream URLs (auto-detected by URL)
+                if (q.contains('luluvdo') || q.contains('lulustream') || q.contains('lulucdn')) {
+                  final serverRes = await _adminPhpApi('resolve_server_stream', {'url': q});
+                  if (!dialogCtx.mounted) return;
+                  dialogSetState(() => isExtracting = false);
+                  if (serverRes['status'] == 'success' && serverRes['data']?['stream_url'] != null) {
+                    var streamUrl = serverRes['data']['stream_url'].toString().trim();
+                    if (streamUrl.isNotEmpty) {
+                      onLinkSelected(streamUrl);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Luluvdo stream resolved & extracted!"),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                      return;
+                    }
+                  }
+                  dialogSetState(() => errorText = "No playable stream found for Luluvdo URL");
+                  return;
+                }
+
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
                 dialogSetState(() => isExtracting = false);
@@ -7035,17 +7743,45 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   trailing: const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
                                   onTap: () => extractFromPage(item['page_url'] ?? ''),
                                   onLongPress: () {
+                                    final posterUrl = (item['poster'] ?? '').toString();
                                     showDialog(
                                       context: dialogCtx,
                                       builder: (c) => AlertDialog(
                                         backgroundColor: const Color(0xFF161B22),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                        title: const Text("Full Item Title / Details", style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
-                                        content: SelectableText(fullTitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                        title: Text(
+                                          fullTitle,
+                                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                          maxLines: 3,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        content: SingleChildScrollView(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (posterUrl.isNotEmpty) ...[
+                                                ClipRRect(
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  child: CachedNetworkImage(
+                                                    imageUrl: posterUrl,
+                                                    height: 200,
+                                                    fit: BoxFit.cover,
+                                                    errorWidget: (c, u, e) => const SizedBox.shrink(),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 12),
+                                              ],
+                                              SelectableText(
+                                                item['page_url'] ?? '',
+                                                style: const TextStyle(color: Colors.cyanAccent, fontSize: 11),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                         actions: [
                                           TextButton(
                                             onPressed: () => Navigator.pop(c),
-                                            child: const Text("OK", style: TextStyle(color: Colors.amberAccent)),
+                                            child: const Text("CLOSE", style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
                                           ),
                                         ],
                                       ),
@@ -9343,6 +10079,7 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                     TextField(
                       controller: _newImageCtrl,
                       style: const TextStyle(color: Colors.white, fontSize: 12),
+                      onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
                         hintText: "Episode thumbnail image URL",
                         hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
@@ -9351,6 +10088,35 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
+                    // Live image preview
+                    if (_newImageCtrl.text.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: AspectRatio(
+                          aspectRatio: 16 / 9,
+                          child: CachedNetworkImage(
+                            imageUrl: _newImageCtrl.text.trim(),
+                            fit: BoxFit.cover,
+                            placeholder: (c, u) => Container(
+                              color: const Color(0xFF141722),
+                              child: const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent)),
+                            ),
+                            errorWidget: (c, u, e) => Container(
+                              color: const Color(0xFF141722),
+                              child: const Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.broken_image_rounded, color: Colors.white24, size: 28),
+                                  SizedBox(height: 4),
+                                  Text("Image not found", style: TextStyle(color: Colors.white38, fontSize: 10)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     const Text("NEW STREAM LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
@@ -9455,4 +10221,290 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
 
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Google Images WebView Widget
+// ─────────────────────────────────────────────────────────────────────────────
 
+class _GoogleImagesWebView extends StatefulWidget {
+  final String query;
+  final void Function(String imageUrl) onImageSelected;
+
+  const _GoogleImagesWebView({
+    Key? key,
+    required this.query,
+    required this.onImageSelected,
+  }) : super(key: key);
+
+  @override
+  State<_GoogleImagesWebView> createState() => _GoogleImagesWebViewState();
+}
+
+class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
+  InAppWebViewController? _wvc;
+  bool _loading = true;
+  String _currentQuery = '';
+
+  // JS that intercepts image taps and posts the best available URL back to Flutter
+  static const String _interceptJs = r'''
+    (function() {
+      if (window.__pinInterceptDone) return;
+      window.__pinInterceptDone = true;
+
+      function extractBestUrl(el) {
+        var candidates = [];
+        var img = el.tagName === 'IMG' ? el : el.querySelector('img');
+
+        if (img) {
+          ['data-src', 'src', 'data-iurl'].forEach(function(attr) {
+            var v = img.getAttribute(attr);
+            if (v && v.startsWith('http') && !v.includes('encrypted-tbn') && !v.includes('data:'))
+              candidates.push(v);
+          });
+        }
+
+        // Walk up for data-iurl / data-src
+        var cur = el;
+        for (var i = 0; i < 8; i++) {
+          if (!cur) break;
+          ['data-src', 'data-iurl', 'data-url'].forEach(function(attr) {
+            var v = cur.getAttribute && cur.getAttribute(attr);
+            if (v && v.startsWith('http') && !v.includes('encrypted-tbn')) candidates.push(v);
+          });
+          cur = cur.parentElement;
+        }
+
+        // Try anchor href imgurl param
+        var a = el.closest('a');
+        if (a) {
+          var href = a.getAttribute('href') || '';
+          var m = href.match(/imgurl=([^&]+)/);
+          if (m) candidates.push(decodeURIComponent(m[1]));
+        }
+
+        // Fallback: allow encrypted thumbnails
+        if (img) {
+          var s = img.getAttribute('src') || '';
+          if (s.startsWith('http')) candidates.push(s);
+        }
+
+        return candidates.find(function(u) { return u && u.startsWith('http'); }) || null;
+      }
+
+      document.addEventListener('click', function(e) {
+        var url = extractBestUrl(e.target);
+        if (url) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.flutter_inappwebview.callHandler('onImageTap', url);
+          return false;
+        }
+      }, true);
+    })();
+  ''';
+
+  String _buildGoogleUrl(String query) {
+    final q = Uri.encodeQueryComponent(query.trim().isEmpty ? 'movie poster' : '${query.trim()} movie poster');
+    return 'https://www.google.com/search?q=$q&tbm=isch&hl=en&safe=off';
+  }
+
+  void _showPreview(BuildContext ctx, String url) {
+    showModalBottomSheet(
+      context: ctx,
+      backgroundColor: const Color(0xFF0D1117),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: Colors.white12),
+      ),
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40, height: 4,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+            ),
+            const Row(
+              children: [
+                Icon(Icons.image_search_rounded, color: Colors.cyanAccent, size: 18),
+                SizedBox(width: 8),
+                Text('Image Preview', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: CachedNetworkImage(
+                imageUrl: url,
+                width: double.infinity,
+                height: 230,
+                fit: BoxFit.contain,
+                placeholder: (c, u) => Container(
+                  height: 230,
+                  color: const Color(0xFF161B22),
+                  child: const Center(child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2)),
+                ),
+                errorWidget: (c, u, e) => Container(
+                  height: 230,
+                  color: const Color(0xFF161B22),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.broken_image_rounded, color: Colors.white24, size: 44),
+                        SizedBox(height: 8),
+                        Text('Image failed to load', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                        SizedBox(height: 4),
+                        Text('(You can still import the URL)', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                url,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(sheetCtx),
+                    icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white54),
+                    label: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(sheetCtx);
+                      widget.onImageSelected(url);
+                    },
+                    icon: const Icon(Icons.check_circle_rounded, size: 16),
+                    label: const Text('Use as Poster', style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.cyanAccent,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void didUpdateWidget(_GoogleImagesWebView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.query != widget.query && _wvc != null) {
+      _wvc!.loadUrl(urlRequest: URLRequest(url: WebUri(_buildGoogleUrl(widget.query))));
+      if (mounted) setState(() => _loading = true);
+      _currentQuery = widget.query;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.query.trim().isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.image_search_rounded, color: Colors.white24, size: 52),
+            SizedBox(height: 14),
+            Text('Enter a title above and tap Search\nto browse Google Images',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 13, height: 1.5)),
+          ],
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: InAppWebView(
+            initialUrlRequest: URLRequest(url: WebUri(_buildGoogleUrl(widget.query))),
+            initialSettings: InAppWebViewSettings(
+              javaScriptEnabled: true,
+              userAgent: 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
+              transparentBackground: false,
+              supportZoom: true,
+              builtInZoomControls: false,
+              displayZoomControls: false,
+              useOnLoadResource: false,
+            ),
+            onWebViewCreated: (controller) {
+              _wvc = controller;
+              controller.addJavaScriptHandler(
+                handlerName: 'onImageTap',
+                callback: (args) {
+                  final url = args.isNotEmpty ? args[0].toString() : '';
+                  if (url.isNotEmpty && mounted) {
+                    _showPreview(context, url);
+                  }
+                },
+              );
+            },
+            onLoadStart: (controller, url) {
+              if (mounted) setState(() => _loading = true);
+            },
+            onLoadStop: (controller, url) async {
+              // Inject interceptor JS after page loads
+              await controller.evaluateJavascript(source: _interceptJs);
+              if (mounted) setState(() => _loading = false);
+            },
+            onReceivedError: (controller, request, error) {
+              if (mounted) setState(() => _loading = false);
+            },
+          ),
+        ),
+        if (_loading)
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D1117),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2),
+                  SizedBox(height: 14),
+                  Text('Loading Google Images…',
+                      style: TextStyle(color: Colors.white54, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}

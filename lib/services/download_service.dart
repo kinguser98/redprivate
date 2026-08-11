@@ -207,9 +207,16 @@ class DownloadManager {
   }
 
   Future<DownloadTask?> start(String url, String title,
-      {String poster = '', String originalUrl = '', int? contentId, int? contentType}) async {
+      {String poster = '', String originalUrl = '', int? contentId, dynamic contentType}) async {
     await ensureLoaded();
     if (url.isEmpty) return null;
+
+    int parsedContentType = 1;
+    if (contentType is int) {
+      parsedContentType = contentType;
+    } else if (contentType is String) {
+      parsedContentType = int.tryParse(contentType) ?? 1;
+    }
 
     final orig = originalUrl.isNotEmpty ? originalUrl : url;
 
@@ -232,7 +239,8 @@ class DownloadManager {
         .trim()
         .replaceAll(RegExp(r'\s+'), '_');
     final stamp = DateTime.now().millisecondsSinceEpoch;
-    final filePath = '${folder.path}/${safe.isEmpty ? 'download' : safe}_$stamp.mp4';
+    final ext = '.mp4';
+    final filePath = '${folder.path}/${safe.isEmpty ? 'download' : safe}_$stamp$ext';
 
     final task = DownloadTask(
       id: stamp.toString(),
@@ -243,13 +251,13 @@ class DownloadManager {
       filePath: filePath,
       status: DownloadStatus.queued,
       contentId: contentId,
-      contentType: contentType,
+      contentType: parsedContentType,
     );
     // Log download start event
     try {
       final userId = AppSession.user?.id ?? 0;
       if (userId > 0 && contentId != null && contentId > 0) {
-        ApiService.logDownloadEvent(userId, contentId, contentType ?? 1, 'started');
+        ApiService.logDownloadEvent(userId, contentId, parsedContentType, 'started');
       }
     } catch (_) {}
     tasksNotifier.value = [...tasksNotifier.value, task];
@@ -345,6 +353,10 @@ class DownloadManager {
       task.url = task.url.split('#')[0];
     }
 
+    if (lowerUrl.contains('.m3u8')) {
+      return _downloadHls(task);
+    }
+
     // Direct (non-proxy, non-Streamtape) downloads can use parallel segments for high speed.
     // Streamtape (tapecontent.net) requires single-threaded direct streaming.
     if (!isStreamtape &&
@@ -354,7 +366,7 @@ class DownloadManager {
         final probeClient = http.Client();
         final req = http.Request('GET', Uri.parse(task.url));
         req.headers['Range'] = 'bytes=0-0';
-        _applyHeaders(req);
+        _applyHeaders(req, task: task);
         final res = await probeClient.send(req).timeout(const Duration(seconds: 20));
         if (res.statusCode == 206) {
           int total = 0;
@@ -388,6 +400,215 @@ class DownloadManager {
     }
 
     return result;
+  }
+
+  Future<String> _downloadHls(DownloadTask task) async {
+    final client = http.Client();
+    IOSink? sink;
+    try {
+      final req = http.Request('GET', Uri.parse(task.url));
+      _applyHeaders(req, task: task);
+      final res = await client.send(req).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return 'retry';
+      final bodyText = await res.stream.bytesToString();
+
+      String playlistUrl = task.url;
+      String playlistBody = bodyText;
+
+      // If this is a Master Playlist with #EXT-X-STREAM-INF, select the 720p or top variant playlist
+      if (bodyText.contains('#EXT-X-STREAM-INF')) {
+        final lines = bodyText.split(RegExp(r'\r?\n'));
+        final baseUrl = Uri.parse(task.url);
+        String? selectedVariant;
+
+        for (int i = 0; i < lines.length; i++) {
+          final l = lines[i].trim();
+          if (l.startsWith('#EXT-X-STREAM-INF')) {
+            for (int j = i + 1; j < lines.length; j++) {
+              final vLine = lines[j].trim();
+              if (vLine.isNotEmpty && !vLine.startsWith('#')) {
+                final vUrl = baseUrl.resolve(vLine).toString();
+                if (l.contains('720p') || l.contains('1280x720')) {
+                  selectedVariant = vUrl;
+                  break;
+                }
+                selectedVariant ??= vUrl;
+                break;
+              }
+            }
+            if (selectedVariant != null && selectedVariant.contains('720p')) break;
+          }
+        }
+
+        if (selectedVariant != null) {
+          playlistUrl = selectedVariant;
+          final req2 = http.Request('GET', Uri.parse(playlistUrl));
+          _applyHeaders(req2, task: task);
+          final res2 = await client.send(req2).timeout(const Duration(seconds: 15));
+          if (res2.statusCode != 200) return 'retry';
+          playlistBody = await res2.stream.bytesToString();
+        }
+      }
+
+      final lines = playlistBody.split(RegExp(r'\r?\n'));
+      final baseUrl = Uri.parse(playlistUrl);
+
+      // Extract Fragmented MP4 (fMP4) #EXT-X-MAP initialization fragment header if present
+      String? initMapUrl;
+      final mapMatch = RegExp(r'#EXT-X-MAP:URI=["\x27]?([^"\x27\s]+)["\x27]?', caseSensitive: false).firstMatch(playlistBody);
+      if (mapMatch != null) {
+        final rawMap = mapMatch.group(1)!;
+        initMapUrl = baseUrl.resolve(rawMap).toString();
+      }
+
+      final List<String> tsUrls = [];
+      for (final rawLine in lines) {
+        final line = rawLine.trim();
+        if (line.isNotEmpty && !line.startsWith('#')) {
+          if (line.startsWith('http://') || line.startsWith('https://')) {
+            tsUrls.add(line);
+          } else {
+            final resolvedTs = baseUrl.resolve(line).toString();
+            tsUrls.add(resolvedTs);
+          }
+        }
+      }
+
+      if (tsUrls.isEmpty) return 'retry';
+
+      final file = File(task.filePath);
+      sink = file.openWrite(mode: FileMode.append);
+      _sinks[task.id] = sink;
+      _clients[task.id] = client;
+
+      task.startedAt ??= DateTime.now();
+
+      // Download #EXT-X-MAP initialization fragment (contains ftyp + moov boxes for fMP4)
+      if (initMapUrl != null && initMapUrl.isNotEmpty) {
+        try {
+          final initReq = http.Request('GET', Uri.parse(initMapUrl));
+          _applyHeaders(initReq, task: task);
+          final initRes = await client.send(initReq).timeout(const Duration(seconds: 15));
+          if (initRes.statusCode == 200) {
+            await for (final chunk in initRes.stream) {
+              if (task.status != DownloadStatus.downloading) break;
+              task.downloaded += chunk.length;
+              sink.add(chunk);
+            }
+            await sink.flush();
+          }
+        } catch (e) {
+          debugPrint("HLS init map header error: $e");
+        }
+      }
+
+      // Probe first segment using a separate temporary client to avoid corrupting main client connection pool
+      if (task.total == 0 && tsUrls.isNotEmpty) {
+        try {
+          final probeClient = http.Client();
+          final probeReq = http.Request('GET', Uri.parse(tsUrls[0]));
+          probeReq.headers['Range'] = 'bytes=0-0';
+          _applyHeaders(probeReq, task: task);
+          final probeRes = await probeClient.send(probeReq).timeout(const Duration(seconds: 6));
+          int firstSegLen = 0;
+          final cr = probeRes.headers['content-range'];
+          if (cr != null && cr.contains('/')) {
+            firstSegLen = int.tryParse(cr.split('/').last.trim()) ?? 0;
+          } else if (probeRes.contentLength != null && probeRes.contentLength! > 1) {
+            firstSegLen = probeRes.contentLength!;
+          }
+          probeRes.stream.listen((_) {}).cancel();
+          probeClient.close();
+          if (firstSegLen > 1000) {
+            task.total = firstSegLen * tsUrls.length;
+            _notify();
+          }
+        } catch (_) {}
+      }
+
+      int successCount = 0;
+      for (int i = 0; i < tsUrls.length; i++) {
+        if (task.status != DownloadStatus.downloading) {
+          await sink.flush();
+          await sink.close();
+          return 'paused';
+        }
+
+        final tsUrl = tsUrls[i];
+        
+        // Retry each segment up to 3 times
+        http.StreamedResponse? resTs;
+        for (int attempt = 0; attempt < 3; attempt++) {
+          try {
+            final reqRetry = http.Request('GET', Uri.parse(tsUrl));
+            _applyHeaders(reqRetry, task: task);
+            final res = await client.send(reqRetry).timeout(const Duration(seconds: 20));
+            if (res.statusCode == 200 || res.statusCode == 206) {
+              resTs = res;
+              break;
+            }
+          } catch (_) {
+            await Future.delayed(const Duration(milliseconds: 400));
+          }
+        }
+
+        if (resTs == null) {
+          debugPrint("Failed to download TS segment $i: $tsUrl");
+          if (i == 0 && successCount == 0) {
+            await sink.flush();
+            await sink.close();
+            client.close();
+            return 'retry';
+          }
+          continue;
+        }
+
+        int segLen = 0;
+        await for (final chunk in resTs.stream) {
+          if (task.status != DownloadStatus.downloading) break;
+          task.downloaded += chunk.length;
+          segLen += chunk.length;
+          sink.add(chunk);
+          _updateMetrics(task, chunk.length);
+          _notifyThrottled();
+        }
+        await sink.flush();
+        successCount++;
+
+        // Dynamically refine task.total based on running average segment size
+        if (segLen > 0 && i < tsUrls.length - 1) {
+          final avgSeg = task.downloaded ~/ successCount;
+          task.total = avgSeg * tsUrls.length;
+        }
+      }
+
+      await sink.flush();
+      await sink.close();
+      client.close();
+
+      if (task.downloaded == 0 || successCount == 0) {
+        task.status = DownloadStatus.error;
+        task.error = 'No data downloaded';
+        _notify();
+        _cleanup(task.id);
+        _persist();
+        return 'retry';
+      }
+
+      if (task.status == DownloadStatus.downloading) {
+        task.status = DownloadStatus.completed;
+        task.total = task.downloaded;
+      }
+      _notify();
+      _cleanup(task.id);
+      _persist();
+      return 'completed';
+    } catch (e) {
+      debugPrint("HLS download error: $e");
+      try { await sink?.close(); } catch (_) {}
+      client.close();
+      return 'retry';
+    }
   }
 
   Future<String> _downloadSegments(DownloadTask task, int total) async {
@@ -450,7 +671,7 @@ class DownloadManager {
       final client = http.Client();
       final req = http.Request('GET', Uri.parse(task.url));
       req.headers['Range'] = 'bytes=$from-$end';
-      _applyHeaders(req);
+      _applyHeaders(req, task: task);
       final res = await client.send(req).timeout(const Duration(seconds: 30));
       if (res.statusCode != 200 && res.statusCode != 206) {
         client.close();
@@ -476,11 +697,32 @@ class DownloadManager {
     }
   }
 
-  void _applyHeaders(http.Request request) {
+  void _applyHeaders(http.Request request, {DownloadTask? task}) {
     request.headers['User-Agent'] =
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
-    request.headers['Referer'] = 'https://streamtape.com/';
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    
+    final lowerReq = request.url.toString().toLowerCase();
+    final lowerTask = task != null ? '${task.url} ${task.originalUrl}'.toLowerCase() : '';
+    final combined = '$lowerReq $lowerTask';
+
+    if (combined.contains('uncutmasti') || combined.contains('ixifile')) {
+      request.headers['Referer'] = 'https://uncutmasti.com/';
+    } else if (combined.contains('hdmaal') || combined.contains('skymovies')) {
+      request.headers['Referer'] = 'https://hdmaal.gg/';
+    } else if (combined.contains('luluvdo') || combined.contains('lulustream') || combined.contains('tnmr') || combined.contains('lulucdn')) {
+      request.headers['Referer'] = 'https://lulucdn.com/';
+      request.headers['Origin'] = 'https://lulucdn.com';
+    } else if (combined.contains('xhamster') || combined.contains('xhvid') || combined.contains('xh.video') || combined.contains('xhcdn') || combined.contains('xhpingcdn') || combined.contains('xhamster46')) {
+      request.headers['Referer'] = 'https://xhamster.com/';
+      request.headers['Origin'] = 'https://xhamster.com';
+    } else if (combined.contains('fpo')) {
+      request.headers['Referer'] = 'https://www.fpo.xxx/';
+      request.headers['Origin'] = 'https://www.fpo.xxx';
+    } else {
+      request.headers['Referer'] = 'https://streamtape.com/';
+    }
     request.headers['Accept'] = '*/*';
+    request.headers['Connection'] = 'keep-alive';
   }
 
   Future<String> _downloadSingle(DownloadTask task) async {
@@ -503,10 +745,7 @@ class DownloadManager {
         final cleanUrl = task.url.split('#')[0];
         final request = http.Request('GET', Uri.parse(cleanUrl));
         request.headers['Range'] = 'bytes=$rangeStart-$rangeEnd';
-        request.headers['User-Agent'] =
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
-        request.headers['Referer'] = 'https://streamtape.com/';
-        request.headers['Accept'] = '*/*';
+        _applyHeaders(request, task: task);
 
         final streamed =
             await client.send(request).timeout(const Duration(seconds: 25));

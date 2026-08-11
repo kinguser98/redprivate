@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/streamtape_service.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
+import '../services/hls_quality_parser.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -19,6 +20,8 @@ class VideoPlayerScreen extends StatefulWidget {
     this.resumeDirectly = false,
     this.contentId,
     this.contentType,
+    this.qualities,
+    this.initialQuality,
   });
 
   final String videoUrl;
@@ -27,6 +30,8 @@ class VideoPlayerScreen extends StatefulWidget {
   final bool resumeDirectly;
   final int? contentId;
   final int? contentType;
+  final Map<String, String>? qualities;
+  final String? initialQuality;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -76,9 +81,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Timer? _hideControlsTimer;
   double _playbackSpeed = 1.0;
 
+  // Multi-Quality Stream Support
+  Map<String, String>? _qualities;
+  String? _activeQuality;
+  String _currentVideoUrl = '';
+
   @override
   void initState() {
     super.initState();
+    _currentVideoUrl = widget.videoUrl;
+    _qualities = widget.qualities;
+    if (_qualities == null || _qualities!.isEmpty) {
+      if (widget.videoUrl.contains('.m3u8')) {
+        HlsQualityParser.parseQualities(widget.videoUrl).then((hlsQ) {
+          if (mounted && hlsQ.isNotEmpty) {
+            setState(() {
+              _qualities = hlsQ;
+              _activeQuality = hlsQ.keys.first;
+            });
+          }
+        });
+      }
+    }
+    _activeQuality = widget.initialQuality ?? (_qualities != null && _qualities!.isNotEmpty ? _qualities!.keys.first : 'HD');
 
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -122,7 +147,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _open() async {
     try {
-      String playUrl = widget.videoUrl;
+      String playUrl = _currentVideoUrl.isNotEmpty ? _currentVideoUrl : widget.videoUrl;
 
       // 1. If playUrl is an un-resolved Streamtape web page, resolve it first!
       if (StreamtapeService.isStreamtapeFamily(playUrl) &&
@@ -145,20 +170,42 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
 
       String referer = 'https://streamtape.com/';
+      String? origin;
       if (playUrl.contains('ixifile') || playUrl.contains('uncutmasti')) {
         referer = 'https://uncutmasti.com/';
+      } else if (playUrl.contains('tnmr.org') || playUrl.contains('luluvdo') || playUrl.contains('lulustream') || playUrl.contains('lulucdn')) {
+        referer = 'https://lulucdn.com/';
+        origin = 'https://lulucdn.com';
+      } else if (playUrl.contains('xhamster') || playUrl.contains('xhvid') || playUrl.contains('xh.video') || playUrl.contains('xhcdn')) {
+        referer = 'https://xhamster.com/';
+        origin = 'https://xhamster.com';
       }
 
       final Map<String, String> playHeaders = {
         'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': referer,
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+        'Accept-Encoding': 'gzip, deflate, br',
       };
+      if (origin != null) {
+        playHeaders['Origin'] = origin;
+      }
 
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(playUrl),
-        httpHeaders: playHeaders,
-      );
+      final isLocal = File(playUrl).existsSync() ||
+          playUrl.startsWith('/') ||
+          playUrl.startsWith('file://');
+
+      if (isLocal) {
+        final cleanPath = playUrl.startsWith('file://') ? playUrl.substring(7) : playUrl;
+        _controller = VideoPlayerController.file(File(cleanPath));
+      } else {
+        _controller = VideoPlayerController.networkUrl(
+          Uri.parse(playUrl),
+          httpHeaders: playHeaders,
+        );
+      }
 
       _controller!.addListener(_onControllerUpdated);
       await _controller!.initialize();
@@ -209,6 +256,171 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       _duration = value.duration;
       _playing = value.isPlaying;
       _buffering = value.isBuffering;
+    });
+  }
+
+  void _showQualityDialog() {
+    final qMap = _qualities ?? widget.qualities;
+    if (qMap == null || qMap.isEmpty) return;
+    _armHideControls();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Center(
+          child: Material(
+            color: Colors.transparent,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  width: 310,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161A26).withOpacity(0.94),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white12, width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.6),
+                        blurRadius: 24,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.hd_rounded, color: Colors.amberAccent, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                "Video Quality",
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.of(ctx).pop(),
+                            child: const Icon(Icons.close_rounded, color: Colors.white60, size: 20),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      const Divider(color: Colors.white12, height: 1),
+                      const SizedBox(height: 8),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: qMap.entries.map((e) {
+                              final qLabel = e.key;
+                              final qUrl = e.value;
+                              final isSelected = qLabel == _activeQuality;
+
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: isSelected ? const Color(0xFF2E2614) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: isSelected ? Border.all(color: Colors.amberAccent, width: 1) : null,
+                                ),
+                                child: ListTile(
+                                  dense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                  leading: Icon(
+                                    isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                                    color: isSelected ? Colors.amberAccent : Colors.white38,
+                                    size: 18,
+                                  ),
+                                  title: Text(
+                                    qLabel,
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.amberAccent : Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                    ),
+                                  ),
+                                  onTap: () async {
+                                    Navigator.of(ctx).pop();
+                                    if (!isSelected) {
+                                      await _switchQuality(qLabel, qUrl);
+                                    }
+                                  },
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _switchQuality(String qLabel, String qUrl) async {
+    final currentPos = _controller?.value.position ?? Duration.zero;
+    setState(() {
+      _activeQuality = qLabel;
+      _currentVideoUrl = qUrl;
+      _buffering = true;
+    });
+
+    _controller?.removeListener(_onControllerUpdated);
+    await _controller?.dispose();
+
+    String referer = 'https://streamtape.com/';
+    String? origin;
+    if (qUrl.contains('ixifile') || qUrl.contains('uncutmasti')) {
+      referer = 'https://uncutmasti.com/';
+    } else if (qUrl.contains('tnmr.org') || qUrl.contains('luluvdo') || qUrl.contains('lulustream') || qUrl.contains('lulucdn')) {
+      referer = 'https://lulucdn.com/';
+      origin = 'https://lulucdn.com';
+    } else if (qUrl.contains('xhamster') || qUrl.contains('xhvid') || qUrl.contains('xh.video') || qUrl.contains('xhcdn')) {
+      referer = 'https://xhamster.com/';
+      origin = 'https://xhamster.com';
+    }
+
+    final Map<String, String> playHeaders = {
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': referer,
+      'Accept': '*/*',
+      'Connection': 'keep-alive',
+      'Accept-Encoding': 'gzip, deflate, br',
+    };
+    if (origin != null) {
+      playHeaders['Origin'] = origin;
+    }
+
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(qUrl),
+      httpHeaders: playHeaders,
+    );
+
+    await _controller!.initialize();
+    await _controller!.seekTo(currentPos);
+    _controller!.addListener(_onControllerUpdated);
+    _controller!.play();
+
+    setState(() {
+      _buffering = false;
+      _ready = true;
     });
   }
 
@@ -819,6 +1031,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           });
                         },
                       ),
+
+                      // Quality Selector Button
+                      if (_qualities != null && _qualities!.isNotEmpty)
+                        _buildTopBarIcon(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.hd_rounded, color: Colors.amberAccent, size: 18),
+                              const SizedBox(width: 4),
+                              Text(
+                                _activeQuality ?? '720p',
+                                style: const TextStyle(
+                                  color: Colors.amberAccent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          _showQualityDialog,
+                        ),
 
                       // Speed Toggle Button
                       _buildTopBarIcon(

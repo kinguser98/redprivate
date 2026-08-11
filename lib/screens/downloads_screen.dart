@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,22 +24,35 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   Future<void> _saveToDownloads(DownloadTask task) async {
-    if (!File(task.filePath).existsSync()) {
+    final file = File(task.filePath);
+    if (!file.existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Download file missing on device.")),
       );
       return;
     }
     setState(() => _saving = true);
-    final name = '${task.title}.mp4'
-        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final ok = await MediaStoreSaver.saveToDownloads(task.filePath, name);
+
+    bool isTs = false;
+    try {
+      final raf = await file.open(mode: FileMode.read);
+      final header = await raf.read(16);
+      await raf.close();
+      if (header.isNotEmpty && header[0] == 0x47) {
+        isTs = true;
+      }
+    } catch (_) {}
+
+    final ext = isTs ? '.ts' : '.mp4';
+    final mime = isTs ? 'video/mp2t' : 'video/mp4';
+    final name = '${task.title}$ext'.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    final ok = await MediaStoreSaver.saveToDownloads(task.filePath, name, mime: mime);
     if (!mounted) return;
     setState(() => _saving = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(ok
-            ? "Saved to your Downloads folder"
+            ? "Saved to your Downloads folder ($ext)"
             : "Could not save. Try granting storage permission in Settings."),
         backgroundColor: ok ? Colors.green : Colors.red,
       ),
@@ -318,7 +331,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   String _statusLabel(DownloadTask task) {
     switch (task.status) {
       case DownloadStatus.completed:
-        return 'Completed  |  ${_formatBytes(task.total)}';
+        final size = task.total > 0 ? task.total : task.downloaded;
+        return 'Completed  |  ${_formatBytes(size)}';
       case DownloadStatus.downloading:
         return 'Downloading...';
       case DownloadStatus.paused:

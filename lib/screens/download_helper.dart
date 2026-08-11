@@ -8,6 +8,9 @@ import '../services/api_service.dart';
 import '../services/download_service.dart';
 import '../services/streamtape_service.dart';
 import '../services/embed_resolver.dart';
+import '../services/luluvdo_resolver.dart';
+import '../services/xhamster_resolver.dart';
+import '../services/hls_quality_parser.dart';
 import '../widgets/resolving_dialog.dart';
 import 'downloads_screen.dart';
 import 'subscription_vip_screen.dart';
@@ -86,9 +89,7 @@ bool _isStreamtapeLike(String u) {
       l.contains('koyeb');
 }
 
-
-
-// Resolves Streamtape links on the phone IP so tickets match the device IP
+// Resolves Streamtape & Luluvdo links on the phone IP so tickets match the device IP
 Future<void> _startDownload(BuildContext context, String rawUrl, String title,
     {String poster = '', int? contentId, int? contentType}) async {
   if (rawUrl.isEmpty) {
@@ -114,8 +115,24 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
   debugPrint("[DL] Resolving dialog shown");
 
   String url = rawUrl;
+  Map<String, String>? availableQualities;
+
   try {
-    if (_isStreamtapeLike(rawUrl) || StreamtapeService.isStreamtapeFamily(rawUrl)) {
+    final lowerRaw = rawUrl.toLowerCase();
+    if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
+      final res = await XHamsterResolver.resolveQualities(rawUrl, forceRefresh: true);
+      if (res != null && res.defaultUrl.isNotEmpty) {
+        url = res.defaultUrl;
+        availableQualities = res.qualities;
+      }
+    } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn') || lowerRaw.contains('tnmr')) {
+      final resolved = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
+      if (resolved != null && resolved.isNotEmpty) {
+        url = resolved;
+      }
+    } else if (_isStreamtapeLike(rawUrl) ||
+        StreamtapeService.isStreamtapeFamily(rawUrl) ||
+        lowerRaw.contains('uplinks')) {
       String? resolved = await StreamtapeService.getDirectStreamUrl(rawUrl);
       if ((resolved == null || resolved.isEmpty || !resolved.startsWith('http')) && context.mounted) {
         resolved = await EmbedResolver.resolve(context, rawUrl);
@@ -139,7 +156,139 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
     return;
   }
 
-  final task = await DownloadManager.instance.start(url, title, poster: poster, originalUrl: rawUrl, contentId: contentId, contentType: contentType);
+  // Parse HLS master playlist if availableQualities is empty
+  if (availableQualities == null || availableQualities.isEmpty) {
+    if (url.contains('.m3u8')) {
+      availableQualities = await HlsQualityParser.parseQualities(url);
+    }
+  }
+
+  // Show Download Quality Selection Popup:
+  // - For xHamster: always show if at least 1 quality available (user wants to see/confirm)
+  // - For others: only show if multiple qualities extracted
+  final isXHamster = XHamsterResolver.isXHamsterUrl(rawUrl);
+  String? chosenUrl = url;
+  if (availableQualities != null && availableQualities.isNotEmpty &&
+      (availableQualities.length > 1 || isXHamster) && context.mounted) {
+    chosenUrl = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return Center(
+          child: Material(
+            color: Colors.transparent,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  width: 310,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161A26).withOpacity(0.95),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white12, width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.6),
+                        blurRadius: 24,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.download_for_offline_rounded, color: Colors.cyanAccent, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                "Download Quality",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.of(ctx).pop(null),
+                            child: const Icon(Icons.close_rounded, color: Colors.white60, size: 20),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        title,
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 10),
+                      const Divider(color: Colors.white12, height: 1),
+                      const SizedBox(height: 8),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: availableQualities!.entries.map((e) {
+                              final qLabel = e.key;
+                              final qUrl = e.value;
+                              final isDefault = qLabel.contains('720p') || qLabel.contains('HD');
+
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: isDefault ? const Color(0xFF231F10) : const Color(0xFF0F121C),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isDefault ? Colors.amberAccent : Colors.white10,
+                                  ),
+                                ),
+                                child: ListTile(
+                                  dense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                  leading: Icon(
+                                    isDefault ? Icons.star_rounded : Icons.file_download_outlined,
+                                    color: isDefault ? Colors.amberAccent : Colors.cyanAccent,
+                                    size: 18,
+                                  ),
+                                  title: Text(
+                                    qLabel,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: isDefault ? FontWeight.bold : FontWeight.normal,
+                                    ),
+                                  ),
+                                  trailing: const Icon(Icons.download_rounded, color: Colors.white70, size: 16),
+                                  onTap: () => Navigator.of(ctx).pop(qUrl),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  if (chosenUrl == null || chosenUrl.isEmpty) {
+    return;
+  }
+
+  final task = await DownloadManager.instance.start(chosenUrl, title, poster: poster, originalUrl: rawUrl, contentId: contentId, contentType: contentType);
   if (!context.mounted) return;
   if (task == null) {
     ScaffoldMessenger.of(context).showSnackBar(

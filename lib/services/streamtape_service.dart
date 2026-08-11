@@ -157,6 +157,9 @@ class StreamtapeService {
 
   static bool _isDirectMedia(String url) {
     final lower = url.toLowerCase();
+    if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('uplinks')) {
+      return false;
+    }
     if (isStreamtapeFamily(url) && !lower.contains('/radosgw/') && !lower.endsWith('.mp4')) {
       return false;
     }
@@ -169,6 +172,8 @@ class StreamtapeService {
         lower.contains('.m3u8') ||
         lower.contains('/hls/') ||
         lower.contains('/radosgw/') ||
+        lower.contains('fpo_stream.php') ||
+        lower.contains('fpo') ||
         lower.contains('vercel.app') ||
         lower.contains('archive.org') ||
         lower.contains('koyeb.app');
@@ -176,6 +181,13 @@ class StreamtapeService {
 
   static Future<String?> getDirectStreamUrl(String streamtapeUrl, {bool forceRefresh = false}) async {
     if (streamtapeUrl.isEmpty) return null;
+
+    final lower = streamtapeUrl.toLowerCase();
+    if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('lulucdn')) {
+      // Luluvdo tokens are IP-bound to the requesting device.
+      // Returning null delegates to EmbedResolver to generate phone-authenticated streams on device.
+      return null;
+    }
 
     if (_isDirectMedia(streamtapeUrl)) {
       _urlCache[streamtapeUrl] = streamtapeUrl;

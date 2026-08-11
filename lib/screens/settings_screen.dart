@@ -91,60 +91,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
               ),
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(4, (index) {
-                    final hasDigit = index < enteredPin.length;
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 10),
-                      width: 16,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: hasDigit ? AppColors.accent : Colors.white24,
-                        border: Border.all(color: Colors.white30, width: 1),
-                      ),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 30),
-                checking
-                    ? const SizedBox(
-                        height: 200,
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    : SizedBox(
-                        width: 240,
-                        child: GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            childAspectRatio: 1.2,
-                            mainAxisSpacing: 10,
-                            crossAxisSpacing: 10,
-                          ),
-                          itemCount: 12,
-                          itemBuilder: (context, index) {
-                            if (index < 9) {
-                              final digit = "${index + 1}";
-                              return _buildDialButton(digit, () => handleKey(digit));
-                            }
-                            if (index == 9) {
-                              return _buildDialButton("⌫", handleBackspace, isIcon: true);
-                            }
-                            if (index == 10) {
-                              return _buildDialButton("0", () => handleKey("0"));
-                            }
-                            return _buildDialButton("✔", submit, isIcon: true, isAction: true);
-                          },
+            contentPadding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
+            content: SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(4, (index) {
+                      final hasDigit = index < enteredPin.length;
+                      return Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 10),
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: hasDigit ? AppColors.accent : Colors.white24,
+                          border: Border.all(color: Colors.white30, width: 1),
                         ),
-                      ),
-              ],
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 30),
+                  checking
+                      ? const SizedBox(
+                          height: 200,
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildDialRow([
+                              _buildDialButton("1", () => handleKey("1")),
+                              _buildDialButton("2", () => handleKey("2")),
+                              _buildDialButton("3", () => handleKey("3")),
+                            ]),
+                            _buildDialRow([
+                              _buildDialButton("4", () => handleKey("4")),
+                              _buildDialButton("5", () => handleKey("5")),
+                              _buildDialButton("6", () => handleKey("6")),
+                            ]),
+                            _buildDialRow([
+                              _buildDialButton("7", () => handleKey("7")),
+                              _buildDialButton("8", () => handleKey("8")),
+                              _buildDialButton("9", () => handleKey("9")),
+                            ]),
+                            _buildDialRow([
+                              _buildDialButton("⌫", handleBackspace, isIcon: true),
+                              _buildDialButton("0", () => handleKey("0")),
+                              _buildDialButton("✔", submit, isIcon: true, isAction: true),
+                            ]),
+                          ],
+                        ),
+                ],
+              ),
             ),
             actions: [
               Center(
@@ -161,33 +163,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildDialButton(String text, VoidCallback onPressed, {bool isIcon = false, bool isAction = false}) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(15),
-      child: Container(
-        decoration: BoxDecoration(
-          color: isAction ? AppColors.accent.withOpacity(0.15) : const Color(0xFF2C2C3C),
+    return Container(
+      decoration: BoxDecoration(
+        color: isAction ? AppColors.accent.withOpacity(0.15) : const Color(0xFF2C2C3C),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: isAction ? AppColors.accent.withOpacity(0.4) : Colors.white10),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(15),
+        child: InkWell(
+          onTap: onPressed,
           borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: isAction ? AppColors.accent.withOpacity(0.4) : Colors.white10),
+          child: Center(
+            child: isIcon
+                ? Text(
+                    text,
+                    style: TextStyle(
+                      color: isAction ? Colors.greenAccent : Colors.white70,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  )
+                : Text(
+                    text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+          ),
         ),
-        alignment: Alignment.center,
-        child: isIcon
-            ? Text(
-                text,
-                style: TextStyle(
-                  color: isAction ? Colors.greenAccent : Colors.white70,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              )
-            : Text(
-                text,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+      ),
+    );
+  }
+
+  Widget _buildDialRow(List<Widget> buttons) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          for (var i = 0; i < buttons.length; i++) ...[
+            if (i > 0) const SizedBox(width: 10),
+            Expanded(child: SizedBox(height: 55, child: buttons[i])),
+          ],
+        ],
       ),
     );
   }

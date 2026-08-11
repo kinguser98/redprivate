@@ -1,0 +1,11 @@
+<?php
+// config.local.php — OPTIONAL manual DB credentials override.
+// Copy this file to config.local.php and fill in the real values ONLY IF the
+// auto-detection in config.php does not find the Dooo admin panel credentials.
+// You can find these in your hosting control panel (cPanel → MySQL Databases)
+// or in the Dooo Admin Panel at: application/config/database.php
+$db_host = "localhost";
+$db_user = "YOUR_DB_USER";
+$db_pass = "YOUR_DB_PASSWORD";
+$db_name = "YOUR_DB_NAME";
+?>

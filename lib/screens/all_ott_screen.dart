@@ -82,6 +82,7 @@ class _AllOttScreenState extends State<AllOttScreen> {
                     final item = _list[index];
                     final name = item['name']?.toString() ?? '';
                     final iconUrl = item['icon']?.toString() ?? '';
+
                     return GestureDetector(
                       onTap: () => _openOtt(context, item),
                       child: Column(

@@ -198,17 +198,31 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final playCallback = () {
       if (_isMovie) {
         if (_playLinks.isNotEmpty) {
-          _playVideo(_playLinks.first.url, _movieDetails?.name ?? 'Movie');
+          playVideoWithServerSelection(
+            context,
+            _playLinks.map((l) => {'name': l.name, 'url': l.url, 'quality': l.quality}).toList(),
+            _movieDetails?.name ?? 'Movie',
+            premium: _isPremium,
+            contentId: widget.contentId,
+            contentType: 1,
+            defaultFallbackUrl: _playLinks.first.url,
+          );
         } else {
           _playVideo(_movieDetails?.poster ?? '', _movieDetails?.name ?? 'Movie');
         }
       } else {
         if (_seasons.isNotEmpty && _seasons.first.episodes.isNotEmpty) {
           final firstEp = _seasons.first.episodes.first;
-          final url = firstEp.playLinks.isNotEmpty
-              ? firstEp.playLinks.first.url
-              : '';
-          if (url.isNotEmpty) _playVideo(url, firstEp.name);
+          final epLinks = firstEp.playLinks.map((l) => {'name': l.name, 'url': l.url, 'quality': l.quality}).toList();
+          playVideoWithServerSelection(
+            context,
+            epLinks,
+            firstEp.name,
+            premium: _isPremium,
+            contentId: widget.contentId,
+            contentType: 2,
+            defaultFallbackUrl: firstEp.playLinks.isNotEmpty ? firstEp.playLinks.first.url : '',
+          );
         }
       }
     };
