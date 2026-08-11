@@ -31,6 +31,12 @@ jobs:
       - name: Generate app icons
         run: dart run flutter_launcher_icons
 
+      - name: Disable code signing in Xcode project
+        run: |
+          xcodebuild -project ios/Runner.xcodeproj -scheme Runner -configuration Release \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign
 
