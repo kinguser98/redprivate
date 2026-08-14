@@ -6,13 +6,15 @@ import '../services/streamtape_service.dart';
 import '../services/embed_resolver.dart';
 import '../services/luluvdo_resolver.dart';
 import '../services/xhamster_resolver.dart';
+import '../services/eporner_resolver.dart';
+import '../services/tnaflix_resolver.dart';
 import '../widgets/resolving_dialog.dart';
 import 'subscription_vip_screen.dart';
 import 'video_player_screen.dart';
 
 Future<void> playVideo(
     BuildContext context, String rawUrl, String title,
-    {bool premium = false, int? contentId, int? contentType}) async {
+    {bool premium = false, int? contentId, int? contentType, Map<String, String>? qualities, String? initialQuality, Map<String, String>? headers}) async {
   // Refresh VIP status from the server so admin grants / coupon redemptions take effect
   final uid = AppSession.user?.id ?? 0;
   if (uid > 0) {
@@ -53,7 +55,13 @@ Future<void> playVideo(
     Map<String, String>? streamQualities;
     String? currentQuality;
 
-    if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
+    if (qualities != null && qualities.isNotEmpty) {
+      finalUrl = rawUrl;
+      streamQualities = qualities;
+      currentQuality = initialQuality;
+    } else if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8') || lowerRaw.contains('rdtcdn') || lowerRaw.contains('sb-cdn') || lowerRaw.contains('spankbang')) {
+      finalUrl = rawUrl;
+    } else if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
       final res = await XHamsterResolver.resolveQualities(rawUrl, forceRefresh: true);
       if (res != null && res.defaultUrl.isNotEmpty) {
         finalUrl = res.defaultUrl;
@@ -61,6 +69,34 @@ Future<void> playVideo(
         currentQuality = res.defaultQuality;
       } else if (context.mounted) {
         finalUrl = await EmbedResolver.resolve(context, rawUrl);
+      }
+    } else if (EpornerResolver.isEpornerUrl(rawUrl)) {
+      if (EpornerResolver.isEpornerMediaUrl(rawUrl)) {
+        // Already a resolved (client-IP-bound) CDN link — play it directly.
+        finalUrl = rawUrl;
+      } else {
+        final res = await EpornerResolver.resolveQualities(rawUrl, forceRefresh: true);
+        if (res != null && res.defaultUrl.isNotEmpty) {
+          finalUrl = res.defaultUrl;
+          streamQualities = res.qualities;
+          currentQuality = res.defaultQuality;
+        } else if (context.mounted) {
+          finalUrl = await EmbedResolver.resolve(context, rawUrl);
+        }
+      }
+    } else if (TnaflixResolver.isTnaflixUrl(rawUrl)) {
+      if (TnaflixResolver.isTnaflixMediaUrl(rawUrl)) {
+        // Already a playable signed CDN URL — play it directly.
+        finalUrl = rawUrl;
+      } else {
+        final res = await TnaflixResolver.resolveQualities(rawUrl, forceRefresh: true);
+        if (res != null && res.defaultUrl.isNotEmpty) {
+          finalUrl = res.defaultUrl;
+          streamQualities = res.qualities;
+          currentQuality = res.defaultQuality;
+        } else if (context.mounted) {
+          finalUrl = await EmbedResolver.resolve(context, rawUrl);
+        }
       }
     } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
       finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
@@ -101,8 +137,9 @@ Future<void> playVideo(
           videoTitle: title,
           contentId: contentId,
           contentType: contentType,
-          qualities: streamQualities,
-          initialQuality: currentQuality,
+          qualities: qualities ?? streamQualities,
+          initialQuality: initialQuality ?? currentQuality,
+          headers: headers,
         ),
       ),
     );

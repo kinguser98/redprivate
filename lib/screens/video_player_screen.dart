@@ -22,6 +22,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.contentType,
     this.qualities,
     this.initialQuality,
+    this.headers,
   });
 
   final String videoUrl;
@@ -32,6 +33,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final int? contentType;
   final Map<String, String>? qualities;
   final String? initialQuality;
+  final Map<String, String>? headers;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -191,6 +193,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       };
       if (origin != null) {
         playHeaders['Origin'] = origin;
+      }
+      if (widget.headers != null && widget.headers!.isNotEmpty) {
+        playHeaders.addAll(widget.headers!);
       }
 
       final isLocal = File(playUrl).existsSync() ||
@@ -406,6 +411,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     };
     if (origin != null) {
       playHeaders['Origin'] = origin;
+    }
+    if (widget.headers != null && widget.headers!.isNotEmpty) {
+      playHeaders.addAll(widget.headers!);
     }
 
     _controller = VideoPlayerController.networkUrl(

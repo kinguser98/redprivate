@@ -591,6 +591,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return;
       }
 
+      // Update newContent['id'] with the REAL auto-increment ID returned by server
+      final realId = res['data']?['id'] ?? res['data']?['content_id'];
+      if (realId != null) {
+        final parsedId = int.tryParse(realId.toString());
+        if (parsedId != null && parsedId > 0) {
+          newContent['id'] = parsedId;
+        }
+      }
+
       // Instantly add to local catalog list and switch to catalog view!
       setState(() {
         if (_addType == 'movie') {

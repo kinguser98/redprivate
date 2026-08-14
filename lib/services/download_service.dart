@@ -25,6 +25,9 @@ class DownloadTask {
   final int? contentId;
   final int? contentType;
 
+  // Runtime custom HTTP headers (e.g. resolver-provided Referer/Origin). Not persisted.
+  final Map<String, String>? headers;
+
   // Runtime metrics (not persisted)
   DateTime? startedAt;
   Duration elapsedBefore = Duration.zero;
@@ -58,6 +61,7 @@ class DownloadTask {
     this.error,
     this.contentId,
     this.contentType,
+    this.headers,
   }) {
     if (originalUrl.isEmpty) originalUrl = url;
   }
@@ -207,7 +211,7 @@ class DownloadManager {
   }
 
   Future<DownloadTask?> start(String url, String title,
-      {String poster = '', String originalUrl = '', int? contentId, dynamic contentType}) async {
+      {String poster = '', String originalUrl = '', int? contentId, dynamic contentType, Map<String, String>? headers}) async {
     await ensureLoaded();
     if (url.isEmpty) return null;
 
@@ -252,6 +256,7 @@ class DownloadManager {
       status: DownloadStatus.queued,
       contentId: contentId,
       contentType: parsedContentType,
+      headers: headers,
     );
     // Log download start event
     try {
@@ -720,6 +725,9 @@ class DownloadManager {
       request.headers['Origin'] = 'https://www.fpo.xxx';
     } else {
       request.headers['Referer'] = 'https://streamtape.com/';
+    }
+    if (task?.headers != null && task!.headers!.isNotEmpty) {
+      request.headers.addAll(task!.headers!);
     }
     request.headers['Accept'] = '*/*';
     request.headers['Connection'] = 'keep-alive';

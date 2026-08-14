@@ -6,8 +6,13 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/download_service.dart';
 import '../services/scraper_service.dart';
 import '../services/xhamster_resolver.dart';
+import '../services/eporner_resolver.dart';
+import '../services/tnaflix_resolver.dart';
+import '../services/redtube_resolver.dart';
+import '../services/spankbang_resolver.dart';
 import '../widgets/resolving_dialog.dart';
 import 'downloads_screen.dart';
+import 'live_cams_screen.dart';
 import 'video_launcher.dart';
 
 class ForeignTripScreen extends StatefulWidget {
@@ -26,6 +31,9 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
   int _currentPage = 1;
   String _searchQuery = '';
   final TextEditingController _searchCtrl = TextEditingController();
+
+  List<ScraperCategory> _categories = [];
+  String _selectedCategory = '';
 
   @override
   void initState() {
@@ -50,7 +58,37 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
         }
       });
     }
+    await _loadCategories();
     await _fetchGrid();
+  }
+
+  Future<void> _loadCategories() async {
+    if (_selectedSource == null) return;
+    final id = _selectedSource!.id;
+    if (id == 'cambaddies') return;
+    List<ScraperCategory> cats;
+    if (id == 'redtube') {
+      cats = RedtubeResolver.categories;
+    } else if (id == 'spankbang') {
+      cats = SpankbangResolver.categories;
+    } else if (id == 'eporner' || id == 'tnaflix') {
+      cats = await ScraperService.fetchCategories(id);
+    } else {
+      cats = <ScraperCategory>[];
+    }
+    if (mounted) {
+      setState(() {
+        _categories = cats;
+        if (!cats.any((c) => c.slug == _selectedCategory)) {
+          // Auto-select the default category so MILF-oriented sources open on it.
+          _selectedCategory = (id == 'eporner' || id == 'redtube' || id == 'spankbang')
+              ? (cats.any((c) => c.slug == 'milf') ? 'milf' : '')
+              : (id == 'tnaflix'
+                  ? (cats.any((c) => c.slug == 'milf-porn') ? 'milf-porn' : '')
+                  : '');
+        }
+      });
+    }
   }
 
   Future<void> _fetchGrid({int page = 1, String query = ''}) async {
@@ -61,7 +99,41 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
       _searchQuery = query;
     });
 
-    final items = await ScraperService.fetchGrid(_selectedSource!.id, page: page, query: query);
+    final id = _selectedSource!.id;
+    // Live cams (Cambaddies) run in the in-app browser, never a grid.
+    if (id == 'cambaddies') {
+      setState(() {
+        _items = [];
+        _loading = false;
+      });
+      return;
+    }
+    // SpankBang: its pages sit behind a browser-only Turnstile that the server
+    // cannot pass, but the on-device headless WebView renders a real browser, so
+    // try it FIRST and keep the server as fallback.
+    // RedTube: the official api.redtube.com JSON works server-side (www pages
+    // are age-gated), so try the server FIRST and the WebView as fallback.
+    List<ScraperCard> items;
+    if (id == 'spankbang') {
+      items = await SpankbangResolver.fetchGrid(
+          page: page, query: query, category: _selectedCategory);
+      if (items.length < 8) {
+        final s = await ScraperService.fetchGrid(id,
+            page: page, query: query, category: _selectedCategory);
+        if (s.length > items.length) items = s;
+      }
+    } else if (id == 'redtube') {
+      items = await ScraperService.fetchGrid(id,
+          page: page, query: query, category: _selectedCategory);
+      if (items.length < 8) {
+        final w = await RedtubeResolver.fetchGrid(
+            page: page, query: query, category: _selectedCategory);
+        if (w.length > items.length) items = w;
+      }
+    } else {
+      items = await ScraperService.fetchGrid(id,
+          page: page, query: query, category: _selectedCategory);
+    }
     if (mounted) {
       setState(() {
         _items = items;
@@ -70,13 +142,109 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
     }
   }
 
+  void _selectCategory(ScraperCategory cat) {
+    setState(() {
+      _selectedCategory = _selectedCategory == cat.slug ? '' : cat.slug;
+      _searchCtrl.clear();
+      _searchQuery = '';
+    });
+    _fetchGrid(page: 1, query: '');
+  }
+
   void _onSearchSubmitted(String val) {
+    setState(() => _selectedCategory = '');
     _fetchGrid(page: 1, query: val.trim());
   }
 
   void _clearSearch() {
     _searchCtrl.clear();
+    setState(() => _selectedCategory = '');
     _fetchGrid(page: 1, query: '');
+  }
+
+  Widget _buildLiveCamsLauncher() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF00C6FF), Color(0xFF8E2DE2)],
+                ),
+                borderRadius: BorderRadius.circular(32),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF00C6FF).withOpacity(0.35),
+                    blurRadius: 30,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.videocam_rounded, color: Colors.white, size: 56),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE53935),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.circle, color: Colors.white, size: 7),
+                  SizedBox(width: 5),
+                  Text(
+                    "LIVE",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Cambaddies Live Cams",
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Browse thousands of live models streaming right now.\nOpens in the in-app browser.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00C6FF),
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              icon: const Icon(Icons.launch_rounded, size: 20),
+              label: const Text("OPEN LIVE CAMS", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LiveCamsScreen()),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _onCardTapped(ScraperCard card) {
@@ -206,6 +374,7 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
     );
 
     Map<String, String>? qualities;
+    Map<String, String> headers = const {};
 
     if (XHamsterResolver.isXHamsterUrl(card.link) || card.link.contains('xhamster')) {
       final res = await XHamsterResolver.resolveQualities(card.link, forceRefresh: true);
@@ -214,7 +383,65 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
       }
     }
 
-    qualities ??= await ScraperService.resolveItem(card.link);
+    if (qualities == null && EpornerResolver.isEpornerUrl(card.link)) {
+      final res = await EpornerResolver.resolveQualities(card.link, forceRefresh: true);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+      }
+    }
+
+    if (qualities == null && TnaflixResolver.isTnaflixUrl(card.link)) {
+      final res = await TnaflixResolver.resolveQualities(card.link, forceRefresh: true);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+      }
+    }
+
+    if (qualities == null && SpankbangResolver.isSpankbangUrl(card.link)) {
+      // SpankBang: server is hard-blocked by a browser-only Turnstile, but the
+      // on-device WebView renders a real browser, so try it FIRST.
+      final res = await SpankbangResolver.resolveItem(card.link);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+        headers = res.headers;
+      }
+    }
+
+    if (qualities == null && RedtubeResolver.isRedtubeUrl(card.link)) {
+      // RedTube: try on-device HeadlessWebView first so full mediaDefinitions
+      // are captured without trailer previews. Fall back to server API.
+      final res = await RedtubeResolver.resolveItem(card.link);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+        headers = res.headers;
+      }
+    }
+
+    if (qualities == null && RedtubeResolver.isRedtubeUrl(card.link)) {
+      final res = await ScraperService.resolveItem(card.link);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+        headers = res.headers;
+      }
+    }
+
+    if (qualities == null && SpankbangResolver.isSpankbangUrl(card.link)) {
+      final res = await ScraperService.resolveItem(card.link);
+      if (res != null && res.qualities.isNotEmpty) {
+        qualities = res.qualities;
+        headers = res.headers;
+      }
+    }
+
+    if (qualities == null &&
+        !RedtubeResolver.isRedtubeUrl(card.link) &&
+        !SpankbangResolver.isSpankbangUrl(card.link)) {
+      final res = await ScraperService.resolveItem(card.link);
+      if (res != null) {
+        qualities = res.qualities;
+        headers = res.headers;
+      }
+    }
 
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
@@ -226,10 +453,10 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
       return;
     }
 
-    _showQualitySelectionDialog(card, qualities, isDownload: isDownload);
+    _showQualitySelectionDialog(card, qualities, isDownload: isDownload, headers: headers);
   }
 
-  void _showQualitySelectionDialog(ScraperCard card, Map<String, String> qualities, {required bool isDownload}) {
+  void _showQualitySelectionDialog(ScraperCard card, Map<String, String> qualities, {required bool isDownload, Map<String, String> headers = const {}}) {
     showDialog(
       context: context,
       barrierColor: Colors.black.withOpacity(0.65),
@@ -302,9 +529,12 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
                               onTap: () {
                                 Navigator.pop(modalCtx);
                                 if (isDownload) {
-                                  _startDownload(streamUrl, '${card.title} ($label)', card.poster);
+                                  _startDownload(streamUrl, '${card.title} ($label)', card.poster, headers: headers);
                                 } else {
-                                  playVideo(context, streamUrl, '${card.title} ($label)');
+                                  playVideo(context, streamUrl, '${card.title} ($label)',
+                                      qualities: qualities,
+                                      initialQuality: label,
+                                      headers: headers);
                                 }
                               },
                             ),
@@ -340,8 +570,8 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
     }
   }
 
-  void _startDownload(String url, String title, String poster) {
-    DownloadManager.instance.start(url, title, poster: poster);
+  void _startDownload(String url, String title, String poster, {Map<String, String> headers = const {}}) {
+    DownloadManager.instance.start(url, title, poster: poster, headers: headers);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text("Downloading: $title"),
@@ -443,13 +673,53 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
                               const Icon(Icons.language_rounded, color: Color(0xFF00C6FF), size: 16),
                               const SizedBox(width: 6),
                               Text(s.name),
+                              if (s.id == 'cambaddies') ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE53935),
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: const Text(
+                                    "LIVE",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 1,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         );
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          setState(() => _selectedSource = val);
+                          if (val.id == 'cambaddies') {
+                            // Live cams run in the in-app browser, not the grid.
+                            setState(() {
+                              _selectedSource = val;
+                              _searchCtrl.clear();
+                              _selectedCategory = '';
+                              _items = [];
+                            });
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const LiveCamsScreen(),
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            _selectedSource = val;
+                            _searchCtrl.clear();
+                            _selectedCategory = '';
+                          });
+                          _loadCategories();
                           _fetchGrid(page: 1, query: '');
                         }
                       },
@@ -499,11 +769,56 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
             ),
           ),
 
+          // Category Chips Row (Eporner / TNAFlix)
+          if (_categories.isNotEmpty)
+            Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              color: const Color(0xFF0D0D12),
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _categories.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (ctx, idx) {
+                  final cat = _categories[idx];
+                  final selected = cat.slug == _selectedCategory;
+                  return GestureDetector(
+                    onTap: () => _selectCategory(cat),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        gradient: selected
+                            ? const LinearGradient(colors: [Color(0xFF00c6ff), Color(0xFF0072ff)])
+                            : null,
+                        color: selected ? null : const Color(0xFF1B2234),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: selected ? Colors.cyanAccent : Colors.white12,
+                        ),
+                      ),
+                      child: Text(
+                        cat.name,
+                        style: GoogleFonts.outfit(
+                          color: selected ? Colors.black : Colors.white70,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
           // Main Video Poster Grid
           Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
-                : _items.isEmpty
+            child: _selectedSource?.id == 'cambaddies'
+                ? _buildLiveCamsLauncher()
+                : _loading
+                    ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
+                    : _items.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -511,7 +826,11 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
                             const Icon(Icons.flight_land_rounded, color: Colors.white24, size: 64),
                             const SizedBox(height: 12),
                             Text(
-                              _searchQuery.isNotEmpty ? "No results found for '$_searchQuery'" : "No video items found.",
+                              _searchQuery.isNotEmpty
+                                  ? "No results found for '$_searchQuery'"
+                                  : _selectedCategory.isNotEmpty
+                                      ? "No videos found in this category."
+                                      : "No video items found.",
                               style: const TextStyle(color: Colors.white54, fontSize: 14),
                             ),
                           ],
@@ -597,6 +916,29 @@ class _ForeignTripScreenState extends State<ForeignTripScreen> {
                                       child: const Icon(Icons.play_arrow_rounded, color: Colors.cyanAccent, size: 16),
                                     ),
                                   ),
+                                  // Duration Badge (e.g. "4 min", "90 sec")
+                                  if (item.duration.isNotEmpty)
+                                    Positioned(
+                                      right: 6, bottom: 6,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.75),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.schedule_rounded, color: Colors.white70, size: 10),
+                                            const SizedBox(width: 3),
+                                            Text(
+                                              item.duration,
+                                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
