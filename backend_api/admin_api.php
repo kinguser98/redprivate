@@ -106,6 +106,58 @@ try {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 } catch (Exception $e) {}
 
+// Ensure scraper_sources table exists (Fly Mode site config — reorder/hide/domain)
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS scraper_sources (
+        id VARCHAR(50) NOT NULL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL DEFAULT '',
+        logo VARCHAR(500) DEFAULT NULL,
+        domain VARCHAR(255) NOT NULL DEFAULT '',
+        search_enabled INT NOT NULL DEFAULT 1,
+        is_hidden INT NOT NULL DEFAULT 0,
+        sort_order INT NOT NULL DEFAULT 0,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+} catch (Exception $e) {}
+
+// Seed the scraper_sources table with the built-in defaults (INSERT IGNORE per
+// id — idempotent, adds new sources like cambaddies without touching admin edits).
+try {
+    $srcIns = $pdo->prepare("INSERT IGNORE INTO scraper_sources (id, name, logo, domain, search_enabled, is_hidden, sort_order) VALUES (?,?,?,?,?,0,?)");
+    $srcDefaults = [
+        ['xhamster',        'XHamster',        'https://static.xhpingcdn.com/xh-desktop/images/logo.svg', 'xhamster46.desi', 1],
+        ['deephot',         'DeepHot',         'https://deephot.link/wp-content/uploads/2026/08/cropped-favicon-32x32.png', 'deephot.link', 1],
+        ['xvideos',         'XVIDEOS',         'https://www.xvideos2.com/static-files/v3/img/skins/default/logo/xv.white.32.png', 'www.xvideos2.com', 1],
+        ['tnaflix',         'TNAFlix',         'https://www.tnaflix.com/favicon.ico', 'www.tnaflix.com', 1],
+        ['hqporner',        'HQPorner',        'https://m.hqporner.com/favicon.ico', 'm.hqporner.com', 1],
+        ['javtiful',        'Javtiful',        'https://javtiful.com/uploads/site/logo/2026/04/27/215c2694af8e5a2a3b487b6711f22866.png', 'javtiful.com', 1],
+        ['freepornvideos',  'FreePornVideos',  'https://www.freepornvideos.xxx/img/favicon/favicon-32x32.png?v=2.0', 'www.freepornvideos.xxx', 1],
+        ['cambaddies',      'Cambaddies',      'https://www.cambaddies.com/favicon.ico', 'cambaddies.com', 0],
+    ];
+    $i = 1;
+    foreach ($srcDefaults as $sd) {
+        $srcIns->execute([$sd[0], $sd[1], $sd[2], $sd[3], $sd[4], $i++]);
+    }
+} catch (Exception $e) {}
+
+// Ensure fly_mode_plays table exists (Fly Mode analytics — play/download logs)
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS fly_mode_plays (
+        id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 0,
+        user_name VARCHAR(255) DEFAULT 'Guest',
+        source_id VARCHAR(50) NOT NULL,
+        source_name VARCHAR(100) DEFAULT '',
+        video_title VARCHAR(500) DEFAULT '',
+        video_link TEXT,
+        action VARCHAR(20) NOT NULL DEFAULT 'play', -- 'play' or 'download'
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id),
+        INDEX idx_source (source_id),
+        INDEX idx_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+} catch (Exception $e) {}
+
 // Add app_version column to user_db if it doesn't exist
 try {
     $pdo->exec("ALTER TABLE user_db ADD COLUMN app_version VARCHAR(50) DEFAULT '1.0.0'");
@@ -246,6 +298,54 @@ function streamtape_embed_verdict($html, $code) {
     return 'uncertain'; // 403/429/timeout/other
 }
 
+// Helper to get domain-specific headers for accurate link health verification
+function get_domain_check_headers($url) {
+    $low = strtolower($url);
+    $referer = 'https://www.google.com/';
+    $extraHeaders = [];
+    $headOnly = false;
+
+    if (strpos($low, 'xhamster') !== false || strpos($low, 'xhmaster') !== false ||
+        strpos($low, 'xhpingcdn') !== false || strpos($low, 'xhcdn') !== false) {
+        $referer = 'https://xhamster46.desi/';
+        $extraHeaders = [
+            'Origin: https://xhamster46.desi',
+            'Cookie: platform=pc; lang=en',
+        ];
+        $headOnly = true;
+    } else if (strpos($low, 'ixifile') !== false || strpos($low, 'uncutmasti') !== false ||
+               strpos($low, 'uncut') !== false) {
+        $referer = 'https://uncutmasti.com/';
+        $extraHeaders = ['Origin: https://uncutmasti.com'];
+    } else if (strpos($low, 'hdmaal') !== false) {
+        $referer = 'https://hdmaal.gg/';
+        $extraHeaders = ['Origin: https://hdmaal.gg'];
+    } else if (strpos($low, 'aagmaal') !== false || strpos($low, 'uncutmaal') !== false ||
+               strpos($low, '9redmovies') !== false || strpos($low, 'hotbazi') !== false) {
+        $referer = 'https://aagmaal.mba/';
+        $extraHeaders = ['Origin: https://aagmaal.mba'];
+    } else if (strpos($low, 'uffmaal') !== false || strpos($low, 'azmaal') !== false || strpos($low, 'pmaal') !== false) {
+        $referer = 'https://uffmaal.com/';
+        $extraHeaders = ['Origin: https://uffmaal.com'];
+        $headOnly = true;
+    } else if (strpos($low, 'hdmove99') !== false) {
+        $referer = 'https://hdmove99.com/';
+        $extraHeaders = ['Origin: https://hdmove99.com'];
+    } else if (strpos($low, 'skymovies') !== false || strpos($low, 'skymovieshd') !== false) {
+        $referer = 'https://skymovieshd.ceo/';
+    }
+
+    if (!$headOnly && is_direct_media_link($url)) {
+        $headOnly = true;
+    }
+
+    return [
+        'referer' => $referer,
+        'headers' => array_merge(["Referer: $referer", 'Accept-Language: en-US,en;q=0.9', 'Accept: */*'], $extraHeaders),
+        'head_only' => $headOnly,
+    ];
+}
+
 // Single-link health check  VERIFIED 100% logic.
 function http_health_check($url, $timeout = 8) {
     if (empty($url)) return ["ok" => false, "code" => 0, "direct" => ""];
@@ -315,34 +415,37 @@ function http_health_check($url, $timeout = 8) {
         // Truly uncertain never kill a live link. Default to LIVE.
         return ["ok" => true, "code" => 200, "direct" => ""];
     }
-    // Non-streamtape fallback
+
+    // Non-streamtape fallback — pick appropriate referer & check method per source type
+    $info = get_domain_check_headers($url);
+    $headOnly = $info['head_only'];
     $low = strtolower($url);
-    $referer = 'https://streamtape.com/';
-    if (strpos($low, 'ixifile') !== false || strpos($low, 'uncutmasti') !== false) {
-        $referer = 'https://uncutmasti.com/';
-    } else if (strpos($low, 'hdmaal') !== false) {
-        $referer = 'https://hdmaal.gg/';
-    } else if (strpos($low, 'hdmove99') !== false) {
-        $referer = 'https://hdmove99.com/';
-    } else if (strpos($low, 'skymovies') !== false) {
-        $referer = 'https://skymovieshd.ceo/';
-    }
 
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, !$headOnly);
+    curl_setopt($ch, CURLOPT_NOBODY, $headOnly);  // HEAD request for head-only checks
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
     curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Referer: $referer", 'Accept-Language: en-US,en;q=0.9', 'Accept: */*']);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $info['headers']);
     $body = curl_exec($ch);
     $code = intval(curl_getinfo($ch, CURLINFO_HTTP_CODE));
     $errno = curl_errno($ch);
     curl_close($ch);
 
+    // 403/406 on xhamster/uncut/aagmaal/hdmaal/uffmaal/azmaal/pmaal = link exists but blocked by server — treat as LIVE
+    if ($code === 403 || $code === 406) {
+        $isBlockedHost = (strpos($low, 'xhamster') !== false || strpos($low, 'xhmaster') !== false ||
+                          strpos($low, 'uncut') !== false || strpos($low, 'hdmaal') !== false ||
+                          strpos($low, 'aagmaal') !== false || strpos($low, 'uncutmaal') !== false ||
+                          strpos($low, 'uffmaal') !== false || strpos($low, 'azmaal') !== false ||
+                          strpos($low, 'pmaal') !== false);
+        if ($isBlockedHost) return ["ok" => true, "code" => $code, "direct" => $url];
+    }
     $ok2 = ($code >= 200 && $code < 400) || $code === 416 || ($code === 0 && $errno === 28);
     return ["ok" => $ok2, "code" => $code, "direct" => $url];
 }
@@ -527,7 +630,9 @@ function batch_health_check($links, $timeout = 8) {
     if (!empty($checkUrl)) {
         $mh2 = curl_multi_init();
         $handles2 = [];
+        $handleHeaders = [];
         foreach ($checkUrl as $id => $url) {
+            $info = get_domain_check_headers($url);
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -535,8 +640,8 @@ function batch_health_check($links, $timeout = 8) {
             curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
             curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
             curl_setopt($ch, CURLOPT_RANGE, isset($isDirect[$id]) && $isDirect[$id] ? '0-2047' : '0-65535');
-            curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/5.0");
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Referer: https://streamtape.com/']);
+            curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $info['headers']);
             curl_multi_add_handle($mh2, $ch);
             $handles2[$id] = $ch;
         }
@@ -553,7 +658,10 @@ function batch_health_check($links, $timeout = 8) {
             $body = curl_multi_getcontent($ch);
             curl_multi_remove_handle($mh2, $ch);
             curl_close($ch);
+            $url = $checkUrl[$id] ?? '';
+            $low = strtolower($url);
             $ok = false;
+
             if (isset($isSt[$id])) {
                 if ($code === 404 || $code === 410) { $ok = false; }
                 else if ($code >= 200 && $code < 400) {
@@ -562,9 +670,15 @@ function batch_health_check($links, $timeout = 8) {
                               ? true : !streamtape_direct_is_dead($body);
                     } else { $ok = true; }
                 } else { $ok = true; }
+            } else if ($code === 403 || $code === 406) {
+                // Anti-bot blocked host or hotlink protection — stream is active
+                $isBlockedHost = (strpos($low, 'xhamster') !== false || strpos($low, 'xhmaster') !== false ||
+                                  strpos($low, 'uncut') !== false || strpos($low, 'hdmaal') !== false ||
+                                  strpos($low, 'aagmaal') !== false || strpos($low, 'uncutmaal') !== false);
+                $ok = $isBlockedHost ? true : false;
             } else if ($errno === 0 && $code > 0) {
-                if ($code >= 200 && $code < 400) {
-                    if (isset($isDirect[$id]) && $isDirect[$id]) { $ok = strpos($ctype, 'text/html') === false; }
+                if (($code >= 200 && $code < 400) || $code === 416) {
+                    if (isset($isDirect[$id]) && $isDirect[$id]) { $ok = true; }
                     else if (strpos($ctype, 'text/html') !== false) { $ok = !page_has_dead_signature($body); }
                     else { $ok = true; }
                 } else { $ok = false; }
@@ -602,10 +716,15 @@ function check_and_do_weekly_reset($pdo) {
         $now = time();
         $todayStr = date('Y-m-d', $now);
         $lastResetStr = $lastReset ? date('Y-m-d', $lastReset) : '';
+        // Fire on Monday (N=1) AND only once per day (lastReset date != today)
         if (date('N', $now) == 1 && $lastResetStr !== $todayStr) {
             @$pdo->exec("UPDATE movies SET weekly_views = 0");
             @$pdo->exec("UPDATE web_series SET weekly_views = 0");
-            @$pdo->exec("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset', '$todayStr')");
+            @$pdo->exec("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset', " . $pdo->quote($todayStr) . ")");
+        }
+        // Safety: if last_weekly_reset was never set (first run), seed it so reset fires next Monday
+        if (!$row) {
+            @$pdo->exec("INSERT IGNORE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset', '2000-01-01')");
         }
     } catch (Exception $e) {}
 }
@@ -657,20 +776,19 @@ if ($action === 'get_parked_ids') {
 }
 
 if ($action === 'list_movies') {
-    try { $pdo->exec("DELETE FROM movie_play_links WHERE status = 0"); } catch(Exception $e){}
-
+    // Hidden Admin Panel lists full catalog (active, inactive, dead-link) so admins can see, edit, and restore all movies
     $movies = $pdo->query("SELECT m.*, 
         IFNULL(m.views, 0) as views,
         IFNULL(m.weekly_views, 0) as weekly_views,
         (SELECT COUNT(*) FROM movie_play_links WHERE movie_id = m.id AND status = 1) as active_links,
-        0 as dead_links,
+        (SELECT COUNT(*) FROM movie_play_links WHERE movie_id = m.id AND status = 0) as dead_links,
         (SELECT ct.name FROM custom_tag_log ctl JOIN custom_tags ct ON ct.id = ctl.custom_tags_id WHERE ctl.content_id = m.id AND ctl.content_type = 1 ORDER BY ctl.id DESC LIMIT 1) as custom_tag,
         (SELECT GROUP_CONCAT(network_id) FROM content_network_log WHERE content_id = m.id AND content_type = 1) as network_ids
-        FROM movies m WHERE m.status = 1 ORDER BY m.id DESC")->fetchAll();
+        FROM movies m ORDER BY m.id DESC")->fetchAll();
     if (!empty($movies)) {
         $ids = array_column($movies, 'id');
         $in = implode(',', array_map('intval', $ids));
-        $links = $pdo->query("SELECT * FROM movie_play_links WHERE movie_id IN ($in) AND status = 1 ORDER BY movie_id ASC, link_order ASC")->fetchAll();
+        $links = $pdo->query("SELECT * FROM movie_play_links WHERE movie_id IN ($in) ORDER BY movie_id ASC, link_order ASC")->fetchAll();
         $byMovie = [];
         foreach ($links as $l) { $byMovie[$l['movie_id']][] = $l; }
         foreach ($movies as &$m) { $m['play_links'] = $byMovie[$m['id']] ?? []; }
@@ -682,43 +800,66 @@ if ($action === 'list_movies') {
 // 2. LIST ALL WEB SERIES
 //
 if ($action === 'list_series') {
+    // Hidden Admin Panel lists full catalog (active, inactive, dead-link) so admins can see, edit, and restore all web series
     $series = $pdo->query("SELECT ws.*, 
         (SELECT ct.name FROM custom_tag_log ctl JOIN custom_tags ct ON ct.id = ctl.custom_tags_id WHERE ctl.content_id = ws.id AND ctl.content_type = 2 ORDER BY ctl.id DESC LIMIT 1) as custom_tag,
         (SELECT GROUP_CONCAT(network_id) FROM content_network_log WHERE content_id = ws.id AND content_type = 2) as network_ids
-        FROM web_series ws WHERE ws.status = 1 ORDER BY ws.id DESC")->fetchAll();
+        FROM web_series ws ORDER BY ws.id DESC")->fetchAll();
     if (!empty($series)) {
         $ids = array_column($series, 'id');
         $in = implode(',', array_map('intval', $ids));
-        $seasons = $pdo->query("SELECT * FROM web_series_seasons WHERE web_series_id IN ($in) AND status = 1 ORDER BY web_series_id ASC, season_order ASC")->fetchAll();
+        $seasons = $pdo->query("SELECT * FROM web_series_seasons WHERE web_series_id IN ($in) ORDER BY web_series_id ASC, season_order ASC")->fetchAll();
         $seasonBySeries = [];
         $seasonIds = [];
         foreach ($seasons as $s) { $seasonBySeries[$s['web_series_id']][] = $s; $seasonIds[] = $s['id']; }
         $episodes = [];
         if (!empty($seasonIds)) {
             $sin = implode(',', array_map('intval', $seasonIds));
-            $episodes = $pdo->query("SELECT * FROM web_series_episoade WHERE season_id IN ($sin) ORDER BY season_id ASC, episoade_order ASC")->fetchAll();
+            // Fetch episodes WITHOUT play_links — links load lazily when user edits a series
+            $episodes = $pdo->query("SELECT id, season_id, Episoade_Name, Episoade_Name as name, episoade_image, episoade_image as poster, episoade_description, episoade_description as description, episoade_order, status FROM web_series_episoade WHERE season_id IN ($sin) ORDER BY season_id ASC, episoade_order ASC")->fetchAll();
         }
         $epBySeason = [];
-        $epIds = [];
-        foreach ($episodes as $e) { $epBySeason[$e['season_id']][] = $e; $epIds[] = $e['id']; }
-        $links = [];
-        if (!empty($epIds)) {
-            $ein = implode(',', array_map('intval', $epIds));
-            $links = $pdo->query("SELECT * FROM episode_play_links WHERE episode_id IN ($ein) ORDER BY episode_id ASC, link_order ASC")->fetchAll();
-        }
-        $linkByEp = [];
-        foreach ($links as $l) { $linkByEp[$l['episode_id']][] = $l; }
+        foreach ($episodes as $e) { $epBySeason[$e['season_id']][] = $e; }
         foreach ($series as &$s) {
             $ss = $seasonBySeries[$s['id']] ?? [];
             foreach ($ss as &$season) {
                 $eps = $epBySeason[$season['id']] ?? [];
-                foreach ($eps as &$ep) { $ep['play_links'] = $linkByEp[$ep['id']] ?? []; }
+                foreach ($eps as &$ep) { $ep['play_links'] = []; } // placeholder; loaded lazily
                 $season['episodes'] = $eps;
             }
             $s['seasons'] = $ss;
         }
     }
     json_response(true, ["series" => $series], "Series fetched");
+}
+
+// Load full episode details (including play_links) for a single series — called lazily when editing
+if ($action === 'get_series_episodes') {
+    $series_id = intval($input['series_id'] ?? 0);
+    if ($series_id <= 0) json_response(false, [], "Series ID required");
+    $seasons = $pdo->prepare("SELECT * FROM web_series_seasons WHERE web_series_id = ? AND status = 1 ORDER BY season_order ASC");
+    $seasons->execute([$series_id]);
+    $seasonRows = $seasons->fetchAll();
+    $seasonIds = array_column($seasonRows, 'id');
+    $epBySeason = [];
+    if (!empty($seasonIds)) {
+        $sin = implode(',', array_map('intval', $seasonIds));
+        $episodes = $pdo->query("SELECT * FROM web_series_episoade WHERE season_id IN ($sin) ORDER BY season_id ASC, episoade_order ASC")->fetchAll();
+        $epIds = array_column($episodes, 'id');
+        $linkByEp = [];
+        if (!empty($epIds)) {
+            $ein = implode(',', array_map('intval', $epIds));
+            $links = $pdo->query("SELECT * FROM episode_play_links WHERE episode_id IN ($ein) ORDER BY episode_id ASC, link_order ASC")->fetchAll();
+            foreach ($links as $l) { $linkByEp[$l['episode_id']][] = $l; }
+        }
+        foreach ($episodes as &$e) { $e['play_links'] = $linkByEp[$e['id']] ?? []; }
+        foreach ($seasonRows as &$season) {
+            $season['episodes'] = array_values(array_filter($episodes, fn($e) => $e['season_id'] == $season['id']));
+        }
+    } else {
+        foreach ($seasonRows as &$season) { $season['episodes'] = []; }
+    }
+    json_response(true, ["seasons" => $seasonRows], "Episodes fetched");
 }
 
 if ($action === 'get_taxonomy') {
@@ -938,7 +1079,68 @@ if ($action === 'add_episode_link') {
 }
 
 //
-// 7b. SAVE EPISODE (existing, kept for compatibility)
+// 7b. BATCH ADD EPISODES (Multi-episode import)
+//
+if ($action === 'batch_add_episodes') {
+    $series_id = intval($input['series_id'] ?? 0);
+    $season_name = trim($input['season_name'] ?? 'Season 1');
+    $episodes = $input['episodes'] ?? [];
+
+    if ($series_id <= 0) json_response(false, [], "Series ID required");
+    if (empty($episodes) || !is_array($episodes)) json_response(false, [], "No episodes provided");
+
+    // Find or create season
+    $season_id = 0;
+    $stmt = $pdo->prepare("SELECT id FROM web_series_seasons WHERE web_series_id = ? AND TRIM(Session_Name) = TRIM(?) AND status = 1");
+    $stmt->execute([$series_id, $season_name]);
+    $season = $stmt->fetch();
+    if ($season) {
+        $season_id = $season['id'];
+    } else {
+        $stmt = $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, 1, 1)");
+        $stmt->execute([$series_id, $season_name]);
+        $season_id = $pdo->lastInsertId();
+    }
+
+    $inserted = 0;
+    foreach ($episodes as $ep) {
+        $ep_name = trim($ep['name'] ?? 'Episode');
+        $ep_url = trim($ep['url'] ?? '');
+        $ep_image = trim($ep['episode_image'] ?? $ep['poster'] ?? '');
+        $ep_type = trim($ep['stream_type'] ?? 'MP4/MKV Direct Link');
+        $ep_qual = trim($ep['quality'] ?? '720p');
+        $ep_ord = intval($ep['order'] ?? ($inserted + 1));
+
+        if (empty($ep_url) && empty($ep['play_links'])) continue;
+
+        $stmt = $pdo->prepare("INSERT INTO web_series_episoade (season_id, Episoade_Name, episoade_image, episoade_description, episoade_order, downloadable, type, source, url, skip_available, intro_start, intro_end, end_credits_marker, drm_uuid, drm_license_uri, status) VALUES (?, ?, ?, '', ?, 1, 0, ' ', ' ', 0, ' ', ' ', ' ', ' ', ' ', 1)");
+        $stmt->execute([$season_id, $ep_name, $ep_image, $ep_ord]);
+        $ep_id = $pdo->lastInsertId();
+
+        if ($ep_id > 0) {
+            $inserted++;
+            if (!empty($ep['play_links']) && is_array($ep['play_links'])) {
+                $lord = 1;
+                foreach ($ep['play_links'] as $pl) {
+                    if (!empty($pl['url'])) {
+                        $pl_name = $pl['name'] ?? ("Server " . $lord);
+                        $pl_type = $pl['type'] ?? $ep_type;
+                        $pl_qual = $pl['quality'] ?? $ep_qual;
+                        $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $pl_name, $pl_qual, $pl['url'], $pl_type, $lord]);
+                        $lord++;
+                    }
+                }
+            } elseif (!empty($ep_url)) {
+                $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, 'Server 1', ?, ?, ?, 1, 1, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $ep_qual, $ep_url, $ep_type]);
+            }
+        }
+    }
+
+    json_response(true, ["season_id" => $season_id, "inserted_count" => $inserted], "Successfully imported $inserted episodes");
+}
+
+//
+// 7c. SAVE EPISODE (existing, kept for compatibility)
 //
 if ($action === 'save_episode' || $action === 'update_episode') {
     $ep_id = intval($input['episode_id'] ?? $input['id'] ?? 0);
@@ -985,7 +1187,9 @@ if ($action === 'save_episode' || $action === 'update_episode') {
 // 7c. LIST USERS
 //
 if ($action === 'list_users') {
-    $stmt = $pdo->query("SELECT * FROM user_db ORDER BY id DESC");
+    // Ensure profile_pic column exists (graceful)
+    try { $pdo->exec("ALTER TABLE user_db ADD COLUMN IF NOT EXISTS profile_pic TEXT DEFAULT NULL"); } catch(Exception $e){}
+    $stmt = $pdo->query("SELECT id, name, email, app_version, role, device_id, active_subscription, subscription_type, subscription_start, subscription_exp, time, amount, profile_pic FROM user_db ORDER BY id DESC");
     $users = $stmt->fetchAll();
     json_response(true, ["users" => $users], "Users fetched");
 }
@@ -1032,11 +1236,18 @@ if ($action === 'get_user_telemetry') {
     $download_stmt->execute([$user_id]);
     $downloads = $download_stmt->fetchAll();
 
-    // 4. Total playtime calculation
-    $playtime_stmt = $pdo->prepare("SELECT SUM(duration_seconds) as total_playtime FROM watch_history_analytics WHERE user_id = ?");
-    $playtime_stmt->execute([$user_id]);
-    $playtime_row = $playtime_stmt->fetch();
-    $total_playtime_sec = intval($playtime_row['total_playtime'] ?? 0);
+    // 4. Total playtime calculation (wrapped in try/catch — table may not exist)
+    $total_playtime_sec = 0;
+    try {
+        $playtime_stmt = $pdo->prepare("SELECT COALESCE(SUM(duration_seconds), 0) as total_playtime FROM watch_history_analytics WHERE user_id = ?");
+        $playtime_stmt->execute([$user_id]);
+        $playtime_row = $playtime_stmt->fetch();
+        $total_playtime_sec = intval($playtime_row['total_playtime'] ?? 0);
+    } catch (Exception $e) { $total_playtime_sec = 0; }
+
+    // Ensure play_history returned even if table missing
+    if (empty($play_history)) $play_history = [];
+    if (empty($downloads)) $downloads = [];
 
     json_response(true, [
         "active_session" => $active_session,
@@ -1096,62 +1307,138 @@ if ($action === 'get_dashboard_telemetry') {
     ");
     $top_played = $top_played_stmt->fetchAll();
 
+    // 5. Fly Mode (scraper) analytics — total plays/downloads, top sites, etc.
+    $fly = ['total_plays' => 0, 'total_downloads' => 0, 'plays_today' => 0, 'plays_week' => 0,
+            'unique_users' => 0, 'top_sources' => [], 'top_users' => [], 'top_videos' => [], 'recent' => []];
+    try {
+        $fly['total_plays'] = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE action = 'play'")->fetchColumn());
+        $fly['total_downloads'] = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE action = 'download'")->fetchColumn());
+        $fly['plays_today'] = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE created_at >= CURDATE()")->fetchColumn());
+        $fly['plays_week'] = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE created_at >= CURDATE() - INTERVAL 7 DAY")->fetchColumn());
+        $fly['unique_users'] = intval($pdo->query("SELECT COUNT(DISTINCT user_id) FROM fly_mode_plays WHERE user_id > 0")->fetchColumn());
+        $fly['top_sources'] = $pdo->query("SELECT source_id, source_name, COUNT(*) as plays,
+            SUM(action = 'play') as play_count, SUM(action = 'download') as download_count
+            FROM fly_mode_plays GROUP BY source_id, source_name ORDER BY plays DESC LIMIT 20")->fetchAll();
+        $fly['top_users'] = $pdo->query("SELECT user_id, user_name, COUNT(*) as plays FROM fly_mode_plays
+            WHERE user_id > 0 GROUP BY user_id, user_name ORDER BY plays DESC LIMIT 20")->fetchAll();
+        $fly['top_videos'] = $pdo->query("SELECT video_title, source_name, COUNT(*) as plays, video_link
+            FROM fly_mode_plays WHERE video_title <> '' GROUP BY video_title, source_name, video_link
+            ORDER BY plays DESC LIMIT 20")->fetchAll();
+        $fly['recent'] = $pdo->query("SELECT user_name, source_name, video_title, action, created_at
+            FROM fly_mode_plays ORDER BY id DESC LIMIT 50")->fetchAll();
+    } catch (Throwable $e) {}
+
     json_response(true, [
         "live_users" => $live_users,
         "top_users" => $top_users,
         "top_downloads" => $top_downloads,
-        "top_played" => $top_played
+        "top_played" => $top_played,
+        "fly_mode" => $fly
     ], "Dashboard telemetry fetched");
 }
 
-if ($action === 'upload_image') {
-    if (!isset($_FILES['image'])) {
-        json_response(false, [], "No file uploaded");
+if ($action === 'purge_fly_test_data') {
+    // One-off maintenance: drop smoke-test rows left by API verification.
+    try {
+        $n = $pdo->exec("DELETE FROM fly_mode_plays WHERE user_id = 123 OR user_name = 'test_user'");
+        json_response(true, ['deleted' => intval($n)], 'Test records purged');
+    } catch (Throwable $e) {
+        json_response(false, [], $e->getMessage());
     }
-    $file = $_FILES['image'];
-    if ($file['error'] !== UPLOAD_ERR_OK) {
-        json_response(false, [], "Upload error: " . $file['error']);
+}
+
+if ($action === 'upload_image') {
+    $upload_dir = __DIR__ . '/uploads';
+    if (!file_exists($upload_dir)) {
+        mkdir($upload_dir, 0755, true);
     }
 
-    // Validate image type using actual file content (not unreliable client-provided MIME)
-    // Accept all common image formats
+    $title_raw = $_POST['title'] ?? $_POST['name'] ?? $input['title'] ?? $input['name'] ?? '';
+    $title_slug = preg_replace('/[^a-z0-9]+/i', '_', strtolower(trim($title_raw)));
+    $title_slug = trim(preg_replace('/_+/', '_', $title_slug), '_');
+    if (empty($title_slug)) {
+        $title_slug = 'img';
+    }
+
     $allowed_mime = [
         'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
         'image/webp', 'image/heic', 'image/heif', 'image/avif',
         'image/bmp', 'image/x-bmp', 'image/tiff', 'image/svg+xml',
         'image/x-icon', 'image/vnd.microsoft.icon'
     ];
-    // First try getimagesize() for reliable detection
-    $img_info = @getimagesize($file['tmp_name']);
-    $detected_mime = $img_info ? $img_info['mime'] : mime_content_type($file['tmp_name']);
-    // Also allow by extension as fallback (for HEIC/AVIF which getimagesize may not detect)
-    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
     $allowed_ext = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tiff', 'tif', 'svg', 'ico'];
-    $valid_by_mime = in_array($detected_mime, $allowed_mime) || in_array($file['type'], $allowed_mime);
-    $valid_by_ext  = in_array($ext, $allowed_ext);
-    if (!$valid_by_mime && !$valid_by_ext) {
-        json_response(false, [], "Invalid file type. Please upload any image file (JPEG, PNG, WEBP, HEIC, AVIF, GIF, BMP, etc.).");
-    }
 
-    // Create uploads directory if it doesn't exist
-    $upload_dir = __DIR__ . '/uploads';
-    if (!file_exists($upload_dir)) {
-        mkdir($upload_dir, 0755, true);
-    }
-    // Generate unique filename, default to jpg if extension missing
-    if (empty($ext) || !in_array($ext, $allowed_ext)) { $ext = 'jpg'; }
-    $filename = 'img_' . uniqid() . '.' . $ext;
-    $dest = $upload_dir . '/' . $filename;
+    $remote_url = $_POST['image_url'] ?? $_POST['url'] ?? $input['image_url'] ?? $input['url'] ?? '';
 
-    if (move_uploaded_file($file['tmp_name'], $dest)) {
-        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
-        $host = $_SERVER['HTTP_HOST'];
-        $base_dir = dirname($_SERVER['SCRIPT_NAME']);
-        $base_dir = rtrim($base_dir, '/\\');
-        $public_url = "$protocol://$host$base_dir/uploads/$filename";
-        json_response(true, ["url" => $public_url], "Image uploaded successfully");
+    if (!empty($remote_url) && strpos($remote_url, 'http') === 0) {
+        // Download remote image URL directly to server
+        $parsed_ext = strtolower(pathinfo(parse_url($remote_url, PHP_URL_PATH), PATHINFO_EXTENSION));
+        if (empty($parsed_ext) || !in_array($parsed_ext, $allowed_ext)) {
+            $parsed_ext = 'jpg';
+        }
+        $filename = $title_slug . '_' . uniqid() . '.' . $parsed_ext;
+        $dest = $upload_dir . '/' . $filename;
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $remote_url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 35);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+            'Referer: https://www.google.com/',
+        ]);
+        $img_data = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code >= 200 && $http_code < 300 && !empty($img_data) && strlen($img_data) > 500) {
+            file_put_contents($dest, $img_data);
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
+            $host = $_SERVER['HTTP_HOST'];
+            $base_dir = dirname($_SERVER['SCRIPT_NAME']);
+            $base_dir = rtrim($base_dir, '/\\');
+            $public_url = "$protocol://$host$base_dir/uploads/$filename";
+            json_response(true, ["url" => $public_url], "Image downloaded & uploaded successfully");
+        } else {
+            json_response(false, [], "Failed to download remote image (HTTP $http_code)");
+        }
     } else {
-        json_response(false, [], "Failed to save uploaded file");
+        if (!isset($_FILES['image'])) {
+            json_response(false, [], "No file uploaded");
+        }
+        $file = $_FILES['image'];
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            json_response(false, [], "Upload error: " . $file['error']);
+        }
+
+        $img_info = @getimagesize($file['tmp_name']);
+        $detected_mime = $img_info ? $img_info['mime'] : mime_content_type($file['tmp_name']);
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $valid_by_mime = in_array($detected_mime, $allowed_mime) || in_array($file['type'], $allowed_mime);
+        $valid_by_ext  = in_array($ext, $allowed_ext);
+        if (!$valid_by_mime && !$valid_by_ext) {
+            json_response(false, [], "Invalid file type. Please upload an image file.");
+        }
+
+        if (empty($ext) || !in_array($ext, $allowed_ext)) { $ext = 'jpg'; }
+        $filename = $title_slug . '_' . uniqid() . '.' . $ext;
+        $dest = $upload_dir . '/' . $filename;
+
+        if (move_uploaded_file($file['tmp_name'], $dest)) {
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
+            $host = $_SERVER['HTTP_HOST'];
+            $base_dir = dirname($_SERVER['SCRIPT_NAME']);
+            $base_dir = rtrim($base_dir, '/\\');
+            $public_url = "$protocol://$host$base_dir/uploads/$filename";
+            json_response(true, ["url" => $public_url], "Image uploaded successfully");
+        } else {
+            json_response(false, [], "Failed to save uploaded file");
+        }
     }
 }
 
@@ -1284,11 +1571,80 @@ if ($action === 'grant_vip') {
     if (!$plan) json_response(false, [], "Invalid plan");
     $days = intval($plan['time']);
     $start = date('Y-m-d H:i:s');
-    $exp = date('Y-m-d H:i:s', strtotime("+$days days"));
+    // Expiry = last day of CURRENT month (billing cycle: 1st to end of month)
+    $exp = date('Y-m-t 23:59:59');
     $pdo->prepare("UPDATE user_db SET active_subscription = ?, subscription_type = ?, time = ?, amount = ?, subscription_start = ?, subscription_exp = ? WHERE id = ?")
         ->execute([$plan['name'], intval($plan['subscription_type']), $days, intval($plan['amount']), $start, $exp, $user_id]);
     log_subscription_history($pdo, $user_id, $plan['name'], $days, intval($plan['amount']), $start, $exp, 'Admin Panel');
-    json_response(true, ["user_id" => $user_id], "VIP subscription granted");
+    json_response(true, ["user_id" => $user_id, "exp" => $exp], "VIP subscription granted");
+}
+
+//
+// EDIT USER (name, email, password, expiry, active_subscription) — admin only
+// Supports action aliases: edit_user, update_user, modify_user
+//
+if ($action === 'edit_user' || $action === 'update_user' || $action === 'modify_user') {
+    $user_id = intval($input['user_id'] ?? $input['id'] ?? 0);
+    if ($user_id <= 0) json_response(false, [], "User ID required");
+    $fields = [];
+    $params = [];
+    if (isset($input['name']) && trim($input['name']) !== '') { $fields[] = 'name = ?'; $params[] = trim($input['name']); }
+    if (isset($input['email']) && trim($input['email']) !== '') { $fields[] = 'email = ?'; $params[] = trim($input['email']); }
+    if (isset($input['password']) && trim($input['password']) !== '') { $fields[] = 'password = ?'; $params[] = password_hash(trim($input['password']), PASSWORD_BCRYPT); }
+    if (isset($input['subscription_exp']) && $input['subscription_exp'] !== '') {
+        $expVal = trim($input['subscription_exp']);
+        if (strlen($expVal) <= 10) $expVal .= ' 23:59:59';
+        $fields[] = 'subscription_exp = ?';
+        $params[] = $expVal;
+    }
+    if (isset($input['active_subscription']) && trim($input['active_subscription']) !== '') {
+        $fields[] = 'active_subscription = ?';
+        $params[] = trim($input['active_subscription']);
+    }
+    if (isset($input['subscription_type'])) {
+        $fields[] = 'subscription_type = ?';
+        $params[] = intval($input['subscription_type']);
+    }
+    if (empty($fields)) json_response(false, [], "No fields to update");
+    $params[] = $user_id;
+    $pdo->prepare("UPDATE user_db SET " . implode(', ', $fields) . " WHERE id = ?")->execute($params);
+    json_response(true, ["user_id" => $user_id], "User updated successfully");
+}
+
+//
+// BULK SET VIP EXPIRY — set users' expiry to given date
+// Supports updating ALL users or a selected list of user_ids
+// Supports aliases: bulk_set_expiry, bulk_update_expiry, bulk_extend_expiry
+//
+if ($action === 'bulk_set_expiry' || $action === 'bulk_update_expiry' || $action === 'bulk_extend_expiry') {
+    $expiry = trim($input['expiry'] ?? '');
+    if (empty($expiry)) {
+        $expiry = date('Y-m-t'); // default end of current month
+    }
+    $expiryDate = explode(' ', $expiry)[0];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $expiryDate)) {
+        json_response(false, [], "Invalid date format (use YYYY-MM-DD)");
+    }
+    $fullExpiry = $expiryDate . ' 23:59:59';
+
+    $userIds = $input['user_ids'] ?? [];
+    if (is_string($userIds)) {
+        $userIds = array_filter(array_map('intval', explode(',', $userIds)));
+    }
+
+    if (!empty($userIds) && is_array($userIds)) {
+        $in = implode(',', array_map('intval', $userIds));
+        $stmt = $pdo->prepare("UPDATE user_db SET subscription_exp = ? WHERE id IN ($in)");
+        $stmt->execute([$fullExpiry]);
+        $affected = $stmt->rowCount();
+        json_response(true, ["updated" => $affected, "expiry" => $expiryDate], "Bulk expiry updated for $affected selected user(s)");
+    } else {
+        // Update all users in user_db
+        $stmt = $pdo->prepare("UPDATE user_db SET subscription_exp = ?");
+        $stmt->execute([$fullExpiry]);
+        $affected = $stmt->rowCount();
+        json_response(true, ["updated" => $affected, "expiry" => $expiryDate], "Bulk expiry updated for all $affected user(s)");
+    }
 }
 
 //
@@ -1667,6 +2023,22 @@ if ($action === 'add_season') {
     if ($series_id <= 0) {
         json_response(false, [], "Web series ID is required");
     }
+
+    // Safety fallback: if series_id is a millisecond timestamp or invalid ID, find real database ID
+    if ($series_id > 2147483647 || !$pdo->query("SELECT id FROM web_series WHERE id = " . intval($series_id))->fetchColumn()) {
+        $chk = $pdo->prepare("SELECT id FROM web_series WHERE TMDB_ID = ? OR id = ? ORDER BY id DESC LIMIT 1");
+        $chk->execute([$series_id, $series_id]);
+        $foundId = $chk->fetchColumn();
+        if ($foundId) {
+            $series_id = intval($foundId);
+        } else {
+            $latest = $pdo->query("SELECT id FROM web_series ORDER BY id DESC LIMIT 1")->fetchColumn();
+            if ($latest) {
+                $series_id = intval($latest);
+            }
+        }
+    }
+
     try {
         $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, ?, 1)")->execute([$series_id, $name, $order]);
         json_response(true, ["season_id" => $pdo->lastInsertId()], "Season added successfully");
@@ -3214,17 +3586,19 @@ function get_scraper_domains($pdo) {
     $hdmaal_domain = 'https://hdmaal.gg';
     $uncutmasti_domain = 'https://uncutmasti.com';
     $hdmove99_domain = 'https://hdmove99.com';
+    $aagmaal_domain = 'https://aagmaal.mba';
     try {
-        $stmt = $pdo->query("SELECT skey, svalue FROM app_settings WHERE skey IN ('skymovies_domain', 'hdmaal_domain', 'uncutmasti_domain', 'hdmove99_domain')");
+        $stmt = $pdo->query("SELECT skey, svalue FROM app_settings WHERE skey IN ('skymovies_domain', 'hdmaal_domain', 'uncutmasti_domain', 'hdmove99_domain', 'aagmaal_domain')");
         foreach ($stmt->fetchAll() as $row) {
             $val = rtrim(trim($row['svalue']), '/');
             if ($row['skey'] === 'skymovies_domain' && !empty($val)) $skymovies_domain = $val;
             if ($row['skey'] === 'hdmaal_domain' && !empty($val)) $hdmaal_domain = $val;
             if ($row['skey'] === 'uncutmasti_domain' && !empty($val)) $uncutmasti_domain = $val;
             if ($row['skey'] === 'hdmove99_domain' && !empty($val)) $hdmove99_domain = $val;
+            if ($row['skey'] === 'aagmaal_domain' && !empty($val)) $aagmaal_domain = $val;
         }
     } catch (Exception $e) {}
-    return [$skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain];
+    return [$skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain];
 }
 
 function download_and_host_image($img_url, $title = '', $episode = '') {
@@ -3414,6 +3788,8 @@ if ($action === 'search_hdmaal_catalog') {
             if (!empty($title) && strpos($purl, '/tag/') === false && strpos($purl, '/category/') === false && strpos($purl, '/topic/') === false) {
                 $img_url = '';
                 if (preg_match('/<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $matches[0][$i], $im)) {
+                    $img_url = $im[1];
+                } elseif (preg_match('/background-image:\s*url\([\'"]?([^\'")]+)[\'"]?\)/i', $matches[0][$i], $im)) {
                     $img_url = $im[1];
                 }
                 $items[] = [
@@ -3941,6 +4317,8 @@ if ($action === 'extract_hdmaal_details') {
         $poster = stripslashes($m[1]);
     } elseif (preg_match('/<meta\s+property=[\'"]og:image[\'"]\s+content=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
         $poster = $m[1];
+    } elseif (preg_match('/background-image:\s*url\([\'"]?([^\'")]+)[\'"]?\)/i', $html, $m)) {
+        $poster = $m[1];
     } elseif (preg_match('/<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
         $poster = $m[1];
     }
@@ -3979,17 +4357,223 @@ if ($action === 'extract_hdmaal_details') {
     }
 
     $primary_stream = !empty($play_links) ? $play_links[0]['url'] : '';
-    $hosted_poster = !empty($poster) ? download_and_host_image($poster) : '';
+    $hosted_poster = !empty($poster) ? download_and_host_image($poster, $title) : '';
 
     json_response(true, [
         'title' => $title,
         'description' => "Watch $title in full HD online.",
-        'poster' => $hosted_poster,
+        'poster' => !empty($hosted_poster) ? $hosted_poster : $poster,
         'raw_poster' => $poster,
         'stream_url' => $primary_stream,
         'play_links' => $play_links,
         'page_url' => $page_url,
     ], 'HDMaal details extracted');
+}
+
+//
+// ── AAGMAAL SCRAPER & IMPORTER ENDPOINTS ──
+//
+
+if ($action === 'search_aagmaal_catalog') {
+    list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain) = get_scraper_domains($pdo);
+    $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
+    if (empty($query)) json_response(false, [], 'Query required');
+
+    $search_url = "$aagmaal_domain/?s=" . urlencode($query);
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $search_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    $items = [];
+    if ($html) {
+        if (preg_match_all('/<article\s+class=[\'"]item-list[\'"][^>]*>(.*?)<\/article>/is', $html, $articles)) {
+            foreach ($articles[1] as $art) {
+                $title = '';
+                $page_url = '';
+                $poster = '';
+                if (preg_match('/<h2\s+class=[\'"]post-box-title[\'"][^>]*>\s*<a\s+href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)<\/a>/is', $art, $tm)) {
+                    $page_url = $tm[1];
+                    $title = trim(html_entity_decode(strip_tags($tm[2])));
+                }
+                if (preg_match('/<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $art, $im)) {
+                    $poster = $im[1];
+                }
+                if (!empty($title) && !empty($page_url)) {
+                    $items[] = [
+                        'title' => $title,
+                        'page_url' => $page_url,
+                        'poster' => $poster,
+                    ];
+                }
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items], 'Aagmaal catalog search completed');
+}
+
+if ($action === 'fetch_aagmaal_catalog') {
+    $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
+    $page = intval($input['page'] ?? $_POST['page'] ?? $_GET['page'] ?? 1);
+    if ($page <= 0) $page = 1;
+
+    list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain) = get_scraper_domains($pdo);
+
+    if (!empty($query)) {
+        $fetch_url = "$aagmaal_domain/page/$page/?s=" . urlencode($query);
+    } else {
+        $fetch_url = $page > 1 ? "$aagmaal_domain/page/$page/" : "$aagmaal_domain/";
+    }
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $fetch_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    $items = [];
+    if ($html) {
+        if (preg_match_all('/<div\s+class=[\'"]post-thumbnail[\'"][^>]*>\s*<a\s+href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)<\/a>\s*<\/div>\s*<h3\s+class=[\'"]post-box-title[\'"][^>]*>\s*<a\s+href=[\'"][^\'"]+[\'"][^>]*>(.*?)<\/a>\s*<\/h3>/is', $html, $m)) {
+            for ($i = 0; $i < count($m[1]); $i++) {
+                $page_url = $m[1][$i];
+                $img_html = $m[2][$i];
+                $title = trim(html_entity_decode(strip_tags($m[3][$i])));
+                $poster = '';
+                if (preg_match('/<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $img_html, $im)) {
+                    $poster = $im[1];
+                }
+                $items[] = [
+                    'title' => $title,
+                    'page_url' => $page_url,
+                    'poster' => $poster,
+                    'date' => 'Latest',
+                ];
+            }
+        } elseif (preg_match_all('/<article\s+class=[\'"]item-list[\'"][^>]*>(.*?)<\/article>/is', $html, $articles)) {
+            foreach ($articles[1] as $art) {
+                $title = '';
+                $page_url = '';
+                $poster = '';
+                if (preg_match('/<h2\s+class=[\'"]post-box-title[\'"][^>]*>\s*<a\s+href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)<\/a>/is', $art, $tm)) {
+                    $page_url = $tm[1];
+                    $title = trim(html_entity_decode(strip_tags($tm[2])));
+                }
+                if (preg_match('/<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $art, $im)) {
+                    $poster = $im[1];
+                }
+                if (!empty($title) && !empty($page_url)) {
+                    $items[] = [
+                        'title' => $title,
+                        'page_url' => $page_url,
+                        'poster' => $poster,
+                        'date' => 'Latest',
+                    ];
+                }
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items, 'page' => $page], 'Aagmaal catalog fetched');
+}
+
+if ($action === 'extract_aagmaal_details') {
+    list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain) = get_scraper_domains($pdo);
+    $page_url = trim($input['page_url'] ?? '');
+    if (empty($page_url)) json_response(false, [], 'Aagmaal Page URL required');
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $page_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    if (!$html) {
+        json_response(false, [], 'Failed to fetch Aagmaal page');
+    }
+
+    // 1. Extract Title
+    $title = '';
+    if (preg_match('/<h1[^>]*entry-title[^>]*>(?:<span[^>]*itemprop=[\'"]name[\'"][^>]*>)?(.*?)(?:<\/span>)?<\/h1>/is', $html, $m)) {
+        $title = trim(html_entity_decode(strip_tags($m[1])));
+    } elseif (preg_match('/<meta\s+property=[\'"]og:title[\'"]\s+content=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
+        $title = trim(html_entity_decode($m[1]));
+    } elseif (preg_match('/<title>(.*?)<\/title>/i', $html, $m)) {
+        $title = trim(html_entity_decode(preg_replace('/[-|–].*$/', '', $m[1])));
+    }
+
+    // 2. Extract Poster
+    $poster = '';
+    if (preg_match('/<video[^>]+poster=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
+        $poster = $m[1];
+    } elseif (preg_match('/<meta\s+property=[\'"]og:image[\'"]\s+content=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
+        $poster = $m[1];
+    } elseif (preg_match('/"image":\s*\{[^}]*"url":\s*"([^"]+)"/i', $html, $m)) {
+        $poster = stripslashes($m[1]);
+    } elseif (preg_match('/<img[^>]+class=[\'"][^\'"]*wp-post-image[^\'"]*[\'"][^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
+        $poster = $m[1];
+    }
+
+    // 3. Extract Video Stream & Download Links
+    $play_links = [];
+    $seen_urls = [];
+
+    // Primary: direct <source src="..." type="video/mp4">
+    if (preg_match('/<source[^>]+src=[\'"]([^\'"]+)[\'"]/i', $html, $m)) {
+        $src_url = html_entity_decode(trim($m[1]));
+        if (!empty($src_url) && !isset($seen_urls[$src_url])) {
+            $seen_urls[$src_url] = true;
+            $play_links[] = ['name' => 'Server 1 (Direct HD)', 'quality' => '720p', 'url' => $src_url, 'type' => 'MP4/MKV Direct Link'];
+        }
+    }
+
+    // Secondary: download links / streams inside page buttons
+    preg_match_all('/<a[^>]+href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)<\/a>/is', $html, $am);
+    for ($i = 0; $i < count($am[1]); $i++) {
+        $link_url = html_entity_decode(trim($am[1][$i]));
+        $link_text = trim(strip_tags($am[2][$i]));
+        if (empty($link_url) || isset($seen_urls[$link_url])) continue;
+
+        if (strpos($link_url, 'download-hot-web-series') !== false || strpos($link_url, '.mp4') !== false || strpos($link_url, 'streamtape') !== false || strpos($link_url, 'luluvdo') !== false) {
+            $seen_urls[$link_url] = true;
+            $serverNum = count($play_links) + 1;
+            $quality = strpos($link_text, '720') !== false ? '720p' : (strpos($link_text, '480') !== false ? '480p' : '1080p');
+            $type = 'MP4/MKV Direct Link';
+            if (strpos($link_url, 'streamtape') !== false) $type = 'Streamtape Stream';
+            elseif (strpos($link_url, 'luluvdo') !== false) $type = 'Luluvdo Stream';
+
+            $play_links[] = ['name' => "Server $serverNum ($quality)", 'quality' => $quality, 'url' => $link_url, 'type' => $type];
+        }
+    }
+
+    $primary_stream = !empty($play_links) ? $play_links[0]['url'] : '';
+    $hosted_poster = !empty($poster) ? download_and_host_image($poster, $title) : '';
+
+    json_response(true, [
+        'title' => $title,
+        'description' => "Watch $title in full HD online.",
+        'poster' => !empty($hosted_poster) ? $hosted_poster : $poster,
+        'raw_poster' => $poster,
+        'stream_url' => $primary_stream,
+        'play_links' => $play_links,
+        'page_url' => $page_url,
+    ], 'Aagmaal details extracted');
 }
 
 if ($action === 'search_skymovies_posters') {
@@ -4081,6 +4665,113 @@ if ($action === 'resolve_report') {
     } catch (Exception $e) {
         json_response(false, [], $e->getMessage());
     }
+}
+
+//
+// FLY MODE (scraper) SOURCE MANAGER
+// List + save the site configs shown on the Fly Mode page.
+//
+if ($action === 'list_scraper_sources') {
+    try {
+        $rows = $pdo->query("SELECT * FROM scraper_sources ORDER BY sort_order ASC, id ASC")->fetchAll();
+        json_response(true, ['sources' => $rows], 'Sources fetched');
+    } catch (Exception $e) {
+        json_response(true, ['sources' => []], 'Sources fetched');
+    }
+}
+
+if ($action === 'save_scraper_sources') {
+    $items = $input['sources'] ?? [];
+    if (!is_array($items) || count($items) === 0) json_response(false, [], 'No sources provided');
+    try {
+        $upd = $pdo->prepare("UPDATE scraper_sources SET name = ?, logo = ?, domain = ?, search_enabled = ?, is_hidden = ?, sort_order = ? WHERE id = ?");
+        $ins = $pdo->prepare("INSERT INTO scraper_sources (id, name, logo, domain, search_enabled, is_hidden, sort_order) VALUES (?,?,?,?,?,?,?)");
+        foreach ($items as $row) {
+            $id = trim($row['id'] ?? '');
+            if ($id === '') continue;
+            $name = trim($row['name'] ?? $id);
+            $logo = trim($row['logo'] ?? '');
+            $domain = trim($row['domain'] ?? '');
+            $domain = preg_replace('#^https?://#i', '', $domain);
+            $domain = rtrim($domain, '/');
+            $searchEnabled = !empty($row['search_enabled']) ? 1 : 0;
+            $isHidden = !empty($row['is_hidden']) ? 1 : 0;
+            $sortOrder = intval($row['sort_order'] ?? 0);
+
+            $exists = $pdo->prepare("SELECT COUNT(*) FROM scraper_sources WHERE id = ?");
+            $exists->execute([$id]);
+            if (intval($exists->fetchColumn()) > 0) {
+                $upd->execute([$name, $logo, $domain, $searchEnabled, $isHidden, $sortOrder, $id]);
+            } else {
+                $ins->execute([$id, $name, $logo, $domain, $searchEnabled, $isHidden, $sortOrder]);
+            }
+        }
+        json_response(true, [], 'Sources saved successfully');
+    } catch (Exception $e) {
+        json_response(false, [], $e->getMessage());
+    }
+}
+
+//
+// FLY MODE ANALYTICS
+//
+if ($action === 'log_fly_play') {
+    $user_id = intval($input['user_id'] ?? 0);
+    $user_name = trim($input['user_name'] ?? 'Guest');
+    $source_id = trim($input['source_id'] ?? '');
+    $source_name = trim($input['source_name'] ?? '');
+    $video_title = trim($input['video_title'] ?? '');
+    $video_link = trim($input['video_link'] ?? '');
+    $play_action = trim($input['event_type'] ?? $input['action'] ?? 'play');
+    if (!in_array($play_action, ['play', 'download'], true)) $play_action = 'play';
+    if (empty($source_id)) $source_id = 'unknown';
+    if (empty($source_name)) $source_name = $source_id;
+    try {
+        $stmt = $pdo->prepare("INSERT INTO fly_mode_plays (user_id, user_name, source_id, source_name, video_title, video_link, action) VALUES (?,?,?,?,?,?,?)");
+        $stmt->execute([$user_id, $user_name, $source_id, $source_name, $video_title, $video_link, $play_action]);
+        json_response(true, [], 'Logged');
+    } catch (Exception $e) {
+        json_response(true, [], 'Logged');
+    }
+}
+
+if ($action === 'get_fly_mode_analytics') {
+    $total_plays = 0; $total_downloads = 0; $plays_today = 0; $plays_week = 0;
+    $unique_users = 0; $top_sources = []; $top_users = []; $top_videos = []; $recent = [];
+    try {
+        $total_plays = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE action = 'play'")->fetchColumn());
+        $total_downloads = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE action = 'download'")->fetchColumn());
+        $plays_today = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE created_at >= CURDATE()")->fetchColumn());
+        $plays_week = intval($pdo->query("SELECT COUNT(*) FROM fly_mode_plays WHERE created_at >= CURDATE() - INTERVAL 7 DAY")->fetchColumn());
+        $unique_users = intval($pdo->query("SELECT COUNT(DISTINCT user_id) FROM fly_mode_plays WHERE user_id > 0")->fetchColumn());
+
+        $top_sources = $pdo->query("SELECT source_id, source_name, COUNT(*) as plays,
+            SUM(action = 'play') as play_count,
+            SUM(action = 'download') as download_count
+            FROM fly_mode_plays GROUP BY source_id, source_name ORDER BY plays DESC LIMIT 20")->fetchAll();
+
+        $top_users = $pdo->query("SELECT user_id, user_name, COUNT(*) as plays FROM fly_mode_plays
+            WHERE user_id > 0 GROUP BY user_id, user_name ORDER BY plays DESC LIMIT 20")->fetchAll();
+
+        $top_videos = $pdo->query("SELECT video_title, source_name, COUNT(*) as plays, video_link
+            FROM fly_mode_plays WHERE video_title <> '' GROUP BY video_title, source_name, video_link
+            ORDER BY plays DESC LIMIT 20")->fetchAll();
+
+        $recent = $pdo->query("SELECT user_name, source_name, video_title, action, created_at
+            FROM fly_mode_plays ORDER BY id DESC LIMIT 50")->fetchAll();
+    } catch (Exception $e) {}
+
+    json_response(true, [
+        'total_plays'    => $total_plays,
+        'total_downloads'=> $total_downloads,
+        'plays_today'    => $plays_today,
+        'plays_week'     => $plays_week,
+        'unique_users'   => $unique_users,
+        'top_sources'    => $top_sources,
+        'top_users'      => $top_users,
+        'top_videos'     => $top_videos,
+        'recent'         => $recent,
+    ], 'Fly Mode analytics fetched');
 }
 
 // Fallback for unknown or missing action

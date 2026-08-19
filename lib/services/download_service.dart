@@ -17,16 +17,14 @@ class DownloadTask {
   String originalUrl;
   String title;
   String poster;
-  final String filePath;
+  String filePath;
   int total;
   int downloaded;
   DownloadStatus status;
   String? error;
   final int? contentId;
   final int? contentType;
-
-  // Runtime custom HTTP headers (e.g. resolver-provided Referer/Origin). Not persisted.
-  final Map<String, String>? headers;
+  final Map<String, String> headers;
 
   // Runtime metrics (not persisted)
   DateTime? startedAt;
@@ -61,7 +59,7 @@ class DownloadTask {
     this.error,
     this.contentId,
     this.contentType,
-    this.headers,
+    this.headers = const {},
   }) {
     if (originalUrl.isEmpty) originalUrl = url;
   }
@@ -90,6 +88,9 @@ class DownloadTask {
       error: json['error']?.toString(),
       contentId: json['contentId'] as int?,
       contentType: json['contentType'] as int?,
+      headers: (json['headers'] is Map)
+          ? (json['headers'] as Map).map((k, v) => MapEntry(k.toString(), v.toString()))
+          : const {},
     );
   }
 
@@ -106,6 +107,7 @@ class DownloadTask {
         'error': error,
         'contentId': contentId,
         'contentType': contentType,
+        'headers': headers,
       };
 }
 
@@ -211,7 +213,7 @@ class DownloadManager {
   }
 
   Future<DownloadTask?> start(String url, String title,
-      {String poster = '', String originalUrl = '', int? contentId, dynamic contentType, Map<String, String>? headers}) async {
+      {String poster = '', String originalUrl = '', int? contentId, dynamic contentType, Map<String, String> headers = const {}}) async {
     await ensureLoaded();
     if (url.isEmpty) return null;
 
@@ -481,6 +483,18 @@ class DownloadManager {
 
       if (tsUrls.isEmpty) return 'retry';
 
+      // MPEG-TS streams (no #EXT-X-MAP init fragment) must be saved as .ts.
+      // A .mp4 extension on TS content makes AVFoundation fail with
+      // "Cannot Open: media damaged" (OSStatus -12848) when played back.
+      if (initMapUrl == null && task.filePath.endsWith('.mp4')) {
+        final tsPath = task.filePath.substring(0, task.filePath.length - 4) + '.ts';
+        final mp4File = File(task.filePath);
+        if (mp4File.existsSync()) {
+          try { mp4File.renameSync(tsPath); } catch (_) {}
+        }
+        task.filePath = tsPath;
+      }
+
       final file = File(task.filePath);
       sink = file.openWrite(mode: FileMode.append);
       _sinks[task.id] = sink;
@@ -723,11 +737,17 @@ class DownloadManager {
     } else if (combined.contains('fpo')) {
       request.headers['Referer'] = 'https://www.fpo.xxx/';
       request.headers['Origin'] = 'https://www.fpo.xxx';
+    } else if (combined.contains('tnaflix')) {
+      request.headers['Referer'] = 'https://www.tnaflix.com/';
+      request.headers['Origin'] = 'https://www.tnaflix.com';
     } else {
       request.headers['Referer'] = 'https://streamtape.com/';
     }
-    if (task?.headers != null && task!.headers!.isNotEmpty) {
-      request.headers.addAll(task!.headers!);
+    // Server-driven headers (from scraper resolve) override domain defaults
+    if (task != null && task.headers.isNotEmpty) {
+      task.headers.forEach((k, v) {
+        if (v.isNotEmpty) request.headers[k] = v;
+      });
     }
     request.headers['Accept'] = '*/*';
     request.headers['Connection'] = 'keep-alive';

@@ -18,7 +18,7 @@ import 'subscription_vip_screen.dart';
 import 'all_ott_screen.dart';
 import 'navigation_helper.dart';
 import 'downloads_screen.dart';
-import 'foreign_trip_screen.dart';
+import 'fly_mode_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final UserModel user;
@@ -723,9 +723,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Spacer(),
                   GestureDetector(
                     onTap: () {
+                      if (!_isVip) {
+                        showFlyModeVipGate(context);
+                        return;
+                      }
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const ForeignTripScreen()),
+                        MaterialPageRoute(builder: (_) => const FlyModeScreen()),
                       );
                     },
                     child: Container(
@@ -750,7 +754,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icon(Icons.flight_takeoff_rounded, color: Colors.white, size: 18),
                           SizedBox(width: 4),
                           Text(
-                            "TRIP",
+                            "FLY",
                             style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 0.8),
                           ),
                         ],

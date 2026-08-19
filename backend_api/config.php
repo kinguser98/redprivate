@@ -20,13 +20,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 define('STREAMTAPE_LOGIN', 'a43e89ab9e67b46b371f');
 define('STREAMTAPE_KEY', '8wykGo0eJkto7yZ');
 
+// Optional Jina Reader API key (https://jina.ai/reader — free). Empty string =
+// anonymous access (lowest-trust pool, 20 RPM). Setting a key moves requests to
+// the authenticated pool (higher rate limits, less likely to be blocked).
+define('JINA_API_KEY', '');
+
 // ---------------------------------------------------------------------------
 // DATABASE CREDENTIALS — REAL values (already configured)
 // ---------------------------------------------------------------------------
 $db_host = 'localhost';
-$db_user = 'redappsp_flutterred';
-$db_pass = 'Nx&g{&KR7bJj6rAR';
-$db_name = 'redappsp_flutterred';
+$db_user = 'goprivat_redapp';
+$db_pass = '2vHXNVB^beFL{@RC';
+$db_name = 'goprivat_redapp';
 
 // Optional manual override file (loaded safely — a broken file won't 500).
 $localCfg = __DIR__ . '/config.local.php';

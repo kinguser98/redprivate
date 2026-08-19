@@ -117,8 +117,21 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
         tag.contains('EXCLUSIVE');
   }
 
-  Future<void> _playEpisode(String rawUrl, String title) async {
+  Future<void> _playEpisode(String rawUrl, String title, {int episodeIndex = 0}) async {
     ApiService.logView(widget.contentId, 'series');
+
+    List<Map<String, dynamic>>? playlist;
+    if (_seasons.isNotEmpty) {
+      final allEps = _seasons.expand((s) => s.episodes).toList();
+      playlist = allEps.map((e) => {
+        'id': e.id,
+        'title': e.name,
+        'image': e.image,
+        'url': e.playLinks.isNotEmpty ? e.playLinks.first.url : '',
+        'play_links': e.playLinks.map((l) => {'name': l.name, 'url': l.url, 'quality': l.quality}).toList(),
+      }).toList();
+    }
+
     await playVideo(
       context, 
       rawUrl, 
@@ -126,6 +139,8 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
       premium: _isPremium,
       contentId: widget.contentId,
       contentType: 2,
+      playlist: playlist,
+      initialEpisodeIndex: episodeIndex,
     );
   }
 
@@ -204,7 +219,13 @@ class _WebSeriesDetailScreenState extends State<WebSeriesDetailScreen> {
     };
 
     final playEpisodeCallback = (String url, String title) {
-      _playEpisode(url, title);
+      int epIdx = 0;
+      if (_seasons.isNotEmpty) {
+        final allEps = _seasons.expand((s) => s.episodes).toList();
+        final found = allEps.indexWhere((e) => (e.playLinks.isNotEmpty && e.playLinks.first.url == url) || e.name == title);
+        if (found >= 0) epIdx = found;
+      }
+      _playEpisode(url, title, episodeIndex: epIdx);
     };
 
     return AuroraGlassSeriesLayout(

@@ -103,7 +103,25 @@ class _WebSeriesScreenState extends State<WebSeriesScreen> {
   }
 
   Future<void> _playEpisode(dynamic rawUrl, String title, int seriesId) async {
-    await playVideo(context, rawUrl?.toString() ?? '', title, contentId: seriesId, contentType: 2);
+    final seasons = _loadedSeasons[seriesId] ?? [];
+    final allEps = seasons.expand((s) => s.episodes).toList();
+    final epIdx = allEps.indexWhere((e) => (e.playLink != null && e.playLink!.url == rawUrl) || e.name == title);
+    final playlist = allEps.map((e) => {
+      'id': e.id,
+      'title': e.name,
+      'image': e.image,
+      'url': e.playLink != null ? e.playLink!.url : '',
+    }).toList();
+
+    await playVideo(
+      context, 
+      rawUrl?.toString() ?? '', 
+      title, 
+      contentId: seriesId, 
+      contentType: 2,
+      playlist: playlist.isNotEmpty ? playlist : null,
+      initialEpisodeIndex: epIdx >= 0 ? epIdx : 0,
+    );
   }
 
   @override

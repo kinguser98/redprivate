@@ -13,48 +13,131 @@ $page   = isset($_GET['page']) ? intval($_GET['page']) : 1;
 if ($page < 1) $page = 1;
 $query  = isset($_GET['query']) ? trim($_GET['query']) : '';
 
+// ---------------------------------------------------------------------------
+// DB-BACKED SOURCE CONFIG
+// Sources are managed from the hidden admin panel (reorder / hide / domain).
+// The scraper NEVER lets DB trouble kill it: on any failure it falls back to
+// the built-in defaults below, so existing users are never disturbed.
+// ---------------------------------------------------------------------------
+
+function scraper_pdo() {
+    static $pdo = null;
+    if ($pdo !== null) return $pdo;
+
+    // Pull credentials from config.php (regex only, never execute the file so
+    // a DB outage can't exit() the scraper). Mirrors config.php's own
+    // config.local.php override logic.
+    $db_host = 'localhost'; $db_user = 'goprivat_redapp'; $db_pass = '2vHXNVB^beFL{@RC'; $db_name = 'goprivat_redapp';
+    $mainCfg = @file_get_contents(__DIR__ . '/config.php');
+    if ($mainCfg !== false) {
+        if (preg_match("/\\$db_host\\s*=\\s*['\"]([^'\"]*)['\"]/", $mainCfg, $m)) $db_host = $m[1];
+        if (preg_match("/\\$db_user\\s*=\\s*['\"]([^'\"]*)['\"]/", $mainCfg, $m)) $db_user = $m[1];
+        if (preg_match("/\\$db_pass\\s*=\\s*['\"]([^'\"]*)['\"]/", $mainCfg, $m)) $db_pass = $m[1];
+        if (preg_match("/\\$db_name\\s*=\\s*['\"]([^'\"]*)['\"]/", $mainCfg, $m)) $db_name = $m[1];
+    }
+    $localCfg = __DIR__ . '/config.local.php';
+    if (is_file($localCfg)) {
+        $lc = @file_get_contents($localCfg);
+        if ($lc !== false) {
+            if (preg_match("/\\$db_host\\s*=\\s*['\"]([^'\"]*)['\"]/", $lc, $m)) $db_host = $m[1];
+            if (preg_match("/\\$db_user\\s*=\\s*['\"]([^'\"]*)['\"]/", $lc, $m)) $db_user = $m[1];
+            if (preg_match("/\\$db_pass\\s*=\\s*['\"]([^'\"]*)['\"]/", $lc, $m)) $db_pass = $m[1];
+            if (preg_match("/\\$db_name\\s*=\\s*['\"]([^'\"]*)['\"]/", $lc, $m)) $db_name = $m[1];
+        }
+    }
+
+    try {
+        $pdo = new PDO("mysql:host=$db_host;dbname=$db_name;charset=utf8mb4", $db_user, $db_pass, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
+    } catch (Throwable $e) {
+        $pdo = null;
+    }
+    return $pdo;
+}
+
+function scraper_default_sources() {
+    return [
+        ['id' => 'xhamster',        'name' => 'XHamster',        'logo' => 'https://static.xhpingcdn.com/xh-desktop/images/logo.svg', 'domain' => 'xhamster46.desi', 'search_enabled' => true],
+        ['id' => 'deephot',         'name' => 'DeepHot',         'logo' => 'https://deephot.link/wp-content/uploads/2026/08/cropped-favicon-32x32.png', 'domain' => 'deephot.link', 'search_enabled' => true],
+        ['id' => 'xvideos',         'name' => 'XVIDEOS',         'logo' => 'https://www.xvideos2.com/static-files/v3/img/skins/default/logo/xv.white.32.png', 'domain' => 'www.xvideos2.com', 'search_enabled' => true],
+        ['id' => 'tnaflix',         'name' => 'TNAFlix',         'logo' => 'https://www.tnaflix.com/favicon.ico', 'domain' => 'www.tnaflix.com', 'search_enabled' => true],
+        ['id' => 'hqporner',        'name' => 'HQPorner',        'logo' => 'https://m.hqporner.com/favicon.ico', 'domain' => 'm.hqporner.com', 'search_enabled' => true],
+        ['id' => 'javtiful',        'name' => 'Javtiful',        'logo' => 'https://javtiful.com/uploads/site/logo/2026/04/27/215c2694af8e5a2a3b487b6711f22866.png', 'domain' => 'javtiful.com', 'search_enabled' => true],
+        ['id' => 'freepornvideos',  'name' => 'FreePornVideos',  'logo' => 'https://www.freepornvideos.xxx/img/favicon/favicon-32x32.png?v=2.0', 'domain' => 'www.freepornvideos.xxx', 'search_enabled' => true],
+        ['id' => 'cambaddies',      'name' => 'Cambaddies',      'logo' => 'https://www.cambaddies.com/favicon.ico', 'domain' => 'cambaddies.com', 'search_enabled' => false],
+    ];
+}
+
+function scraper_ensure_table($pdo) {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS scraper_sources (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL DEFAULT '',
+            logo VARCHAR(500) DEFAULT NULL,
+            domain VARCHAR(255) NOT NULL DEFAULT '',
+            search_enabled INT NOT NULL DEFAULT 1,
+            is_hidden INT NOT NULL DEFAULT 0,
+            sort_order INT NOT NULL DEFAULT 0,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        // INSERT IGNORE per default id — adds any missing built-in source
+        // (e.g. cambaddies) without overwriting admin-edited domains/order.
+        $ins = $pdo->prepare("INSERT IGNORE INTO scraper_sources (id, name, logo, domain, search_enabled, is_hidden, sort_order) VALUES (?,?,?,?,?,0,?)");
+        $i = 1;
+        foreach (scraper_default_sources() as $d) {
+            $ins->execute([$d['id'], $d['name'], $d['logo'], $d['domain'], $d['search_enabled'] ? 1 : 0, $i++]);
+        }
+    } catch (Throwable $e) {}
+}
+
+function scraper_sources_config() {
+    $pdo = scraper_pdo();
+    if ($pdo) {
+        scraper_ensure_table($pdo);
+        try {
+            $rows = $pdo->query("SELECT * FROM scraper_sources ORDER BY sort_order ASC, id ASC")->fetchAll();
+            if (count($rows) > 0) return $rows;
+        } catch (Throwable $e) {}
+    }
+    return scraper_default_sources();
+}
+
+function get_source_config($id) {
+    foreach (scraper_sources_config() as $s) {
+        if ($s['id'] === $id) return $s;
+    }
+    return null;
+}
+
+// Base URL (https:// + configured domain, scheme/trailing-slash stripped).
+function source_base_url($id, $fallback) {
+    $s = get_source_config($id);
+    if ($s && !empty($s['domain'])) {
+        $d = trim($s['domain']);
+        $d = preg_replace('#^https?://#i', '', $d);
+        $d = rtrim($d, '/');
+        if ($d !== '') return 'https://' . $d;
+    }
+    return $fallback;
+}
+
 if ($action === 'list_sources') {
-    echo json_encode([
-        'status' => 'success',
-        'sources' => [
-            [
-                'id' => 'xhamster',
-                'name' => 'XHamster',
-                'logo' => 'https://static.xhpingcdn.com/xh-desktop/images/logo.svg',
-                'search_enabled' => true
-            ],
-            [
-                'id' => 'deephot',
-                'name' => 'DeepHot',
-                'logo' => 'https://deephot.link/wp-content/uploads/2026/08/cropped-favicon-32x32.png',
-                'search_enabled' => true
-            ],
-            [
-                'id' => 'xvideos',
-                'name' => 'XVIDEOS',
-                'logo' => 'https://www.xvideos2.com/static-files/v3/img/skins/default/logo/xv.white.32.png',
-                'search_enabled' => true
-            ],
-            [
-                'id' => 'tnaflix',
-                'name' => 'TNAFlix',
-                'logo' => 'https://www.tnaflix.com/favicon.ico',
-                'search_enabled' => true
-            ],
-            [
-                'id' => 'redtube',
-                'name' => 'RedTube',
-                'logo' => 'https://www.redtube.com/favicon.ico',
-                'search_enabled' => true
-            ],
-            [
-                'id' => 'spankbang',
-                'name' => 'SpankBang',
-                'logo' => 'https://spankbang.com/favicon.ico',
-                'search_enabled' => true
-            ]
-        ]
-    ]);
+    $out = [];
+    foreach (scraper_sources_config() as $s) {
+        if (!empty($s['is_hidden'])) continue;
+        $out[] = [
+            'id' => $s['id'],
+            'name' => $s['name'],
+            'logo' => $s['logo'],
+            'domain' => trim($s['domain']),
+            'search_enabled' => !empty($s['search_enabled']),
+            'sort_order' => intval($s['sort_order'] ?? 0),
+        ];
+    }
+    echo json_encode(['status' => 'success', 'sources' => $out]);
     exit;
 }
 
@@ -173,6 +256,22 @@ if ($action === 'fetch_categories') {
         exit;
     }
 
+    if ($source === 'hqporner') {
+        // Living list parsed from /categories (quickLink cards).
+        $html = getCurl(source_base_url('hqporner', 'https://m.hqporner.com') . '/categories', source_base_url('hqporner', 'https://m.hqporner.com') . '/');
+        $cats = [];
+        if (preg_match_all('#<a href="/category/([^"]+)"[^>]*class="quickLink[^"]*">\s*<span class="quickLinkIcon">.*?alt="([^"]+)"#s', $html, $cm, PREG_SET_ORDER)) {
+            foreach ($cm as $cv) {
+                $slug = trim($cv[1]);
+                $name = html_entity_decode(trim($cv[2]), ENT_QUOTES);
+                if ($slug === '' || $name === '') continue;
+                $cats[] = ['slug' => $slug, 'name' => $name];
+            }
+        }
+        echo json_encode(['status' => 'success', 'source' => $source, 'categories' => $cats]);
+        exit;
+    }
+
     echo json_encode(['status' => 'success', 'source' => $source, 'categories' => []]);
     exit;
 }
@@ -267,7 +366,8 @@ function getCurlEporner($url, $needle = '') {
 }
 
 function getCurlTnaflix($url, $needle = '') {
-    return getCurlPinned($url, 'www.tnaflix.com', $needle, []);
+    $host = parse_url(source_base_url('tnaflix', 'https://www.tnaflix.com'), PHP_URL_HOST);
+    return getCurlPinned($url, $host, $needle, []);
 }
 
 // Fetch a source page through the Jina reader proxy. RedTube/SpankBang sit
@@ -440,7 +540,7 @@ function parseTnaflixCards($html) {
             if (!preg_match($hrefRe, $block, $hm)) continue;
             $href = trim($hm[1]);
             if (strpos($href, 'http') !== 0) {
-                $href = 'https://www.tnaflix.com' . (strpos($href, '/') === 0 ? '' : '/') . $href;
+                $href = source_base_url('tnaflix', 'https://www.tnaflix.com') . (strpos($href, '/') === 0 ? '' : '/') . $href;
             }
             if (isset($seen[$href])) continue;
 
@@ -529,31 +629,96 @@ function parseRedtubeApi($json) {
     return $items;
 }
 
+// Parse HQPorner (m.hqporner.com) grid cards. Every grid type shares the
+// same block: an .img-container wrapper with the /hdporn/{id}-{slug}.html link,
+// poster <img alt> and a meta_data duration badge. Streams themselves live on
+// the mydaddy.cc embed player (see resolve_item) — no age-gate, no tokens.
+function parseHqpornerCards($html) {
+    $items = [];
+    $seen = [];
+    if (preg_match_all('#<div class="img-container">\s*<a href="(/hdporn/[^"]+)"[^>]*>\s*<img src="([^"]+)"[^>]*alt="([^"]*)"[^>]*></a>\s*</div>.*?<span class="meta_data">.*?<i class="fa fa-clock-o"[^>]*></i>\s*([^<]*)#s', $html, $cards, PREG_SET_ORDER)) {
+        foreach ($cards as $card) {
+            $link = trim($card[1]);
+            if (strpos($link, 'http') !== 0) {
+                $link = source_base_url('hqporner', 'https://m.hqporner.com') . $link;
+            }
+            if (isset($seen[$link])) continue;
+            $poster = trim($card[2]);
+            if (strpos($poster, '//') === 0) {
+                $poster = 'https:' . $poster;
+            }
+            $title = html_entity_decode(trim($card[3]), ENT_QUOTES);
+            $duration = trim(preg_replace('/\s+/', ' ', $card[4]));
+            if ($title === '' || $link === '' || $poster === '') continue;
+            $seen[$link] = true;
+            $items[] = ['title' => $title, 'link' => $link, 'poster' => $poster, 'duration' => $duration];
+        }
+    }
+    return $items;
+}
+
 // Parse SpankBang video-item cards (homepage, /{cat}/ and /s/{q}/ share the
 // same markup). Each card holds the /{base36id}/video/{slug} link, the poster
 // <img src>, its alt title and a data-testid="video-item-length" badge.
 function parseSpankbangCards($html) {
     $items = [];
     $seen = [];
-    if (preg_match_all('#<div data-testid="video-item"[^>]*>.*?<a href="((?:/[a-z0-9]+)/video/[^"]+)"[^>]*>.*?<img[^>]+(?:data-src|src)="([^"]+)"[^>]*alt="([^"]*)"[^>]*>.*?data-testid="video-item-length">\s*([^<]*?)\s*</div>#s', $html, $cards, PREG_SET_ORDER)) {
+    if (empty($html)) return $items;
+    
+    if (preg_match_all('#<a[^>]+href="([^"]*/video/[^"]*)"[^>]*>(.*?)</a>#is', $html, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $m) {
+            $link = trim($m[1]);
+            if (strpos($link, 'http') !== 0) {
+                $link = 'https://spankbang.com' . (strpos($link, '/') === 0 ? '' : '/') . $link;
+            }
+            if (isset($seen[$link])) continue;
+            
+            $inner = $m[2];
+            $title = '';
+            if (preg_match('#alt="([^"]+)"#i', $inner, $tm)) {
+                $title = trim($tm[1]);
+            } elseif (preg_match('#title="([^"]+)"#i', $m[0], $tm2)) {
+                $title = trim($tm2[1]);
+            }
+            
+            $poster = '';
+            if (preg_match('#(?:data-src|data-srcset|src)="([^"]+)"#i', $inner, $pm)) {
+                $poster = trim($pm[1]);
+            }
+            
+            $duration = '';
+            if (preg_match('#(?:class="[^"]*(?:l|length|duration)[^"]*"|data-testid="video-item-length")[^>]*>\s*([^<]+)\s*<#i', $inner, $dm)) {
+                $duration = trim($dm[1]);
+            }
+            
+            if (!empty($title) && !empty($poster) && strpos($poster, 'blank.gif') === false) {
+                $seen[$link] = true;
+                $items[] = [
+                    'title' => html_entity_decode($title, ENT_QUOTES, 'UTF-8'),
+                    'link' => $link,
+                    'poster' => $poster,
+                    'duration' => $duration
+                ];
+            }
+        }
+    }
+    
+    if (count($items) < 5 && preg_match_all('#<a[^>]+href="((?:/[a-z0-9]+)?/video/[^"]+)"[^>]*>.*?<img[^>]+(?:data-src|src)="([^"]+)"[^>]*alt="([^"]*)"#s', $html, $cards, PREG_SET_ORDER)) {
         foreach ($cards as $card) {
             $link = trim($card[1]);
             if (strpos($link, 'http') !== 0) {
-                $link = 'https://spankbang.com' . $link;
+                $link = 'https://spankbang.com' . (strpos($link, '/') === 0 ? '' : '/') . $link;
             }
             if (isset($seen[$link])) continue;
-
             $poster = trim($card[2]);
             $title = trim($card[3]);
-            $duration = isset($card[4]) ? preg_replace('/\s+/', ' ', trim($card[4])) : '';
-
             if (empty($title) || empty($poster)) continue;
             $seen[$link] = true;
             $items[] = [
-                'title' => $title,
+                'title' => html_entity_decode($title, ENT_QUOTES, 'UTF-8'),
                 'link' => $link,
                 'poster' => $poster,
-                'duration' => $duration
+                'duration' => ''
             ];
         }
     }
@@ -588,16 +753,23 @@ function getCurlDoh($host) {
 }
 
 if ($action === 'fetch_grid') {
+    // Live cam site (Cambaddies) — the app opens it in an in-app browser,
+    // never a scraper grid. Return a graceful no-op for safety.
+    if ($source === 'cambaddies') {
+        echo json_encode(['status' => 'success', 'page' => $page, 'query' => $query, 'is_live_cams' => true, 'items' => []]);
+        exit;
+    }
     // -------------------------------------------------------------
     // SOURCE 1: XHAMSTER (Un-blurred high-res WebP posters)
     // -------------------------------------------------------------
     if ($source === 'xhamster') {
+        $site = source_base_url('xhamster', 'https://xhamster46.desi');
         $searchKey = !empty($query) ? $query : 'Indian';
         $encodedQuery = urlencode($searchKey);
         
-        $targetUrl = "https://xhamster46.desi/search/{$encodedQuery}";
+        $targetUrl = "$site/search/{$encodedQuery}";
         if ($page > 1) {
-            $targetUrl = "https://xhamster46.desi/search/{$encodedQuery}?page={$page}";
+            $targetUrl = "$site/search/{$encodedQuery}?page={$page}";
         }
 
         $html = getCurl($targetUrl);
@@ -619,7 +791,7 @@ if ($action === 'fetch_grid') {
 
                     if (!empty($title) && !empty($href) && !empty($poster)) {
                         if (strpos($href, 'http') !== 0) {
-                            $href = 'https://xhamster46.desi' . (strpos($href, '/') === 0 ? '' : '/') . $href;
+                            $href = $site . (strpos($href, '/') === 0 ? '' : '/') . $href;
                         }
 
                         // REMOVE BLUR MODIFIER b(2), WHILE PRESERVING VALID WEBP EXTENSION
@@ -648,7 +820,7 @@ if ($action === 'fetch_grid') {
                 $href = $link->getAttribute('href');
                 if (empty($href) || strpos($href, '/videos/') === false) continue;
                 if (strpos($href, 'http') !== 0) {
-                    $href = 'https://xhamster46.desi' . (strpos($href, '/') === 0 ? '' : '/') . $href;
+                    $href = $site . (strpos($href, '/') === 0 ? '' : '/') . $href;
                 }
                 if (isset($seenUrls[$href])) continue;
 
@@ -698,15 +870,16 @@ if ($action === 'fetch_grid') {
     // SOURCE 2: DEEPHOT (Strictly scoped search results without sidebar duplicate noise)
     // -------------------------------------------------------------
     if ($source === 'deephot') {
-        $targetUrl = 'https://deephot.link/';
+        $site = source_base_url('deephot', 'https://deephot.link');
+        $targetUrl = $site . '/';
         if (!empty($query)) {
-            $targetUrl = 'https://deephot.link/?s=' . urlencode($query);
+            $targetUrl = $site . '/?s=' . urlencode($query);
             if ($page > 1) {
-                $targetUrl = 'https://deephot.link/page/' . $page . '/?s=' . urlencode($query);
+                $targetUrl = $site . '/page/' . $page . '/?s=' . urlencode($query);
             }
         } else {
             if ($page > 1) {
-                $targetUrl = 'https://deephot.link/page/' . $page . '/';
+                $targetUrl = $site . '/page/' . $page . '/';
             }
         }
 
@@ -737,7 +910,7 @@ if ($action === 'fetch_grid') {
                 $h = $a->getAttribute('href');
                 $t = $a->getAttribute('title');
                 if (empty($t)) $t = trim($a->textContent);
-                if (!empty($h) && strpos($h, 'deephot.link') !== false && strlen($t) > 3 && strpos($h, '/category/') === false && strpos($h, '/tag/') === false && strpos($h, '/page/') === false) {
+                if (!empty($h) && strpos($h, $site) !== false && strlen($t) > 3 && strpos($h, '/category/') === false && strpos($h, '/tag/') === false && strpos($h, '/page/') === false) {
                     $href = $h;
                     $title = $t;
                     break;
@@ -767,7 +940,7 @@ if ($action === 'fetch_grid') {
 
         // Fallback to general links if articles query was empty
         if (count($items) < 5) {
-            $links = $xpath->query('//a[contains(@href, "deephot.link/")]');
+            $links = $xpath->query('//a[contains(@href, "' . parse_url($site, PHP_URL_HOST) . '/")]');
             foreach ($links as $link) {
                 $href = $link->getAttribute('href');
                 if (empty($href) || strpos($href, '/category/') !== false || strpos($href, '/tag/') !== false || strpos($href, '/page/') !== false) continue;
@@ -808,17 +981,18 @@ if ($action === 'fetch_grid') {
     // SOURCE: XVIDEOS (www.xvideos2.com mirror) - default feed = Indian search
     // -------------------------------------------------------------
     if ($source === 'xvideos') {
-        $targetUrl = 'https://www.xvideos2.com/';
+        $site = source_base_url('xvideos', 'https://www.xvideos2.com');
+        $targetUrl = $site . '/';
         if (!empty($query)) {
-            $targetUrl = 'https://www.xvideos2.com/?k=' . urlencode($query);
+            $targetUrl = $site . '/?k=' . urlencode($query);
             if ($page > 1) $targetUrl .= '&p=' . $page;
         } else {
             // Default home = Indian content
-            $targetUrl = 'https://www.xvideos2.com/?k=indian';
+            $targetUrl = $site . '/?k=indian';
             if ($page > 1) $targetUrl .= '&p=' . $page;
         }
 
-        $html = getCurl($targetUrl, 'https://www.xvideos2.com/');
+        $html = getCurl($targetUrl, $site . '/');
         if (empty($html)) {
             echo json_encode(['status' => 'error', 'message' => 'Failed to fetch XVIDEOS grid']);
             exit;
@@ -867,7 +1041,7 @@ if ($action === 'fetch_grid') {
 
             if (!empty($title) && !empty($poster) && strpos($poster, 'blank.gif') === false) {
                 if (strpos($href, 'http') !== 0) {
-                    $href = 'https://www.xvideos2.com' . (strpos($href, '/') === 0 ? '' : '/') . $href;
+                    $href = $site . (strpos($href, '/') === 0 ? '' : '/') . $href;
                 }
                 $seen[$href] = true;
                 $items[] = [
@@ -888,7 +1062,7 @@ if ($action === 'fetch_grid') {
                     if (isset($seen[$href])) continue;
                     $poster = isset($tp[1][$i]) ? trim($tp[1][$i]) : '';
                     if (strpos($href, 'http') !== 0) {
-                        $href = 'https://www.xvideos2.com' . (strpos($href, '/') === 0 ? '' : '/') . $href;
+                        $href = $site . (strpos($href, '/') === 0 ? '' : '/') . $href;
                     }
                     $seen[$href] = true;
                     $items[] = [
@@ -917,10 +1091,11 @@ if ($action === 'fetch_grid') {
     // (The /{slug}/videos URLs are 404 pages that still render generic cards.)
     // -------------------------------------------------------------
     if ($source === 'tnaflix') {
+        $site = source_base_url('tnaflix', 'https://www.tnaflix.com');
         $category = isset($_GET['category']) ? trim($_GET['category']) : '';
         if (!empty($query)) {
             // /search?what=... returns the same <div data-vid> card markup.
-            $targetUrl = "https://www.tnaflix.com/search?what=" . urlencode($query);
+            $targetUrl = "$site/search?what=" . urlencode($query);
             if ($page > 1) {
                 $targetUrl .= "&page={$page}";
             }
@@ -929,7 +1104,7 @@ if ($action === 'fetch_grid') {
             if (empty($category)) {
                 $category = 'milf-porn';
             }
-            $targetUrl = "https://www.tnaflix.com/{$category}";
+            $targetUrl = "$site/{$category}";
             if ($page > 1) {
                 $targetUrl .= "/featured/{$page}";
             }
@@ -945,6 +1120,47 @@ if ($action === 'fetch_grid') {
             'category' => $category,
             'items' => $items
         ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // SOURCE: HQPORNER (m.hqporner.com server-rendered cards)
+    // No Cloudflare / age-gate. Grids: homepage (/?p=N), category
+    // (/category/{slug}/{N}) and search (/?q={q}&p={N}). Streams resolve via
+    // the mydaddy.cc embed player (server-side, ~6 KB per resolve).
+    // -------------------------------------------------------------
+    if ($source === 'hqporner') {
+        $site = source_base_url('hqporner', 'https://m.hqporner.com');
+        $category = isset($_GET['category']) ? trim($_GET['category']) : '';
+        if (!empty($query)) {
+            $targetUrl = $site . '/?q=' . urlencode($query);
+            if ($page > 1) $targetUrl .= '&p=' . $page;
+        } elseif (!empty($category)) {
+            $targetUrl = $site . '/category/' . urlencode($category);
+            if ($page > 1) $targetUrl .= '/' . $page;
+        } else {
+            $targetUrl = $site . '/';
+            if ($page > 1) $targetUrl .= '?p=' . $page;
+        }
+
+        $html = getCurl($targetUrl, $site . '/');
+        $items = $html !== '' ? parseHqpornerCards($html) : [];
+
+        $out = [
+            'status' => 'success',
+            'page' => $page,
+            'query' => $query,
+            'category' => $category,
+            'items' => $items
+        ];
+        if (isset($_GET['debug'])) {
+            $out['debug'] = [
+                'grid_url' => $targetUrl,
+                'html_len' => strlen($html ?? ''),
+                'head' => substr(preg_replace('/\s+/', ' ', $html ?? ''), 0, 160)
+            ];
+        }
+        echo json_encode($out);
         exit;
     }
 
@@ -988,6 +1204,163 @@ if ($action === 'fetch_grid') {
     }
 
     // -------------------------------------------------------------
+    // SOURCE: JAVTIFUL (server-rendered front-video-card blocks)
+    // Default feed = /videos, browse paths = /censored, /uncensored,
+    // /reducing-mosaic, search = /search?q={q}. All paginate with ?page=N.
+    // Full streams are not on the grid; they surface via /embed/{id} in
+    // resolve_item. Partner ad cards (front-partner-card) are skipped.
+    // -------------------------------------------------------------
+    if ($source === 'javtiful') {
+        $site = source_base_url('javtiful', 'https://javtiful.com');
+        $category = isset($_GET['category']) ? trim($_GET['category']) : '';
+        if (!empty($query)) {
+            $targetUrl = $site . '/search?q=' . urlencode($query);
+            if ($page > 1) $targetUrl .= '&page=' . $page;
+        } elseif (!empty($category) && in_array($category, ['censored', 'uncensored', 'reducing-mosaic'], true)) {
+            $targetUrl = $site . '/' . $category;
+            if ($page > 1) $targetUrl .= '?page=' . $page;
+        } else {
+            $targetUrl = $site . '/videos';
+            if ($page > 1) $targetUrl .= '?page=' . $page;
+        }
+
+        $html = getCurl($targetUrl, $site . '/');
+        $items = [];
+        $seen = [];
+        if (!empty($html) && preg_match_all('#<article class="front-video-card(?!\s*front-partner)[^"]*">(.*?)</article>#s', $html, $cards)) {
+            foreach ($cards[1] as $card) {
+                if (!preg_match('#<a href="(/video/\d+/[^"]+)" class="front-video-thumb"#', $card, $hm)) continue;
+                $href = $site . $hm[1];
+                if (isset($seen[$href])) continue;
+
+                $title = '';
+                if (preg_match('#class="front-video-title"[^>]*>(.*?)</a>#s', $card, $tm)) {
+                    $title = trim(preg_replace('/\s+/', ' ', trim(strip_tags($tm[1]))));
+                }
+                if (empty($title) && preg_match('#<img[^>]+alt="([^"]*)"#', $card, $tm2)) {
+                    $title = trim($tm2[1]);
+                }
+
+                $poster = '';
+                if (preg_match('#data-front-lazy-src="([^"]+)"#', $card, $pm)) $poster = trim($pm[1]);
+                if (empty($poster) && preg_match('#<img[^>]+src="([^"]+)"#', $card, $pm2)) $poster = trim($pm2[1]);
+                if (strpos($poster, 'video-thumb-placeholder') !== false) $poster = '';
+                if (!empty($poster) && strpos($poster, 'http') !== 0) $poster = $site . $poster;
+
+                $duration = '';
+                if (preg_match('#class="front-duration-tag"[^>]*>([^<]*)</span>#', $card, $dm)) {
+                    $duration = trim($dm[1]);
+                }
+
+                if (!empty($title) && !empty($poster)) {
+                    $seen[$href] = true;
+                    $items[] = [
+                        'title' => $title,
+                        'link' => $href,
+                        'poster' => $poster,
+                        'duration' => $duration
+                    ];
+                }
+            }
+        }
+
+        $out = [
+            'status' => 'success',
+            'page' => $page,
+            'query' => $query,
+            'category' => $category,
+            'items' => $items
+        ];
+        if (isset($_GET['debug'])) {
+            $out['debug'] = [
+                'grid_url' => $targetUrl,
+                'html_len' => strlen($html ?? ''),
+                'head' => substr(preg_replace('/\s+/', ' ', $html ?? ''), 0, 160)
+            ];
+        }
+        echo json_encode($out);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // SOURCE: FREEPORNVIDEOS (www.freepornvideos.xxx, server-rendered
+    // list-videos > .item cards). Default feed = homepage, paginate with ?p=N.
+    // Search = /search/{q}/ (also paginable with ?p=N). Posters live on
+    // img.freepornvideos.xxx (lazy data-src on the homepage, plain src on
+    // paginated pages). Streams (get_file 302 -> IP-bound fpvcdn) are resolved
+    // on-device in the app via FreepornvideosResolver, not here.
+    // -------------------------------------------------------------
+    if ($source === 'freepornvideos') {
+        $site = source_base_url('freepornvideos', 'https://www.freepornvideos.xxx');
+        if (!empty($query)) {
+            $targetUrl = $site . '/search/' . rawurlencode($query) . '/';
+            if ($page > 1) $targetUrl .= '?p=' . $page;
+        } else {
+            $targetUrl = $site . '/';
+            if ($page > 1) $targetUrl .= '?p=' . $page;
+        }
+
+        $html = getCurl($targetUrl, $site . '/');
+        $items = [];
+        $seen = [];
+        if (!empty($html) && preg_match_all('#<div class="item[^"]*">(.*?)(?=<div class="item[^"]*">|$)#s', $html, $blocks)) {
+            foreach ($blocks[1] as $block) {
+                if (!preg_match('#<a href="(https://[^"]*/videos/[^"]*/)"#', $block, $hm)) continue;
+                $href = trim($hm[1]);
+                if (isset($seen[$href])) continue;
+
+                $title = '';
+                if (preg_match('#<strong class="title">\s*(.*?)\s*</strong>#s', $block, $tm)) {
+                    $title = trim(preg_replace('/\s+/', ' ', trim($tm[1])));
+                }
+                if (empty($title) && preg_match('#<img[^>]+alt="([^"]*)"#', $block, $tm2)) {
+                    $title = trim($tm2[1]);
+                }
+
+                $poster = '';
+                if (preg_match('#data-src="([^"]+)"#', $block, $pm)) {
+                    $poster = trim($pm[1]);
+                }
+                if (empty($poster) && preg_match('#<img[^>]+src="(https://[^"]+)"#', $block, $pm2)) {
+                    $poster = trim($pm2[1]);
+                }
+
+                $duration = '';
+                if (preg_match('#class="duration"[^>]*>\s*(.*?)\s*</span>#s', $block, $dm)) {
+                    $d = trim(preg_replace('/\s+/', ' ', trim($dm[1])));
+                    if (preg_match('#\d+:\d+#', $d, $dd)) $duration = $dd[0];
+                }
+
+                if (!empty($title) && !empty($href)) {
+                    $seen[$href] = true;
+                    $items[] = [
+                        'title' => $title,
+                        'link' => $href,
+                        'poster' => $poster,
+                        'duration' => $duration
+                    ];
+                }
+            }
+        }
+
+        $out = [
+            'status' => 'success',
+            'page' => $page,
+            'query' => $query,
+            'items' => $items
+        ];
+        if (isset($_GET['debug'])) {
+            $out['debug'] = [
+                'grid_url' => $targetUrl,
+                'html_len' => strlen($html ?? ''),
+                'head' => substr(preg_replace('/\s+/', ' ', $html ?? ''), 0, 160)
+            ];
+        }
+        echo json_encode($out);
+        exit;
+    }
+
+    // -------------------------------------------------------------
     // SOURCE: SPANKBANG (server-rendered video-item cards)
     // Homepage, /{cat}/ and /s/{q}/ all share data-testid="video-item"
     // markup. Playable streams are time-token HLS resolved in resolve_item.
@@ -996,17 +1369,16 @@ if ($action === 'fetch_grid') {
         $category = isset($_GET['category']) ? trim($_GET['category']) : '';
         if (!empty($query)) {
             $targetUrl = "https://spankbang.com/s/" . rawurlencode($query) . "/";
-            if ($page > 1) $targetUrl .= "?page={$page}";
+            if ($page > 1) $targetUrl .= "{$page}/";
         } elseif (!empty($category)) {
-            // Category browsing moved to /s/{slug}/ (search-style URLs).
-            $targetUrl = "https://spankbang.com/s/" . rawurlencode($category) . "/";
-            if ($page > 1) $targetUrl .= "?page={$page}";
+            $targetUrl = "https://spankbang.com/cat/" . rawurlencode($category) . "/";
+            if ($page > 1) $targetUrl .= "{$page}/";
         } else {
-            $targetUrl = "https://spankbang.com/";
-            if ($page > 1) $targetUrl .= "?page={$page}";
+            $targetUrl = "https://spankbang.com/trending_videos/";
+            if ($page > 1) $targetUrl .= "{$page}/";
         }
 
-        $html = fetchPornSource($targetUrl, 'spankbang.com', 'video-item');
+        $html = fetchPornSource($targetUrl, 'spankbang.com', '/video/');
         $items = $html !== '' ? parseSpankbangCards($html) : [];
 
         $out = [
@@ -1035,13 +1407,17 @@ if ($action === 'resolve_item') {
         exit;
     }
 
+    $xvideosSite = source_base_url('xvideos', 'https://www.xvideos2.com');
+    $tnaflixSite = source_base_url('tnaflix', 'https://www.tnaflix.com');
+    $javtifulSite = source_base_url('javtiful', 'https://javtiful.com');
+
     $isXvideos = (strpos($detailUrl, 'xvideos') !== false || strpos($detailUrl, 'xv-cdn') !== false);
     $uaUsed = 'chrome';
-    $html = $isXvideos ? getCurl($detailUrl, 'https://www.xvideos2.com/') : getCurl($detailUrl);
+    $html = $isXvideos ? getCurl($detailUrl, $xvideosSite . '/') : getCurl($detailUrl);
     if ($isXvideos && (empty($html) || strpos($html, '.m3u8') === false)) {
         // Some datacenter IPs get a stripped page with the default UA.
         // Retry with a Googlebot-like UA, which is served the full player page.
-        $html = getCurl($detailUrl, 'https://www.xvideos2.com/', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
+        $html = getCurl($detailUrl, $xvideosSite . '/', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
         $uaUsed = 'googlebot';
     }
     $qualities = [];
@@ -1066,7 +1442,7 @@ if ($action === 'resolve_item') {
         }
 
         if (!empty($masterUrl)) {
-            $pl = getCurl($masterUrl, 'https://www.xvideos2.com/');
+            $pl = getCurl($masterUrl, $xvideosSite . '/');
             $base = substr($masterUrl, 0, strrpos($masterUrl, '/') + 1);
             if (!empty($pl) && preg_match_all('#EXT-X-STREAM-INF:[^\r\n]*RESOLUTION=[0-9]+x([0-9]+)[^\r\n]*\r?\n\s*([^\r\n]+)#i', $pl, $pm, PREG_SET_ORDER)) {
                 foreach ($pm as $pv) {
@@ -1105,8 +1481,8 @@ if ($action === 'resolve_item') {
             // client just forwards whatever Referer/Origin the resolver declares.
             if ($isXvideos) {
                 $out['headers'] = [
-                    'Referer' => 'https://www.xvideos2.com/',
-                    'Origin' => 'https://www.xvideos2.com'
+                    'Referer' => $xvideosSite . '/',
+                    'Origin' => $xvideosSite
                 ];
             }
             if (isset($_GET['debug'])) {
@@ -1246,7 +1622,19 @@ if ($action === 'resolve_item') {
                     'tokens' => array_keys($tokens),
                     'hls_json_len' => isset($hlsJson) ? strlen($hlsJson) : 0,
                     'mp4_json_len' => isset($mp4Json) ? strlen($mp4Json) : 0,
-                    'hls_json_sample' => isset($hlsJson) ? substr($hlsJson, 0, 500) : '',
+                    'hls_head' => isset($hlsJson) ? substr($hlsJson, 0, 2800) : '',
+                    'hls_tail' => isset($hlsJson) ? substr($hlsJson, -2000) : '',
+                    'mp4_head' => isset($mp4Json) ? substr($mp4Json, 0, 800) : '',
+                    'embed_mp4s' => (function () use ($html) {
+                        if (empty($html)) return [];
+                        preg_match_all('#https?://[^\s"\x27<>]+\.mp4[^\s"\x27<>]*#i', $html, $mm);
+                        return array_slice(array_unique($mm[0]), 0, 12);
+                    })(),
+                    'embed_hls' => (function () use ($html) {
+                        if (empty($html)) return [];
+                        preg_match_all('#https?://[^\s"\x27<>]+\.m3u8[^\s"\x27<>]*#i', $html, $mm);
+                        return array_slice(array_unique($mm[0]), 0, 6);
+                    })(),
                     'head' => substr(preg_replace('/\s+/', ' ', $html ?? ''), 0, 200)
                 ]
             ]);
@@ -1370,8 +1758,72 @@ if ($action === 'resolve_item') {
                 'status' => 'success',
                 'qualities' => $qualities,
                 'headers' => [
-                    'Referer' => 'https://www.tnaflix.com/',
-                    'Origin' => 'https://www.tnaflix.com'
+                    'Referer' => $tnaflixSite . '/',
+                    'Origin' => $tnaflixSite
+                ]
+            ]);
+            exit;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // JAVTIFUL: full streams live on the /embed/{id} player page, not the
+    // detail page. The player config JSON exposes playerSources[{src, type,
+    // size}] and the page also carries a native <video><source>. Direct MP4
+    // on fast-stream.jav.si (range-capable, no token/IP binding) - one
+    // quality per file (usually 720p).
+    // -------------------------------------------------------------
+    if (strpos($detailUrl, 'javtiful') !== false) {
+        $videoId = '';
+        if (preg_match('#/(?:video|embed)/(\d+)#', $detailUrl, $idm)) {
+            $videoId = $idm[1];
+        }
+        $embed = '';
+        if (!empty($videoId)) {
+            $embed = getCurl($javtifulSite . '/embed/' . $videoId, $javtifulSite . '/');
+        }
+        $sizes = [];
+        if (!empty($embed)) {
+            if (preg_match_all('#"src":"(https://fast-stream\.jav\.si/[^"]+)"[^}]*?"size":(\d+)#', $embed, $sm, PREG_SET_ORDER)) {
+                foreach ($sm as $sv) {
+                    $res = (int) $sv[2];
+                    if ($res > 0) $sizes[$res] = $sv[1];
+                }
+            }
+            if (empty($sizes) && preg_match_all('#(?i)<source\s+[^>]*src="(https://fast-stream\.jav\.si/[^"]+)"#', $embed, $sm2)) {
+                foreach ($sm2[1] as $u) {
+                    $sizes[720] = trim($u);
+                }
+            }
+            if (empty($sizes) && preg_match_all('#https://fast-stream\.jav\.si/[^"<>\s]+#', $embed, $sm3)) {
+                $sizes[720] = $sm3[0][0];
+            }
+        }
+        foreach ($sizes as $res => $url) {
+            $label = $res >= 2160 ? '4K' : ($res . 'p');
+            if (!isset($qualities[$label])) $qualities[$label] = $url;
+        }
+        if (!empty($qualities)) {
+            echo json_encode([
+                'status' => 'success',
+                'qualities' => $qualities,
+                'headers' => [
+                    'Referer' => $javtifulSite . '/',
+                    'Origin' => $javtifulSite
+                ]
+            ]);
+            exit;
+        }
+        if (isset($_GET['debug'])) {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Javtiful resolve failed',
+                'debug' => [
+                    'host' => 'javtiful.com',
+                    'video_id' => $videoId,
+                    'embed_len' => strlen($embed ?? ''),
+                    'has_sources' => $embed !== null && strpos($embed, 'fast-stream') !== false,
+                    'head' => substr(preg_replace('/\s+/', ' ', $embed ?? ''), 0, 200)
                 ]
             ]);
             exit;

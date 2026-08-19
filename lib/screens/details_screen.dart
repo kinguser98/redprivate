@@ -142,9 +142,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
     setState(() => _isLoading = false);
   }
 
-  Future<void> _playVideo(String rawUrl, String title) async {
+  Future<void> _playVideo(String rawUrl, String title, {int episodeIndex = 0}) async {
     ApiService.logView(widget.contentId, widget.itemType);
     final isMovie = widget.itemType == 'movie' || widget.itemType == '1';
+
+    List<Map<String, dynamic>>? playlist;
+    if (!isMovie && _seasons.isNotEmpty) {
+      final allEps = _seasons.expand((s) => s.episodes).toList();
+      playlist = allEps.map((e) => {
+        'id': e.id,
+        'title': e.name,
+        'image': e.image,
+        'url': e.playLinks.isNotEmpty ? e.playLinks.first.url : '',
+        'play_links': e.playLinks.map((l) => {'name': l.name, 'url': l.url, 'quality': l.quality}).toList(),
+      }).toList();
+    }
+
     await playVideo(
       context, 
       rawUrl, 
@@ -152,6 +165,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
       premium: _isPremium,
       contentId: widget.contentId,
       contentType: isMovie ? 1 : 2,
+      playlist: playlist,
+      initialEpisodeIndex: episodeIndex,
     );
   }
 
@@ -266,7 +281,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
     };
 
     final playEpisodeCallback = (String url, String title) {
-      _playVideo(url, title);
+      int epIdx = 0;
+      if (_seasons.isNotEmpty) {
+        final allEps = _seasons.expand((s) => s.episodes).toList();
+        final found = allEps.indexWhere((e) => (e.playLinks.isNotEmpty && e.playLinks.first.url == url) || e.name == title);
+        if (found >= 0) epIdx = found;
+      }
+      _playVideo(url, title, episodeIndex: epIdx);
     };
 
     final navigateCallback = (int id, String type) {

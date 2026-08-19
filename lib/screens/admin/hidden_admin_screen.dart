@@ -10,6 +10,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../config/api_config.dart';
 import '../streamtape_domains_screen.dart';
+import 'fly_mode_manager_screen.dart';
 
 class HiddenAdminScreen extends StatefulWidget {
   const HiddenAdminScreen({Key? key}) : super(key: key);
@@ -42,6 +43,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'Live Telemetry & Analytics',
     'SkyMoviesHD Auto Importer',
     'HDMove99 Auto Importer',
+    'Aagmaal Auto Importer',
+    'Fly Mode Manager',
   ];
 
   final List<IconData> _navIcons = [
@@ -64,6 +67,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.analytics_rounded,
     Icons.cloud_download_rounded,
     Icons.video_library_rounded,
+    Icons.local_fire_department_rounded,
+    Icons.flight_takeoff_rounded,
   ];
 
   // Data lists
@@ -82,6 +87,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   bool _isLoading = false;
   String _movieCatalogQuery = '';
   String _seriesCatalogQuery = '';
+  String _movieCatalogOttFilter = '';
+  String _seriesCatalogOttFilter = '';
+  String _selectedOttFilter = 'All';
   bool _ottGridView = false;
   String _ottQuery = '';
   String _castQuery = '';
@@ -107,6 +115,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   int _hdmove99Page = 1;
   final _hdmove99SearchCtrl = TextEditingController();
 
+  // Aagmaal Auto Importer State
+  List<dynamic> _aagmaalCatalog = [];
+  bool _aagmaalLoading = false;
+  int _aagmaalPage = 1;
+  final _aagmaalSearchCtrl = TextEditingController();
+
   // Form Controllers
   final _addTitleCtrl = TextEditingController();
   final _addDescCtrl = TextEditingController();
@@ -121,6 +135,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final TextEditingController _hdmaalDomainCtrl = TextEditingController(text: 'https://hdmaal.gg');
   final TextEditingController _uncutmastiDomainCtrl = TextEditingController(text: 'https://uncutmasti.com');
   final TextEditingController _hdmove99DomainCtrl = TextEditingController(text: 'https://hdmove99.com');
+  final TextEditingController _aagmaalDomainCtrl = TextEditingController(text: 'https://aagmaal.mba');
+  final TextEditingController _uffmaalDomainCtrl = TextEditingController(text: 'https://uffmaal.com');
   List<dynamic> _skymoviesCatalog = [];
   bool _skymoviesLoading = false;
   String _skymoviesCat = 'Hot-Short-Film';
@@ -367,11 +383,22 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           _addDescCtrl.text = data['overview'] ?? '';
           _addReleaseDateCtrl.text = data['release_date'] ?? data['first_air_date'] ?? '';
           _addRuntimeCtrl.text = "${data['runtime'] ?? 120} min";
+          final movieTitle = _addTitleCtrl.text.trim();
           if (data['poster_path'] != null) {
-            _addPosterUrlCtrl.text = "https://image.tmdb.org/t/p/w500${data['poster_path']}";
+            final rawTmdbPoster = "https://image.tmdb.org/t/p/w500${data['poster_path']}";
+            _uploadImageUrlToServer(rawTmdbPoster, customTitle: movieTitle).then((serverUrl) {
+              if (serverUrl != null && mounted) {
+                setState(() => _addPosterUrlCtrl.text = serverUrl);
+              }
+            });
           }
           if (data['backdrop_path'] != null) {
-            _addThumbUrlCtrl.text = "https://image.tmdb.org/t/p/w780${data['backdrop_path']}";
+            final rawTmdbBackdrop = "https://image.tmdb.org/t/p/w780${data['backdrop_path']}";
+            _uploadImageUrlToServer(rawTmdbBackdrop, customTitle: '${movieTitle}_banner').then((serverUrl) {
+              if (serverUrl != null && mounted) {
+                setState(() => _addThumbUrlCtrl.text = serverUrl);
+              }
+            });
           }
         });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("TMDb Data Auto-Filled!"), backgroundColor: Colors.green));
@@ -473,6 +500,87 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       }
       _selectedIndex = 2; // Switch to Add Movie / Web Series tab
     });
+    // For series: lazily load full episode play_links (not included in list for speed)
+    if (type == 'series') {
+      final seriesId = item['id'];
+      _adminPhpApi('get_series_episodes', {'series_id': seriesId}).then((res) {
+        if (!mounted) return;
+        if (res['status'] == 'success' && res['data']?['seasons'] != null) {
+          setState(() {
+            // Merge loaded seasons (with play_links) back into _editingItem
+            if (_editingItem != null && _editingItem!['id'] == seriesId) {
+              _editingItem!['seasons'] = res['data']['seasons'];
+              // Also update the item in _series list
+              final idx = _series.indexWhere((s) => s['id'] == seriesId);
+              if (idx >= 0) _series[idx]['seasons'] = res['data']['seasons'];
+            }
+          });
+        }
+      }).catchError((_) {}); // Silently ignore — series can still be viewed/edited
+    }
+  }
+
+  // Upload any image URL to our server, saving it named after the movie/series
+  Future<String?> _uploadImageUrlToServer(String rawUrl, {String? customTitle, bool showNotification = true}) async {
+    final url = rawUrl.trim();
+    if (url.isEmpty) return null;
+    if (url.contains('goprivate.fun/api/uploads')) return url;
+
+    final title = (customTitle != null && customTitle.isNotEmpty)
+        ? customTitle
+        : _addTitleCtrl.text.trim();
+
+    try {
+      if (showNotification && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                SizedBox(width: 12),
+                Text("Uploading image to server..."),
+              ],
+            ),
+            duration: Duration(seconds: 15),
+            backgroundColor: Color(0xFF1E2436),
+          ),
+        );
+      }
+
+      final res = await _adminPhpApi('upload_image', {
+        'image_url': url,
+        'title': title,
+      });
+
+      if (mounted && showNotification) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
+
+      if (res['status'] == 'success' && res['data']?['url'] != null) {
+        final serverUrl = res['data']['url'].toString();
+        if (showNotification && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Image uploaded to server successfully!"), backgroundColor: Colors.green, duration: Duration(seconds: 2)),
+          );
+        }
+        return serverUrl;
+      } else {
+        if (showNotification && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Upload error: ${res['message'] ?? 'Failed'}"), backgroundColor: Colors.red),
+          );
+        }
+        return null;
+      }
+    } catch (e) {
+      if (showNotification && mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Upload error: $e"), backgroundColor: Colors.red),
+        );
+      }
+      return null;
+    }
   }
 
   // Save Content Action (Adds/Updates DB + Instantly updates catalog UI)
@@ -481,6 +589,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     if (title.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Title is required")));
       return;
+    }
+
+    // Auto-upload poster if external URL
+    if (_addPosterUrlCtrl.text.trim().isNotEmpty && !_addPosterUrlCtrl.text.contains('goprivate.fun/api/uploads')) {
+      final uploaded = await _uploadImageUrlToServer(_addPosterUrlCtrl.text.trim(), customTitle: title, showNotification: true);
+      if (uploaded != null && uploaded.isNotEmpty) {
+        _addPosterUrlCtrl.text = uploaded;
+      }
+    }
+    // Auto-upload banner if external URL
+    if (_addThumbUrlCtrl.text.trim().isNotEmpty && !_addThumbUrlCtrl.text.contains('goprivate.fun/api/uploads')) {
+      final uploaded = await _uploadImageUrlToServer(_addThumbUrlCtrl.text.trim(), customTitle: '${title}_banner', showNotification: true);
+      if (uploaded != null && uploaded.isNotEmpty) {
+        _addThumbUrlCtrl.text = uploaded;
+      }
     }
 
     final newContent = {
@@ -690,87 +813,147 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               await showDialog(
                 context: ctx,
                 builder: (dctx) => StatefulBuilder(
-                  builder: (context, dsetState) => AlertDialog(
-                    backgroundColor: const Color(0xFF1A2132),
-                    surfaceTintColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
-                    title: Text(isEdit ? "Edit Season" : "Add Season", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        DropdownButtonFormField<String>(
-                          value: selectedName,
-                          dropdownColor: const Color(0xFF10121A),
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            labelText: "Season Name", labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true, fillColor: const Color(0xFF090A0F),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  builder: (context, dsetState) => Dialog(
+                    backgroundColor: const Color(0xFF0F131D),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+                    insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                    child: Container(
+                      width: MediaQuery.of(context).size.width * 0.9,
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                                child: const Icon(Icons.video_collection_rounded, color: Colors.cyanAccent, size: 20),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  isEdit ? "Edit Season" : "Add New Season",
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: () => Navigator.pop(dctx),
+                                icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+                              ),
+                            ],
                           ),
-                          items: list.map((s) => DropdownMenuItem<String>(
-                            value: s,
-                            child: Text(s, style: const TextStyle(color: Colors.white)),
-                          )).toList(),
-                          onChanged: (val) {
-                            dsetState(() {
-                              selectedName = val!;
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: orderCtrl,
-                          keyboardType: TextInputType.number,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            labelText: "Season Order", labelStyle: const TextStyle(color: Colors.white70),
-                            filled: true, fillColor: const Color(0xFF090A0F),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF141722),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: selectedName,
+                                dropdownColor: const Color(0xFF141722),
+                                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                                isExpanded: true,
+                                items: list.map((s) => DropdownMenuItem<String>(
+                                  value: s,
+                                  child: Text(s, style: const TextStyle(color: Colors.white)),
+                                )).toList(),
+                                onChanged: (val) {
+                                  if (val != null) dsetState(() => selectedName = val);
+                                },
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(dctx), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
-                      TextButton(
-                        onPressed: () async {
-                          final name = selectedName.trim();
-                          if (name.isEmpty) return;
-                          Map<String, dynamic> res;
-                          if (seriesId <= 0) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Please publish or save the Web Series first before adding seasons."), backgroundColor: Colors.orangeAccent),
-                            );
-                            return;
-                          }
-                          if (isEdit) {
-                            res = await _adminPhpApi('edit_season', {
-                              'id': existing['id'],
-                              'name': name,
-                              'season_order': int.tryParse(orderCtrl.text.trim()) ?? existing['season_order'] ?? 0,
-                            });
-                          } else {
-                            res = await _adminPhpApi('add_season', {
-                              'series_id': seriesId,
-                              'name': name,
-                              'order': int.tryParse(orderCtrl.text.trim()) ?? (seasons.length + 1),
-                            });
-                          }
-                          if (dctx.mounted) Navigator.pop(dctx);
-                          if (res['status'] == 'success') {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(isEdit ? "Season updated!" : "Season added!"), backgroundColor: Colors.green),
-                            );
-                            await refresh();
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Failed: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
-                            );
-                          }
-                        },
-                        child: Text(isEdit ? "Save" : "Add", style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 12),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF141722),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: TextField(
+                              controller: orderCtrl,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                              decoration: const InputDecoration(
+                                labelText: "Season Order",
+                                labelStyle: TextStyle(color: Colors.white60, fontSize: 12),
+                                prefixIcon: Icon(Icons.format_list_numbered_rounded, color: Colors.cyanAccent, size: 18),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextButton(
+                                  onPressed: () => Navigator.pop(dctx),
+                                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
+                                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                flex: 2,
+                                child: ElevatedButton.icon(
+                                  onPressed: () async {
+                                    final name = selectedName.trim();
+                                    if (name.isEmpty) return;
+                                    Map<String, dynamic> res;
+                                    if (seriesId <= 0) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("Please publish or save the Web Series first before adding seasons."), backgroundColor: Colors.orangeAccent),
+                                      );
+                                      return;
+                                    }
+                                    if (isEdit) {
+                                      res = await _adminPhpApi('edit_season', {
+                                        'id': existing['id'],
+                                        'name': name,
+                                        'season_order': int.tryParse(orderCtrl.text.trim()) ?? existing['season_order'] ?? 0,
+                                      });
+                                    } else {
+                                      res = await _adminPhpApi('add_season', {
+                                        'series_id': seriesId,
+                                        'name': name,
+                                        'order': int.tryParse(orderCtrl.text.trim()) ?? (seasons.length + 1),
+                                      });
+                                    }
+                                    if (dctx.mounted) Navigator.pop(dctx);
+                                    if (res['status'] == 'success') {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(isEdit ? "Season updated!" : "Season added!"), backgroundColor: Colors.green),
+                                      );
+                                      await refresh();
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text("Failed: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
+                                      );
+                                    }
+                                  },
+                                  icon: const Icon(Icons.check_circle_rounded, size: 16),
+                                  label: Text(isEdit ? "SAVE CHANGES" : "ADD SEASON", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.cyanAccent,
+                                    foregroundColor: Colors.black,
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    elevation: 0,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               );
@@ -823,7 +1006,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               final firstLink = links.isNotEmpty ? links[0] : null;
               final isEdit = existing != null;
 
-              // Pre-populate dropdown list for Episode Names (Episode 1, Part 1, ... Episode 10, Part 10)
               final epNamesList = <String>[];
               for (int i = 1; i <= 10; i++) {
                 epNamesList.add("Episode $i");
@@ -835,7 +1017,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 epNamesList.add(selectedEpName);
               }
 
-              // Pre-populate dropdown list for Qualities
               final qualitiesList = ['480p', '720p', '1080p'];
               String selectedQuality = existing != null ? (firstLink?['quality'] ?? '720p').toString().trim() : '720p';
               if (selectedQuality.isEmpty) selectedQuality = '720p';
@@ -858,260 +1039,365 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               await showDialog(
                 context: ctx,
                 builder: (dctx) => StatefulBuilder(
-                  builder: (dctx2, setDlgState) => AlertDialog(
-                    backgroundColor: const Color(0xFF1A2132),
-                    surfaceTintColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
-                    title: Text(isEdit ? "Edit Episode" : "Add Episode", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    content: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            "Season: ${(currentSeason?['Session_Name'] ?? 'Season').toString().trim()}",
-                            style: const TextStyle(color: Colors.cyanAccent, fontSize: 13, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 12),
-                          DropdownButtonFormField<String>(
-                            value: selectedEpName,
-                            dropdownColor: const Color(0xFF10121A),
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: "Episode Name", labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true, fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  builder: (dctx2, setDlgState) => Dialog(
+                    backgroundColor: const Color(0xFF0F131D),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+                    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+                    child: Container(
+                      width: MediaQuery.of(context).size.width * 0.95,
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      padding: const EdgeInsets.all(20),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Header
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(color: Colors.purpleAccent.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+                                  child: const Icon(Icons.tv_rounded, color: Colors.purpleAccent, size: 20),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        isEdit ? "Edit Episode" : "Add New Episode",
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                      ),
+                                      Text(
+                                        "Season: ${(currentSeason?['Session_Name'] ?? 'Season').toString().trim()}",
+                                        style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () => Navigator.pop(dctx),
+                                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+                                ),
+                              ],
                             ),
-                            items: epNamesList.map((s) => DropdownMenuItem<String>(
-                              value: s,
-                              child: Text(s, style: const TextStyle(color: Colors.white)),
-                            )).toList(),
-                            onChanged: (val) {
-                              setDlgState(() {
-                                selectedEpName = val!;
-                              });
-                            },
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: epOrderCtrl,
-                            keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: "Episode Order (1, 2, 3...)", labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true, fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            const SizedBox(height: 16),
+
+                            // Episode Name & Order in Row
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 2,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF141722),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        value: selectedEpName,
+                                        dropdownColor: const Color(0xFF141722),
+                                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                                        isExpanded: true,
+                                        items: epNamesList.map((s) => DropdownMenuItem<String>(
+                                          value: s,
+                                          child: Text(s, style: const TextStyle(color: Colors.white)),
+                                        )).toList(),
+                                        onChanged: (val) {
+                                          if (val != null) setDlgState(() => selectedEpName = val);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF141722),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12),
+                                    ),
+                                    child: TextField(
+                                      controller: epOrderCtrl,
+                                      keyboardType: TextInputType.number,
+                                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                                      decoration: const InputDecoration(
+                                        labelText: "Order",
+                                        labelStyle: TextStyle(color: Colors.white60, fontSize: 11),
+                                        border: InputBorder.none,
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: epImageCtrl,
-                            style: const TextStyle(color: Colors.white),
-                            onChanged: (val) => setDlgState(() {}),
-                            decoration: InputDecoration(
-                              labelText: "Image URL", labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true, fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            const SizedBox(height: 12),
+
+                            // Thumbnail Image Input & Live Preview
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF141722),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: TextField(
+                                controller: epImageCtrl,
+                                style: const TextStyle(color: Colors.white, fontSize: 12),
+                                onChanged: (_) => setDlgState(() {}),
+                                decoration: const InputDecoration(
+                                  hintText: "Episode Thumbnail URL (https://...)",
+                                  hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                                  prefixIcon: Icon(Icons.image_outlined, color: Colors.purpleAccent, size: 18),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                ),
+                              ),
                             ),
-                          ),
-                          if (epImageCtrl.text.trim().isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: AspectRatio(
-                                aspectRatio: 16 / 9,
-                                child: Container(
-                                  color: const Color(0xFF090A0F),
+                            if (epImageCtrl.text.trim().isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: AspectRatio(
+                                  aspectRatio: 16 / 9,
                                   child: CachedNetworkImage(
                                     imageUrl: epImageCtrl.text.trim(),
                                     fit: BoxFit.cover,
-                                    placeholder: (c, u) => const Center(child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2)),
-                                    errorWidget: (c, u, e) => const Center(child: Text("Invalid / Broken Image URL", style: TextStyle(color: Colors.redAccent, fontSize: 11))),
+                                    errorWidget: (c, u, e) => Container(
+                                      color: const Color(0xFF141722),
+                                      child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white24, size: 24)),
+                                    ),
                                   ),
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 10),
-                          DropdownButtonFormField<String>(
-                            value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(epStreamType) ? epStreamType : 'MP4/MKV Direct Link',
-                            dropdownColor: const Color(0xFF161A26),
-                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                            decoration: InputDecoration(
-                              labelText: "Stream Source Format",
-                              labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true,
-                              fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
-                              return DropdownMenuItem<String>(
-                                value: st,
-                                child: Text(st, style: const TextStyle(color: Colors.white)),
-                              );
-                            }).toList(),
-                            onChanged: (val) {
-                              if (val != null) setDlgState(() => epStreamType = val);
-                            },
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: epUrlCtrl,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: InputDecoration(
-                                    labelText: "Primary Stream URL (Server 1)", labelStyle: const TextStyle(color: Colors.white70),
-                                    filled: true, fillColor: const Color(0xFF090A0F),
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              ElevatedButton(
-                                onPressed: checkingEpLink ? null : () async {
-                                  final url = epUrlCtrl.text.trim();
-                                  if (url.isEmpty) return;
-                                  setDlgState(() => checkingEpLink = true);
-                                  final res = await _adminPhpApi('check_link', {'url': url});
-                                  setDlgState(() => checkingEpLink = false);
-                                  if (res['status'] == 'success') {
-                                    final ok = res['data']?['ok'] == true;
-                                    final code = res['data']?['code'] ?? 0;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(ok ? "Link is LIVE (HTTP $code)" : "Link is DEAD / Failed (HTTP $code)"),
-                                        backgroundColor: ok ? Colors.green : Colors.red,
-                                      ),
-                                    );
-                                  }
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.cyan.withOpacity(0.15),
-                                  foregroundColor: Colors.cyanAccent,
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
-                                ),
-                                child: checkingEpLink
-                                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
-                                    : const Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.search_rounded, size: 14),
-                                          SizedBox(width: 2),
-                                          Text("CHECK", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                        ],
-                                      ),
-                              ),
-                              const SizedBox(width: 4),
-                              ElevatedButton(
-                                onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
-                                  setDlgState(() {
-                                    epUrlCtrl.text = extractedUrl;
-                                    if (posterUrl != null && posterUrl.isNotEmpty) {
-                                      epImageCtrl.text = posterUrl;
-                                    }
-                                  });
-                                }, defaultSearchText: (seriesTitle.isNotEmpty ? seriesTitle : (_editingItem?['name'] ?? _addTitleCtrl.text)).trim()),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.amber.withOpacity(0.15),
-                                  foregroundColor: Colors.amberAccent,
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
-                                ),
-                                child: const Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.bolt_rounded, size: 14),
-                                    SizedBox(width: 2),
-                                    Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                  ],
                                 ),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 10),
-                          DropdownButtonFormField<String>(
-                            value: selectedQuality,
-                            dropdownColor: const Color(0xFF10121A),
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              labelText: "Quality", labelStyle: const TextStyle(color: Colors.white70),
-                              filled: true, fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            const SizedBox(height: 12),
+
+                            // Stream Source Type & Quality in Row
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 2,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF141722),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(epStreamType) ? epStreamType : 'MP4/MKV Direct Link',
+                                        dropdownColor: const Color(0xFF141722),
+                                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                                        isExpanded: true,
+                                        items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                                          return DropdownMenuItem<String>(
+                                            value: st,
+                                            child: Text(st, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                          );
+                                        }).toList(),
+                                        onChanged: (val) {
+                                          if (val != null) setDlgState(() => epStreamType = val);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF141722),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        value: selectedQuality,
+                                        dropdownColor: const Color(0xFF141722),
+                                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                                        isExpanded: true,
+                                        items: qualitiesList.map((s) => DropdownMenuItem<String>(
+                                          value: s,
+                                          child: Text(s, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                        )).toList(),
+                                        onChanged: (val) {
+                                          if (val != null) setDlgState(() => selectedQuality = val);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            items: qualitiesList.map((s) => DropdownMenuItem<String>(
-                              value: s,
-                              child: Text(s, style: const TextStyle(color: Colors.white)),
-                            )).toList(),
-                            onChanged: (val) {
-                              setDlgState(() {
-                                selectedQuality = val!;
-                              });
-                            },
-                          ),
-                        ],
+                            const SizedBox(height: 12),
+
+                            // Stream URL with Check & Quick Extract
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF141722),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white12),
+                                    ),
+                                    child: TextField(
+                                      controller: epUrlCtrl,
+                                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                                      decoration: const InputDecoration(
+                                        hintText: "Stream URL (Server 1)...",
+                                        hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                                        prefixIcon: Icon(Icons.link_rounded, color: Colors.cyanAccent, size: 18),
+                                        border: InputBorder.none,
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                OutlinedButton(
+                                  onPressed: checkingEpLink ? null : () async {
+                                    final url = epUrlCtrl.text.trim();
+                                    if (url.isEmpty) return;
+                                    setDlgState(() => checkingEpLink = true);
+                                    final res = await _adminPhpApi('check_link', {'url': url});
+                                    setDlgState(() => checkingEpLink = false);
+                                    if (res['status'] == 'success') {
+                                      final ok = res['data']?['ok'] == true;
+                                      final code = res['data']?['code'] ?? 0;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(ok ? "Link is LIVE (HTTP $code)" : "Link is DEAD / Failed (HTTP $code)"),
+                                          backgroundColor: ok ? Colors.green : Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.cyanAccent,
+                                    side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  child: checkingEpLink
+                                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                                      : const Text("CHECK", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                ),
+                                const SizedBox(width: 4),
+                                ElevatedButton.icon(
+                                  onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                                    setDlgState(() {
+                                      epUrlCtrl.text = extractedUrl;
+                                      if (posterUrl != null && posterUrl.isNotEmpty) {
+                                        epImageCtrl.text = posterUrl;
+                                      }
+                                    });
+                                  }, defaultSearchText: (seriesTitle.isNotEmpty ? seriesTitle : (_editingItem?['name'] ?? _addTitleCtrl.text)).trim()),
+                                  icon: const Icon(Icons.bolt_rounded, size: 14),
+                                  label: const Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.amberAccent,
+                                    foregroundColor: Colors.black,
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+
+                            // Actions
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextButton(
+                                    onPressed: () => Navigator.pop(dctx),
+                                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
+                                    child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  flex: 2,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () async {
+                                      if (selectedEpName.isEmpty || epUrlCtrl.text.trim().isEmpty) {
+                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Episode name and stream URL required")));
+                                        return;
+                                      }
+                                      final epOrder = int.tryParse(epOrderCtrl.text.trim()) ?? (currentEpisodes.length + 1);
+
+                                      final List<Map<String, String>> epPlayLinksPayload = [
+                                        {
+                                          'name': 'Server 1',
+                                          'type': epStreamType,
+                                          'quality': selectedQuality,
+                                          'url': epUrlCtrl.text.trim(),
+                                        }
+                                      ];
+
+                                      Map<String, dynamic> res;
+                                      if (isEdit) {
+                                        res = await _adminPhpApi('update_episode', {
+                                          'id': existing['id'],
+                                          'Episoade_Name': selectedEpName.trim(),
+                                          'episoade_image': epImageCtrl.text.trim(),
+                                          'url': epUrlCtrl.text.trim(),
+                                          'stream_type': epStreamType,
+                                          'quality': selectedQuality,
+                                          'order': epOrder,
+                                          'play_links': epPlayLinksPayload,
+                                        });
+                                      } else {
+                                        res = await _adminPhpApi('add_episode_link', {
+                                          'series_id': seriesId,
+                                          'season_name': (currentSeason?['Session_Name'] ?? 'Season').toString().trim(),
+                                          'name': selectedEpName.trim(),
+                                          'url': epUrlCtrl.text.trim(),
+                                          'stream_type': epStreamType,
+                                          'episode_image': epImageCtrl.text.trim(),
+                                          'quality': selectedQuality,
+                                          'order': epOrder,
+                                          'play_links': epPlayLinksPayload,
+                                        });
+                                      }
+                                      if (dctx.mounted) Navigator.pop(dctx);
+                                      if (res['status'] == 'success') {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text(isEdit ? "Episode updated!" : "Episode added!"), backgroundColor: Colors.green),
+                                        );
+                                        await refresh();
+                                      } else {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text("Failed: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
+                                        );
+                                      }
+                                    },
+                                    icon: const Icon(Icons.check_circle_rounded, size: 16),
+                                    label: Text(isEdit ? "SAVE EPISODE" : "ADD EPISODE", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent,
+                                      foregroundColor: Colors.black,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      elevation: 0,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(dctx), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
-                      TextButton(
-                        onPressed: () async {
-                          if (selectedEpName.isEmpty || epUrlCtrl.text.trim().isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Episode name and stream URL required")));
-                            return;
-                          }
-                          final epOrder = int.tryParse(epOrderCtrl.text.trim()) ?? (currentEpisodes.length + 1);
-
-                          final List<Map<String, String>> epPlayLinksPayload = [
-                            {
-                              'name': 'Server 1',
-                              'type': epStreamType,
-                              'quality': selectedQuality,
-                              'url': epUrlCtrl.text.trim(),
-                            }
-                          ];
-
-                          Map<String, dynamic> res;
-                          if (isEdit) {
-                            res = await _adminPhpApi('update_episode', {
-                              'id': existing['id'],
-                              'Episoade_Name': selectedEpName.trim(),
-                              'episoade_image': epImageCtrl.text.trim(),
-                              'url': epUrlCtrl.text.trim(),
-                              'stream_type': epStreamType,
-                              'quality': selectedQuality,
-                              'order': epOrder,
-                              'play_links': epPlayLinksPayload,
-                            });
-                          } else {
-                            res = await _adminPhpApi('add_episode_link', {
-                              'series_id': seriesId,
-                              'season_name': (currentSeason?['Session_Name'] ?? 'Season').toString().trim(),
-                              'name': selectedEpName.trim(),
-                              'url': epUrlCtrl.text.trim(),
-                              'stream_type': epStreamType,
-                              'episode_image': epImageCtrl.text.trim(),
-                              'quality': selectedQuality,
-                              'order': epOrder,
-                              'play_links': epPlayLinksPayload,
-                            });
-                          }
-                          if (dctx.mounted) Navigator.pop(dctx);
-                          if (res['status'] == 'success') {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(isEdit ? "Episode updated!" : "Episode added!"), backgroundColor: Colors.green),
-                            );
-                            await refresh();
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text("Failed: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
-                            );
-                          }
-                        },
-                        child: Text(isEdit ? "Save" : "Add", style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
                   ),
                 ),
               );
@@ -1293,11 +1579,32 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     }),
                                 ] else ...[
                                   // ── Level 2: Episodes of the selected season ──
-                                  _glassButton(
-                                    icon: Icons.playlist_add_rounded,
-                                    label: 'ADD NEW EPISODE',
-                                    gradient: const LinearGradient(colors: [Color(0xFF8E2DE2), Color(0xFFE50914)]),
-                                    onTap: () => showEpisodeDialog(),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: _glassButton(
+                                          icon: Icons.playlist_add_rounded,
+                                          label: 'ADD SINGLE EPISODE',
+                                          gradient: const LinearGradient(colors: [Color(0xFF8E2DE2), Color(0xFFE50914)]),
+                                          onTap: () => showEpisodeDialog(),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: _glassButton(
+                                          icon: Icons.bolt_rounded,
+                                          label: '⚡ BATCH IMPORT',
+                                          gradient: const LinearGradient(colors: [Color(0xFFFF8008), Color(0xFFFFC837)]),
+                                          onTap: () => _showBatchEpisodeImportDialog(
+                                            seriesId: seriesId,
+                                            seriesTitle: seriesTitle,
+                                            currentSeason: currentSeason,
+                                            currentEpisodes: currentEpisodes,
+                                            refresh: refresh,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 14),
                                   if (currentEpisodes.isEmpty)
@@ -1757,6 +2064,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildSkymoviesImporterView();
       case 18:
         return _buildHdmove99ImporterView();
+      case 19:
+        return _buildAagmaalImporterView();
+      case 20:
+        return const FlyModeManagerScreen();
       default:
         return _buildDashboardView();
     }
@@ -3249,13 +3560,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   Widget _buildMoviesView() {
     final filtered = _movies.where((m) {
       final name = (m['name'] ?? '').toString().toLowerCase();
-      return _movieCatalogQuery.isEmpty || name.contains(_movieCatalogQuery.toLowerCase());
+      final genres = (m['genres'] ?? '').toString().toLowerCase();
+      final matchesQuery = _movieCatalogQuery.isEmpty || name.contains(_movieCatalogQuery.toLowerCase());
+      final matchesOtt = _movieCatalogOttFilter.isEmpty || genres.contains(_movieCatalogOttFilter.toLowerCase());
+      return matchesQuery && matchesOtt;
     }).toList();
+
+    // Build OTT options from loaded genres list
+    final ottOptions = <String>[''];
+    for (final g in _genres) {
+      final name = (g['name'] ?? '').toString();
+      if (name.isNotEmpty) ottOptions.add(name);
+    }
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
           child: TextField(
             onChanged: (v) => setState(() => _movieCatalogQuery = v),
             style: const TextStyle(color: Colors.white),
@@ -3266,6 +3587,33 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               filled: true,
               fillColor: const Color(0xFF141722),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          ),
+        ),
+        // OTT Filter Dropdown
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF141722),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.cyanAccent.withOpacity(0.2)),
+            ),
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: _movieCatalogOttFilter,
+              dropdownColor: const Color(0xFF1A1F2E),
+              underline: const SizedBox(),
+              icon: const Icon(Icons.filter_list_rounded, color: Colors.cyanAccent, size: 18),
+              hint: const Text('Filter by OTT Platform', style: TextStyle(color: Colors.grey, fontSize: 13)),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: ottOptions.map((o) => DropdownMenuItem<String>(
+                value: o,
+                child: Text(o.isEmpty ? 'All OTT Platforms' : o,
+                    style: TextStyle(color: o.isEmpty ? Colors.grey : Colors.white)),
+              )).toList(),
+              onChanged: (v) => setState(() => _movieCatalogOttFilter = v ?? ''),
             ),
           ),
         ),
@@ -3459,13 +3807,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   Widget _buildWebSeriesView() {
     final filtered = _series.where((s) {
       final name = (s['name'] ?? '').toString().toLowerCase();
-      return _seriesCatalogQuery.isEmpty || name.contains(_seriesCatalogQuery.toLowerCase());
+      final genres = (s['genres'] ?? '').toString().toLowerCase();
+      final matchesQuery = _seriesCatalogQuery.isEmpty || name.contains(_seriesCatalogQuery.toLowerCase());
+      final matchesOtt = _seriesCatalogOttFilter.isEmpty || genres.contains(_seriesCatalogOttFilter.toLowerCase());
+      return matchesQuery && matchesOtt;
     }).toList();
+
+    // Build OTT options from loaded genres list
+    final ottOptions = <String>[''];
+    for (final g in _genres) {
+      final name = (g['name'] ?? '').toString();
+      if (name.isNotEmpty) ottOptions.add(name);
+    }
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
           child: TextField(
             onChanged: (v) => setState(() => _seriesCatalogQuery = v),
             style: const TextStyle(color: Colors.white),
@@ -3476,6 +3834,33 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               filled: true,
               fillColor: const Color(0xFF141722),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          ),
+        ),
+        // OTT Filter Dropdown
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF141722),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.purpleAccent.withOpacity(0.2)),
+            ),
+            child: DropdownButton<String>(
+              isExpanded: true,
+              value: _seriesCatalogOttFilter,
+              dropdownColor: const Color(0xFF1A1F2E),
+              underline: const SizedBox(),
+              icon: const Icon(Icons.filter_list_rounded, color: Colors.purpleAccent, size: 18),
+              hint: const Text('Filter by OTT Platform', style: TextStyle(color: Colors.grey, fontSize: 13)),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: ottOptions.map((o) => DropdownMenuItem<String>(
+                value: o,
+                child: Text(o.isEmpty ? 'All OTT Platforms' : o,
+                    style: TextStyle(color: o.isEmpty ? Colors.grey : Colors.white)),
+              )).toList(),
+              onChanged: (v) => setState(() => _seriesCatalogOttFilter = v ?? ''),
             ),
           ),
         ),
@@ -4347,7 +4732,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             ),
           ),
         ),
-        // Toolbar: count + select-mode toggle + bulk delete
+        // Toolbar: count + select-mode toggle + bulk delete + bulk expiry
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 2, 14, 4),
           child: Row(
@@ -4402,6 +4787,27 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     child: Text(allSelected ? 'Deselect All' : 'Select All', style: const TextStyle(color: Colors.white60, fontSize: 11)),
                   ),
                 ),
+              // Bulk expiry button (always visible)
+              GestureDetector(
+                onTap: _showBulkExpiryDialog,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  margin: const EdgeInsets.only(right: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.amberAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.amberAccent.withOpacity(0.3)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.calendar_month_rounded, color: Colors.amberAccent, size: 13),
+                      SizedBox(width: 3),
+                      Text('Expiry', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
               GestureDetector(
                 onTap: () => setState(() {
                   _usersSelectMode = !_usersSelectMode;
@@ -4433,6 +4839,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         final uid = int.tryParse(u['id'].toString()) ?? 0;
                         final isVip = _isUserVip(u);
                         final isChecked = _selectedUserIds.contains(uid);
+                        final profilePic = (u['profile_pic'] ?? '').toString();
                         return GestureDetector(
                           onLongPress: () {
                             // Long press enters select mode
@@ -4489,10 +4896,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       checkColor: Colors.white,
                                       side: const BorderSide(color: Colors.white38),
                                     )
-                                  : Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-                                      child: Icon(Icons.person, color: isVip ? Colors.greenAccent : Colors.cyanAccent),
+                                  : CircleAvatar(
+                                      radius: 22,
+                                      backgroundColor: isVip
+                                          ? Colors.greenAccent.withOpacity(0.15)
+                                          : Colors.cyanAccent.withOpacity(0.15),
+                                      backgroundImage: profilePic.isNotEmpty
+                                          ? NetworkImage(profilePic)
+                                          : null,
+                                      child: profilePic.isEmpty
+                                          ? Icon(Icons.person, color: isVip ? Colors.greenAccent : Colors.cyanAccent)
+                                          : null,
                                     ),
                               title: Text(u['name'] ?? 'User', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                               subtitle: Column(
@@ -4940,6 +5354,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   child: const Text("Delete User", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
                 ),
                 TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close", style: TextStyle(color: Colors.grey))),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showEditUserDialog(u);
+                  },
+                  child: const Text("Edit User", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                ),
                 if (isVip)
                   TextButton(
                     onPressed: () async {
@@ -4990,6 +5411,301 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           );
           _loadDashboardData();
         },
+      ),
+    );
+  }
+
+  // ── EDIT USER BOTTOM SHEET ──
+  void _showEditUserDialog(Map<String, dynamic> u) {
+    final nameCtrl = TextEditingController(text: u['name'] ?? '');
+    final emailCtrl = TextEditingController(text: u['email'] ?? '');
+    final pwCtrl = TextEditingController();
+    DateTime? expiryDate = DateTime.tryParse((u['subscription_exp'] ?? '').toString().split(' ').first);
+    bool saving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0D1117),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: Colors.white12),
+      ),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (ssCtx, ssSetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 20, right: 20, top: 16,
+              bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + 32,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Handle
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                  ),
+                ),
+                Row(
+                  children: [
+                    const Icon(Icons.edit_rounded, color: Colors.cyanAccent, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Edit User — ${u['name'] ?? ''}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Name field
+                _buildSheetField('Name', nameCtrl, hint: 'Display name'),
+                const SizedBox(height: 10),
+                // Email field
+                _buildSheetField('Email', emailCtrl, hint: 'Email address', keyboardType: TextInputType.emailAddress),
+                const SizedBox(height: 10),
+                // Password field
+                _buildSheetField('New Password', pwCtrl, hint: 'Leave empty to keep unchanged', obscure: true),
+                const SizedBox(height: 10),
+                // Expiry date picker
+                GestureDetector(
+                  onTap: () async {
+                    final now = DateTime.now();
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: expiryDate ?? DateTime(now.year, now.month + 1, 0),
+                      firstDate: DateTime(2024),
+                      lastDate: DateTime(2030),
+                      builder: (ctx, child) => Theme(data: ThemeData.dark(), child: child!),
+                    );
+                    if (picked != null) ssSetState(() => expiryDate = picked);
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF141722),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.calendar_today_rounded, color: Colors.cyanAccent, size: 16),
+                        const SizedBox(width: 10),
+                        Text(
+                          expiryDate != null
+                              ? 'Expiry: ${expiryDate!.year}-${expiryDate!.month.toString().padLeft(2, '0')}-${expiryDate!.day.toString().padLeft(2, '0')}'
+                              : 'Tap to set expiry date',
+                          style: TextStyle(color: expiryDate != null ? Colors.white : Colors.white38, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: saving ? null : () async {
+                      ssSetState(() => saving = true);
+                      final body = <String, dynamic>{'user_id': u['id']};
+                      if (nameCtrl.text.trim().isNotEmpty) body['name'] = nameCtrl.text.trim();
+                      if (emailCtrl.text.trim().isNotEmpty) body['email'] = emailCtrl.text.trim();
+                      if (pwCtrl.text.trim().isNotEmpty) body['password'] = pwCtrl.text.trim();
+                      if (expiryDate != null) {
+                        body['subscription_exp'] = '${expiryDate!.year}-${expiryDate!.month.toString().padLeft(2, '0')}-${expiryDate!.day.toString().padLeft(2, '0')} 23:59:59';
+                      }
+                      final res = await _adminPhpApi('edit_user', body);
+                      ssSetState(() => saving = false);
+                      if (!mounted) return;
+                      if (res['status'] == 'success') {
+                        Navigator.pop(sheetCtx);
+                        // Update local user data
+                        setState(() {
+                          if (nameCtrl.text.trim().isNotEmpty) u['name'] = nameCtrl.text.trim();
+                          if (emailCtrl.text.trim().isNotEmpty) u['email'] = emailCtrl.text.trim();
+                          if (expiryDate != null) {
+                            u['subscription_exp'] = '${expiryDate!.year}-${expiryDate!.month.toString().padLeft(2, '0')}-${expiryDate!.day.toString().padLeft(2, '0')}';
+                          }
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('User updated successfully!'), backgroundColor: Colors.green),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Error: ${res['message'] ?? 'Unknown error'}'), backgroundColor: Colors.red),
+                        );
+                      }
+                    },
+                    icon: saving
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                        : const Icon(Icons.save_rounded, size: 18),
+                    label: Text(saving ? 'Saving...' : 'Save Changes', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.cyanAccent,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSheetField(String label, TextEditingController ctrl, {
+    String hint = '',
+    bool obscure = false,
+    TextInputType? keyboardType,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        const SizedBox(height: 4),
+        TextField(
+          controller: ctrl,
+          obscureText: obscure,
+          keyboardType: keyboardType,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
+            filled: true,
+            fillColor: const Color(0xFF141722),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── BULK EXPIRY DIALOG ──
+  void _showBulkExpiryDialog() {
+    DateTime selectedDate = DateTime(DateTime.now().year, DateTime.now().month + 1, 0);
+    bool running = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ssCtx, ssSetState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2132),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
+          title: const Row(
+            children: [
+              Icon(Icons.calendar_month_rounded, color: Colors.amberAccent),
+              SizedBox(width: 10),
+              Text('Bulk Set VIP Expiry', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Set the subscription expiry date for ALL active VIP users.',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: () async {
+                  final now = DateTime.now();
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: selectedDate,
+                    firstDate: now,
+                    lastDate: DateTime(2030),
+                    builder: (ctx, child) => Theme(data: ThemeData.dark(), child: child!),
+                  );
+                  if (picked != null) ssSetState(() => selectedDate = picked);
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141722),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amberAccent.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.calendar_today_rounded, color: Colors.amberAccent, size: 16),
+                      const SizedBox(width: 10),
+                      Text(
+                        '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}',
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: running ? null : () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
+            ElevatedButton.icon(
+              onPressed: running ? null : () async {
+                ssSetState(() => running = true);
+                final dateStr = '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+                final payload = <String, dynamic>{'expiry': dateStr};
+                if (_selectedUserIds.isNotEmpty) {
+                  payload['user_ids'] = _selectedUserIds.toList();
+                }
+                final res = await _adminPhpApi('bulk_set_expiry', payload);
+                ssSetState(() => running = false);
+                if (!mounted) return;
+                Navigator.pop(ctx);
+                final updated = res['data']?['updated'] ?? 0;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(res['status'] == 'success'
+                        ? 'Updated $updated user(s) expiry to $dateStr'
+                        : 'Error: ${res['message'] ?? 'Failed'}'),
+                    backgroundColor: res['status'] == 'success' ? Colors.green : Colors.red,
+                  ),
+                );
+                if (res['status'] == 'success') {
+                  setState(() {
+                    for (var u in _users) {
+                      final uid = int.tryParse(u['id'].toString()) ?? 0;
+                      if (_selectedUserIds.isEmpty || _selectedUserIds.contains(uid)) {
+                        u['subscription_exp'] = dateStr;
+                      }
+                    }
+                  });
+                  _loadUsers();
+                  _loadDashboardData();
+                }
+              },
+              icon: running
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Icon(Icons.check_rounded, size: 16),
+              label: Text(
+                running
+                    ? 'Updating...'
+                    : _selectedUserIds.isNotEmpty
+                        ? 'Apply to Selected (${_selectedUserIds.length})'
+                        : 'Apply to All Users',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amberAccent,
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -6205,6 +6921,40 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
                     child: TextField(
+                      controller: _aagmaalDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Aagmaal Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://aagmaal.mba",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.pinkAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _uffmaalDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "UFFMaal Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://uffmaal.com",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.amberAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
                       controller: _skymoviesDomainCtrl,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
@@ -6277,6 +7027,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         _hdmaalDomainCtrl.text = settings['hdmaal_domain']?.toString() ?? 'https://hdmaal.gg';
         _uncutmastiDomainCtrl.text = settings['uncutmasti_domain']?.toString() ?? 'https://uncutmasti.com';
         _hdmove99DomainCtrl.text = settings['hdmove99_domain']?.toString() ?? 'https://hdmove99.com';
+        _aagmaalDomainCtrl.text = settings['aagmaal_domain']?.toString() ?? 'https://aagmaal.mba';
+        _uffmaalDomainCtrl.text = settings['uffmaal_domain']?.toString() ?? 'https://uffmaal.com';
 
         _settingsLoaded = true;
       });
@@ -6309,6 +7061,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'hdmaal_domain': _hdmaalDomainCtrl.text.trim(),
         'uncutmasti_domain': _uncutmastiDomainCtrl.text.trim(),
         'hdmove99_domain': _hdmove99DomainCtrl.text.trim(),
+        'aagmaal_domain': _aagmaalDomainCtrl.text.trim(),
+        'uffmaal_domain': _uffmaalDomainCtrl.text.trim(),
       },
     });
     if (!mounted) return;
@@ -6381,14 +7135,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     List<String> skymoviesImages = [];
     bool isSearchingServer = false;
     bool isSearchingHdmove99 = false;
-    bool isSearchingSkymovies = false;
+    bool isSearchingSkymovies = false; // kept for state compat; tab removed
     String? serverError;
     String? hdmove99Error;
     String? skymoviesError;
     List<String> googleImages = [];
     bool isSearchingGoogle = false;
     String? googleError;
-    int activeTab = 0; // 0 = Google Images, 1 = Bing + DDG, 2 = HDMove99, 3 = SKY
+    int activeTab = 0; // 0 = Google Images, 1 = Bing + DDG, 2 = HDMove99
+    // (Sky Movies tab removed — not returning results)
 
     showDialog(
       context: context,
@@ -6510,21 +7265,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             void runSearch() {
               if (activeTab == 0) runGoogleSearch();
               else if (activeTab == 1) runServerSearch();
-              else if (activeTab == 2) runHdmove99Search();
-              else runSkymoviesSearch();
+              else runHdmove99Search(); // tab 2 = HDMove99 (SKY removed)
             }
 
             // Auto-trigger search on open if title is filled
-            if (googleImages.isEmpty && foundImages.isEmpty && hdmove99Images.isEmpty && skymoviesImages.isEmpty &&
-                !isSearchingGoogle && !isSearchingServer && !isSearchingHdmove99 && !isSearchingSkymovies &&
-                googleError == null && serverError == null && hdmove99Error == null && skymoviesError == null &&
+            if (googleImages.isEmpty && foundImages.isEmpty && hdmove99Images.isEmpty &&
+                !isSearchingGoogle && !isSearchingServer && !isSearchingHdmove99 &&
+                googleError == null && serverError == null && hdmove99Error == null &&
                 searchCtrl.text.trim().isNotEmpty) {
               WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
             }
 
-            final currentImages = activeTab == 0 ? googleImages : (activeTab == 1 ? foundImages : (activeTab == 2 ? hdmove99Images : skymoviesImages));
-            final isSearching = activeTab == 0 ? isSearchingGoogle : (activeTab == 1 ? isSearchingServer : (activeTab == 2 ? isSearchingHdmove99 : isSearchingSkymovies));
-            final searchError = activeTab == 0 ? googleError : (activeTab == 1 ? serverError : (activeTab == 2 ? hdmove99Error : skymoviesError));
+            final currentImages = activeTab == 0 ? googleImages : (activeTab == 1 ? foundImages : hdmove99Images);
+            final isSearching = activeTab == 0 ? isSearchingGoogle : (activeTab == 1 ? isSearchingServer : isSearchingHdmove99);
+            final searchError = activeTab == 0 ? googleError : (activeTab == 1 ? serverError : hdmove99Error);
+
 
             return Dialog(
               backgroundColor: const Color(0xFF0D1117),
@@ -6604,7 +7359,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // ── Source Tabs (Google Images, Bing+DDG, HDMove99, SKY) ──
+                    // ── Source Tabs (Google Images, Bing+DDG, HDMove99) ──
                     Container(
                       height: 36,
                       decoration: BoxDecoration(
@@ -6665,6 +7420,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               ),
                             ),
                           ),
+                          // HDMove99 tab
                           Expanded(
                             child: GestureDetector(
                               onTap: () {
@@ -6687,28 +7443,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               ),
                             ),
                           ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() => activeTab = 3);
-                                if (skymoviesImages.isEmpty && !isSearchingSkymovies && searchCtrl.text.isNotEmpty) runSkymoviesSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: activeTab == 3 ? Colors.purpleAccent.withOpacity(0.18) : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  'SKY${skymoviesImages.isNotEmpty ? " (${skymoviesImages.length})" : ""}',
-                                  style: TextStyle(
-                                    color: activeTab == 3 ? Colors.purpleAccent : Colors.white54,
-                                    fontSize: 11, fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                     ),
@@ -6720,6 +7454,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           // ── Google Images WebView ──
                           ? _GoogleImagesWebView(
                               query: searchCtrl.text.trim(),
+                              ottHint: _selectedOttGenreIds.isNotEmpty && _ottGenres.isNotEmpty
+                                  ? (_ottGenres.firstWhere(
+                                      (g) => _selectedOttGenreIds.contains(g['id'] is int ? g['id'] : int.tryParse('${g['id']}') ?? 0),
+                                      orElse: () => {'name': ''},
+                                    )['name'] ?? '').toString()
+                                  : '',
                               onImageSelected: (imgUrl) {
                                 if (onSelected != null) {
                                   onSelected(imgUrl);
@@ -7428,12 +8168,821 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+  //
+  // ── AAGMAAL AUTO IMPORTER VIEW ──
+  //
+  Widget _buildAagmaalImporterView() {
+    if (_aagmaalCatalog.isEmpty && !_aagmaalLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _aagmaalCatalog.isEmpty && !_aagmaalLoading) {
+          _loadAagmaalCatalog();
+        }
+      });
+    }
+
+    final width = MediaQuery.of(context).size.width;
+    int crossCount = 3;
+    if (width > 1200) {
+      crossCount = 6;
+    } else if (width > 900) {
+      crossCount = 5;
+    } else if (width > 600) {
+      crossCount = 4;
+    }
+
+    return Column(
+      children: [
+        // Header Bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF38121E), Color(0xFF1E1422)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.pinkAccent.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.local_fire_department_rounded, color: Colors.pinkAccent, size: 24),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Aagmaal Auto Importer", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                      Text("Grid View • Poster Gallery • Direct MP4 & Download Stream Extract", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => _loadAagmaalCatalog(forceRefresh: true),
+                  icon: const Icon(Icons.refresh_rounded, size: 14),
+                  label: const Text("REFRESH LATEST", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.pinkAccent.withOpacity(0.2),
+                    foregroundColor: Colors.pinkAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.pinkAccent, width: 0.8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Search Bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _aagmaalSearchCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: "Search Aagmaal catalog...",
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: Colors.pinkAccent),
+                    suffixIcon: _aagmaalSearchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white38),
+                            onPressed: () {
+                              _aagmaalSearchCtrl.clear();
+                              _aagmaalPage = 1;
+                              _loadAagmaalCatalog();
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF141722),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                  onSubmitted: (_) {
+                    _aagmaalPage = 1;
+                    _loadAagmaalCatalog();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () {
+                  _aagmaalPage = 1;
+                  _loadAagmaalCatalog();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.pinkAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text("SEARCH", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+
+        // Landscape Card Grid / List View
+        Expanded(
+          child: _aagmaalLoading
+              ? const Center(child: CircularProgressIndicator(color: Colors.pinkAccent))
+              : _aagmaalCatalog.isEmpty
+                  ? const Center(child: Text("No items found in Aagmaal catalog", style: TextStyle(color: Colors.white54)))
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        final width = constraints.maxWidth;
+                        final crossCount = width > 750 ? 3 : (width > 480 ? 2 : 1);
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: crossCount,
+                            childAspectRatio: 1.35,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                          ),
+                          itemCount: _aagmaalCatalog.length,
+                          itemBuilder: (context, index) {
+                            final item = _aagmaalCatalog[index];
+                            final poster = (item['poster'] ?? '').toString();
+                            final title = (item['title'] ?? 'Untitled').toString();
+                            final date = (item['date'] ?? '').toString();
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Color(0xFF24142B), Color(0xFF131520)],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.pinkAccent.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.45),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(16),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    // 16:9 Landscape Poster Banner
+                                    Expanded(
+                                      flex: 5,
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          poster.isNotEmpty
+                                              ? CachedNetworkImage(
+                                                  imageUrl: poster,
+                                                  fit: BoxFit.cover,
+                                                  errorWidget: (c, u, e) => Container(
+                                                    color: const Color(0xFF202636),
+                                                    child: const Center(child: Icon(Icons.movie_outlined, color: Colors.pinkAccent, size: 36)),
+                                                  ),
+                                                )
+                                              : Container(
+                                                  color: const Color(0xFF202636),
+                                                  child: const Center(child: Icon(Icons.movie_outlined, color: Colors.pinkAccent, size: 36)),
+                                                ),
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                colors: [Colors.transparent, Colors.black.withOpacity(0.75)],
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                              ),
+                                            ),
+                                          ),
+                                          if (date.isNotEmpty)
+                                            Positioned(
+                                              top: 8,
+                                              right: 8,
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black.withOpacity(0.85),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                  border: Border.all(color: Colors.pinkAccent.withOpacity(0.4)),
+                                                ),
+                                                child: Text(
+                                                  date,
+                                                  style: const TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                                ),
+                                              ),
+                                            ),
+                                          Positioned(
+                                            top: 8,
+                                            left: 8,
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.pinkAccent.withOpacity(0.85),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: const Text("AAGMAAL", style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Title & Auto-Import Action Bar
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              title,
+                                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          ElevatedButton.icon(
+                                            onPressed: () => _autoImportAagmaalItem(item),
+                                            icon: const Icon(Icons.download_rounded, size: 13),
+                                            label: const Text("IMPORT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800)),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.pinkAccent,
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                              visualDensity: VisualDensity.compact,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+        ),
+
+        // Pagination Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: const Color(0xFF141722),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: _aagmaalPage > 1
+                    ? () {
+                        setState(() => _aagmaalPage--);
+                        _loadAagmaalCatalog();
+                      }
+                    : null,
+              ),
+              Text("Page $_aagmaalPage", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: () {
+                  setState(() => _aagmaalPage++);
+                  _loadAagmaalCatalog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Client-side Scrapers for HDMaal & Aagmaal (Instant Fallback) ──
+
+  Future<List<Map<String, dynamic>>> _scrapeHdmaalSearch(String query) async {
+    try {
+      final uri = Uri.parse("https://hdmaal.gg/?s=${Uri.encodeComponent(query)}");
+      final res = await http.get(uri, headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://hdmaal.gg/',
+      }).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return [];
+      final html = res.body;
+      final results = <Map<String, dynamic>>[];
+
+      final reg = RegExp(r'<a[^>]+class="[^"]*video[^"]*"[^>]*href="([^"]+)"[^>]*title="([^"]*)"[^>]*style="([^"]*)"|<a[^>]+class="[^"]*video[^"]*"[^>]*style="([^"]*)"[^>]*title="([^"]*)"[^>]*href="([^"]+)"', caseSensitive: false);
+      for (final match in reg.allMatches(html)) {
+        final url = (match.group(1) ?? match.group(6) ?? '').trim();
+        final title = (match.group(2) ?? match.group(5) ?? '').trim();
+        final style = match.group(3) ?? match.group(4) ?? '';
+        var poster = '';
+        final bgMatch = RegExp(r'''background-image:\s*url\(['"]?([^'")]+)['"]?\)''').firstMatch(style);
+        if (bgMatch != null) {
+          poster = bgMatch.group(1) ?? '';
+        }
+        if (url.isNotEmpty && title.isNotEmpty) {
+          results.add({
+            'title': title,
+            'page_url': url,
+            'poster': poster,
+          });
+        }
+      }
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> _scrapeHdmaalDetails(String pageUrl) async {
+    try {
+      final res = await http.get(Uri.parse(pageUrl), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://hdmaal.gg/',
+      }).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return null;
+      final html = res.body;
+
+      var title = '';
+      final titleMatch = RegExp(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
+      if (titleMatch != null) {
+        title = titleMatch.group(1)!.trim();
+      }
+
+      var poster = '';
+      final ogMatch = RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (ogMatch != null) {
+        poster = ogMatch.group(1)!.trim();
+      }
+
+      var streamUrl = '';
+      final iframeMatch = RegExp(r'<iframe[^>]+src="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (iframeMatch != null) {
+        streamUrl = iframeMatch.group(1)!.trim();
+      }
+
+      if (streamUrl.isEmpty) {
+        final videoMatch = RegExp(r'''https?://[^\s<>"']+\.(?:mp4|m3u8)''', caseSensitive: false).firstMatch(html);
+        if (videoMatch != null) {
+          streamUrl = videoMatch.group(0)!;
+        }
+      }
+
+      return {
+        'title': title,
+        'poster': poster,
+        'stream_url': streamUrl,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Client-side Scrapers for UFFMaal (Instant Fallback & Multi-Episode) ──
+
+  Future<List<Map<String, dynamic>>> _scrapeUffmaalCatalog({String query = '', int page = 1}) async {
+    try {
+      final base = _uffmaalDomainCtrl.text.trim().isNotEmpty ? _uffmaalDomainCtrl.text.trim() : "https://uffmaal.com";
+      final q = query.trim();
+      final url = q.isNotEmpty
+          ? (page > 1 ? "$base/page/$page/?s=${Uri.encodeComponent(q)}" : "$base/?s=${Uri.encodeComponent(q)}")
+          : (page > 1 ? "$base/page/$page/" : "$base/");
+      final res = await http.get(Uri.parse(url), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Referer': '$base/',
+      }).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return [];
+      final html = res.body;
+      final results = <Map<String, dynamic>>[];
+      final seenUrls = <String>{};
+
+      // Match post-card articles
+      final articleReg = RegExp(
+        r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)="([^"]+)"[\s\S]*?<h2>([^<]+)</h2>',
+        caseSensitive: false,
+      );
+      for (final m in articleReg.allMatches(html)) {
+        final pageUrl = m.group(1)!.trim();
+        final poster = m.group(2)!.trim();
+        final title = m.group(3)!.trim();
+        if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+          seenUrls.add(pageUrl);
+          results.add({
+            'title': title,
+            'page_url': pageUrl,
+            'poster': poster,
+            'is_episode': pageUrl.contains('/episode/'),
+          });
+        }
+      }
+
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> _scrapeUffmaalDetails(String pageUrl) async {
+    try {
+      final base = _uffmaalDomainCtrl.text.trim().isNotEmpty ? _uffmaalDomainCtrl.text.trim() : "https://uffmaal.com";
+      final res = await http.get(Uri.parse(pageUrl), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': '$base/',
+      }).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return null;
+      final html = res.body;
+
+      var title = '';
+      final tMatch = RegExp(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>|<h1[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
+      if (tMatch != null) {
+        title = (tMatch.group(1) ?? tMatch.group(2) ?? '').trim();
+      }
+
+      var poster = '';
+      final vPoster = RegExp(r'<video[^>]+poster="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (vPoster != null) {
+        poster = vPoster.group(1)!.trim();
+      }
+      if (poster.isEmpty) {
+        final og = RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html);
+        if (og != null) poster = og.group(1)!.trim();
+      }
+
+      var streamUrl = '';
+      final srcMatch = RegExp(r'<source[^>]+src="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (srcMatch != null) {
+        streamUrl = srcMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+      }
+      if (streamUrl.isEmpty) {
+        final dlMatch = RegExp(r'<a[^>]+href="([^"]+\.mp4[^"]*)"[^>]*class="[^"]*mlink[^"]*"', caseSensitive: false).firstMatch(html);
+        if (dlMatch != null) {
+          streamUrl = dlMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        }
+      }
+      if (streamUrl.isEmpty) {
+        final videoTag = RegExp(r'''<video[^>]+src="([^"]+)"''', caseSensitive: false).firstMatch(html);
+        if (videoTag != null) {
+          streamUrl = videoTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        }
+      }
+
+      // Check if this is a series page with multiple episodes
+      final episodes = <Map<String, dynamic>>[];
+      final epMatches = RegExp(
+        r'<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)="([^"]+)"[\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>',
+        caseSensitive: false,
+      ).allMatches(html);
+
+      for (final em in epMatches) {
+        final epUrl = em.group(1)!.trim();
+        final epPoster = em.group(2)!.trim();
+        final epNum = em.group(3)!.trim();
+        episodes.add({
+          'episode_url': epUrl,
+          'poster': epPoster,
+          'episode_number': epNum,
+          'title': title.isNotEmpty ? '$title Episode $epNum' : 'Episode $epNum',
+        });
+      }
+
+      return {
+        'title': title,
+        'poster': poster,
+        'stream_url': streamUrl,
+        'episodes': episodes,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _scrapeAagmaalCatalog({String query = '', int page = 1}) async {
+    try {
+      final q = query.trim();
+      final url = q.isNotEmpty
+          ? (page > 1 ? "https://aagmaal.mba/page/$page/?s=${Uri.encodeComponent(q)}" : "https://aagmaal.mba/?s=${Uri.encodeComponent(q)}")
+          : (page > 1 ? "https://aagmaal.mba/page/$page/" : "https://aagmaal.mba/");
+      final res = await http.get(Uri.parse(url), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://aagmaal.mba/',
+      }).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return [];
+      final html = res.body;
+      final results = <Map<String, dynamic>>[];
+      final seenUrls = <String>{};
+
+      // Match thumbnail block + following title on Homepage and Category pages
+      final thumbBlockReg = RegExp(
+        r'<div[^>]*class="[^"]*post-thumbnail[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src|data-lazy-src)="([^"]+)"[\s\S]*?</div>[\s\S]*?<h[23][^>]*class="[^"]*post-box-title[^"]*"[^>]*>\s*<a[^>]+href="[^"]*"[^>]*>([^<]+)</a>',
+        caseSensitive: false,
+      );
+      for (final tm in thumbBlockReg.allMatches(html)) {
+        final pageUrl = tm.group(1)!.trim();
+        final poster = tm.group(2)!.trim();
+        final title = tm.group(3)!.trim();
+        if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+          seenUrls.add(pageUrl);
+          results.add({
+            'title': title,
+            'page_url': pageUrl,
+            'poster': poster,
+            'date': 'Latest',
+          });
+        }
+      }
+
+      // Match item-list articles on Search pages
+      if (results.isEmpty) {
+        final articleReg = RegExp(r'<article[^>]*class="[^"]*item-list[^"]*"[^>]*>([\s\S]*?)</article>', caseSensitive: false);
+        for (final m in articleReg.allMatches(html)) {
+          final block = m.group(1) ?? '';
+          var title = '';
+          var pageUrl = '';
+          var poster = '';
+          var date = 'Latest';
+
+          final tMatch = RegExp(r'<h[23][^>]*class="[^"]*post-box-title[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>', caseSensitive: false).firstMatch(block);
+          if (tMatch != null) {
+            pageUrl = tMatch.group(1)!.trim();
+            title = tMatch.group(2)!.trim();
+          }
+
+          final imgMatch = RegExp(r'<img[^>]+(?:src|data-src|data-lazy-src)="([^"]+)"', caseSensitive: false).firstMatch(block);
+          if (imgMatch != null) {
+            poster = imgMatch.group(1)!.trim();
+          }
+
+          final dMatch = RegExp(r'<span class="tie-date"[^>]*>([^<]+)</span>', caseSensitive: false).firstMatch(block);
+          if (dMatch != null) {
+            date = dMatch.group(1)!.trim();
+          }
+
+          if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+            seenUrls.add(pageUrl);
+            results.add({
+              'title': title,
+              'page_url': pageUrl,
+              'poster': poster,
+              'date': date,
+            });
+          }
+        }
+      }
+
+      // Fallback: match standalone post-box-titles
+      if (results.isEmpty) {
+        final titleReg = RegExp(r'<h[23][^>]*class="[^"]*post-box-title[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>', caseSensitive: false);
+        for (final tm in titleReg.allMatches(html)) {
+          final pageUrl = tm.group(1)!.trim();
+          final title = tm.group(2)!.trim();
+          if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+            seenUrls.add(pageUrl);
+            results.add({
+              'title': title,
+              'page_url': pageUrl,
+              'poster': '',
+              'date': 'Latest',
+            });
+          }
+        }
+      }
+
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> _scrapeAagmaalDetails(String pageUrl) async {
+    try {
+      final res = await http.get(Uri.parse(pageUrl), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://aagmaal.mba/',
+      }).timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return null;
+      final html = res.body;
+
+      var title = '';
+      final tMatch = RegExp(r'<h1[^>]*class="[^"]*post-title[^"]*"[^>]*>[\s\S]*?<span[^>]*itemprop="name">([^<]+)</span>|<h1[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
+      if (tMatch != null) {
+        title = (tMatch.group(1) ?? tMatch.group(2) ?? '').trim();
+      }
+
+      var poster = '';
+      final vPoster = RegExp(r'<video[^>]+poster="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (vPoster != null) {
+        poster = vPoster.group(1)!.trim();
+      }
+      if (poster.isEmpty) {
+        final og = RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html);
+        if (og != null) poster = og.group(1)!.trim();
+      }
+
+      var streamUrl = '';
+      final playLinks = <Map<String, dynamic>>[];
+
+      final srcMatch = RegExp(r'<source[^>]+src="([^"]+)"', caseSensitive: false).firstMatch(html);
+      if (srcMatch != null) {
+        streamUrl = srcMatch.group(1)!.trim();
+      }
+
+      if (streamUrl.isEmpty) {
+        final mp4Match = RegExp(r'''https?://[^\s<>"']+\.mp4(?:\?[^\s<>"']*)?''', caseSensitive: false).firstMatch(html);
+        if (mp4Match != null) {
+          streamUrl = mp4Match.group(0)!.trim();
+        }
+      }
+
+      if (streamUrl.isNotEmpty) {
+        playLinks.add({
+          'name': 'Server 1 (Direct HD)',
+          'type': 'MP4/MKV Direct Link',
+          'url': streamUrl,
+        });
+      }
+
+      final dlMatches = RegExp(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*shortc-button[^"]*"[^>]*>([^<]+)</a>|<a[^>]+class="[^"]*shortc-button[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)</a>', caseSensitive: false).allMatches(html);
+      int sIdx = 2;
+      for (final dlm in dlMatches) {
+        final dUrl = (dlm.group(1) ?? dlm.group(3) ?? '').trim();
+        var label = (dlm.group(2) ?? dlm.group(4) ?? '').trim();
+        label = label.replaceAll(RegExp(r'<[^>]*>'), '').trim();
+        if (dUrl.isNotEmpty && dUrl != streamUrl && !dUrl.contains('javascript') && !dUrl.contains('telegram.me') && !dUrl.contains('t.me')) {
+          var serverName = 'Server $sIdx ($label)';
+          var streamType = 'MP4/MKV Direct Link';
+          if (label.contains('720P') || label.contains('720p')) {
+            serverName = 'Server $sIdx (720P HD Mirror)';
+          } else if (label.contains('480P') || label.contains('480p')) {
+            serverName = 'Server $sIdx (480P SD Mirror)';
+          } else if (label.contains('1080P') || label.contains('1080p')) {
+            serverName = 'Server $sIdx (1080P Full HD Mirror)';
+          } else if (dUrl.contains('streamtape')) {
+            serverName = 'Server $sIdx (Streamtape Mirror)';
+            streamType = 'Streamtape Stream';
+          } else if (dUrl.contains('lulu')) {
+            serverName = 'Server $sIdx (Luluvdo Mirror)';
+            streamType = 'Luluvdo Stream';
+          }
+          playLinks.add({
+            'name': serverName,
+            'type': streamType,
+            'url': dUrl,
+          });
+          sIdx++;
+        }
+      }
+
+      return {
+        'title': title,
+        'poster': poster,
+        'stream_url': streamUrl,
+        'page_url': pageUrl,
+        'play_links': playLinks,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadAagmaalCatalog({bool forceRefresh = false}) async {
+    setState(() => _aagmaalLoading = true);
+    final q = _aagmaalSearchCtrl.text.trim();
+    List<dynamic> items = [];
+
+    // Client-side scraper first for instant loading with 100% posters
+    items = await _scrapeAagmaalCatalog(query: q, page: _aagmaalPage);
+
+    if (items.isEmpty) {
+      final res = await _adminPhpApi('fetch_aagmaal_catalog', {
+        'query': q,
+        'page': _aagmaalPage,
+        'refresh': forceRefresh ? 1 : 0,
+      });
+      if (res['status'] == 'success' && res['data']?['items'] != null) {
+        items = res['data']['items'];
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _aagmaalLoading = false;
+      _aagmaalCatalog = items;
+    });
+  }
+
+  Future<void> _autoImportAagmaalItem(dynamic item) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        backgroundColor: Color(0xFF141722),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.pinkAccent),
+            SizedBox(width: 16),
+            Expanded(child: Text("Extracting Aagmaal details & preparing movie draft...", style: TextStyle(color: Colors.white, fontSize: 12))),
+          ],
+        ),
+      ),
+    );
+
+    final pageUrl = (item['page_url'] ?? '').toString();
+    Map<String, dynamic>? data;
+
+    // Instant client extraction first
+    data = await _scrapeAagmaalDetails(pageUrl);
+
+    if (data == null || (data['stream_url'] ?? '').toString().isEmpty) {
+      final res = await _adminPhpApi('extract_aagmaal_details', {'page_url': pageUrl});
+      if (res['status'] == 'success' && res['data'] != null) {
+        data = Map<String, dynamic>.from(res['data']);
+      }
+    }
+
+    if (mounted) Navigator.pop(context);
+
+    if (data != null) {
+      final playLinks = (data['play_links'] as List<dynamic>? ?? []);
+      final primaryUrl = (data['stream_url'] ?? '').toString().trim();
+
+      setState(() {
+        _addType = 'movie';
+        _addTitleCtrl.text = data?['title'] ?? item['title'] ?? '';
+        _addDescCtrl.text = data?['description'] ?? "Watch ${data?['title'] ?? item['title']} online in HD.";
+        _addPosterUrlCtrl.text = data?['poster'] ?? data?['raw_poster'] ?? item['poster'] ?? '';
+        _addThumbUrlCtrl.text = data?['poster'] ?? data?['raw_poster'] ?? item['poster'] ?? '';
+        if (data?['release_date'] != null && (data!['release_date'] as String).isNotEmpty) {
+          _addReleaseDateCtrl.text = data['release_date'];
+        } else if (item['date'] != null && item['date'] != 'Latest') {
+          _addReleaseDateCtrl.text = item['date'];
+        }
+        final mainUrl = (playLinks.isNotEmpty && playLinks.first['url'] != null && playLinks.first['url'].toString().isNotEmpty)
+            ? playLinks.first['url'].toString().trim()
+            : primaryUrl;
+
+        if (mainUrl.isNotEmpty) {
+          _addStreamUrlCtrl.text = mainUrl;
+          if (mainUrl.contains('lulu') || primaryUrl.contains('tnmr.org')) {
+            _streamType = 'Luluvdo Stream';
+          } else if (mainUrl.contains('streamtape') || mainUrl.contains('tpead')) {
+            _streamType = 'Streamtape Stream';
+          } else if (mainUrl.contains('.mp4') || mainUrl.contains('.mkv') || mainUrl.contains('uncutmaal') || mainUrl.contains('download-hot-web-series')) {
+            _streamType = 'MP4/MKV Direct Link';
+          } else {
+            _streamType = 'MP4/MKV Direct Link';
+          }
+        } else {
+          _addStreamUrlCtrl.clear();
+        }
+
+        _extraMovieServers.clear();
+        for (int i = 1; i < playLinks.length; i++) {
+          final pl = playLinks[i];
+          _extraMovieServers.add({
+            'name': pl['name'] ?? 'Server ${i + 1}',
+            'type': pl['type'] ?? 'MP4/MKV Direct Link',
+            'ctrl': TextEditingController(text: pl['url'] ?? ''),
+          });
+        }
+        _selectedIndex = 2; // Switch to Add Content studio tab
+      });
+
+      final serverCount = playLinks.length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(serverCount > 0
+              ? "Aagmaal: Extracted $serverCount server link(s)! Review & Publish."
+              : "Aagmaal details extracted (No stream links found on page)."),
+          backgroundColor: serverCount > 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Extraction failed. Please check your network or try another title."),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
 
   // ── Quick Link Extractor Popup (Search or Paste URL) ──
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
-    int tab = 0; // 0 = HDMaal, 1 = Uncut, 2 = HDMove99, 3 = SKY
+    int tab = 0; // 0 = HDMaal, 1 = Aagmaal, 2 = Uncut, 3 = HDMove99, 4 = SKY
     bool isSearching = false;
     bool isExtracting = false;
     List<dynamic> searchResults = [];
@@ -7448,11 +8997,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             Future<void> runSearch() async {
               final q = queryCtrl.text.trim();
               if (q.isEmpty) return;
-
-              String extractAction = 'extract_hdmaal_details';
-              if (tab == 1) extractAction = 'extract_uncutmasti_details';
-              if (tab == 2) extractAction = 'extract_hdmove99_details';
-              if (tab == 3) extractAction = 'extract_skymovies_details';
 
               // If user pasted a full HTTP URL, directly extract!
               if (q.startsWith('http://') || q.startsWith('https://')) {
@@ -7484,6 +9028,54 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   return;
                 }
 
+                // Direct UFFMaal URL client fallback
+                if (q.contains('uffmaal') || tab == 1) {
+                  final clientData = await _scrapeUffmaalDetails(q);
+                  if (clientData != null) {
+                    final streamUrl = (clientData['stream_url'] ?? '').toString();
+                    final poster = (clientData['poster'] ?? '').toString();
+                    if (streamUrl.isNotEmpty) {
+                      if (!dialogCtx.mounted) return;
+                      dialogSetState(() => isExtracting = false);
+                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(poster.isNotEmpty ? "Extracted UFFMaal stream link & poster!" : "Extracted UFFMaal stream link!"),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                      return;
+                    }
+                  }
+                }
+
+                // Direct HDMaal URL client fallback
+                if (q.contains('hdmaal') || tab == 0) {
+                  final clientData = await _scrapeHdmaalDetails(q);
+                  if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    final streamUrl = clientData['stream_url'].toString();
+                    final poster = (clientData['poster'] ?? '').toString();
+                    onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(poster.isNotEmpty ? "Extracted HDMaal stream link & poster!" : "Extracted HDMaal stream link!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    return;
+                  }
+                }
+
+                String extractAction = 'extract_hdmaal_details';
+                if (tab == 1) extractAction = 'extract_uffmaal_details';
+                if (tab == 2) extractAction = 'extract_uncutmasti_details';
+                if (tab == 3) extractAction = 'extract_hdmove99_details';
+                if (tab == 4) extractAction = 'extract_skymovies_details';
+
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
                 dialogSetState(() => isExtracting = false);
@@ -7493,7 +9085,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     streamUrl = streamUrl.replaceAll(' ', '%20');
                   }
                   if (streamUrl.isNotEmpty) {
-                    final extractedPoster = (res['data']['poster'] ?? '').toString();
+                    final extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
                     onLinkSelected(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null);
                     Navigator.pop(ctx);
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -7516,21 +9108,36 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 searchResults = [];
               });
 
-              String searchAction = 'search_hdmaal_catalog';
-              if (tab == 1) searchAction = 'search_uncutmasti_catalog';
-              if (tab == 2) searchAction = 'search_hdmove99_catalog';
-              if (tab == 3) searchAction = 'search_skymovies_catalog';
+              List<dynamic> items = [];
 
-              final res = await _adminPhpApi(searchAction, {'query': q});
+              if (tab == 0) {
+                // HDMaal search: instant client scraper first
+                items = await _scrapeHdmaalSearch(q);
+                if (items.isEmpty) {
+                  final res = await _adminPhpApi('search_hdmaal_catalog', {'query': q});
+                  if (res['status'] == 'success' && res['data']?['items'] != null) {
+                    items = res['data']['items'];
+                  }
+                }
+              } else if (tab == 1) {
+                // UFFMaal search: instant client scraper
+                items = await _scrapeUffmaalCatalog(query: q);
+              } else {
+                String searchAction = 'search_uncutmasti_catalog';
+                if (tab == 3) searchAction = 'search_hdmove99_catalog';
+                if (tab == 4) searchAction = 'search_skymovies_catalog';
+                final res = await _adminPhpApi(searchAction, {'query': q});
+                if (res['status'] == 'success' && res['data']?['items'] != null) {
+                  items = res['data']['items'];
+                }
+              }
 
               if (!dialogCtx.mounted) return;
               dialogSetState(() {
                 isSearching = false;
-                if (res['status'] == 'success' && res['data']?['items'] != null) {
-                  searchResults = res['data']['items'];
-                  if (searchResults.isEmpty) errorText = "No items matched your query.";
-                } else {
-                  errorText = res['message'] ?? "Search failed";
+                searchResults = items;
+                if (items.isEmpty) {
+                  errorText = "No items matched your query.";
                 }
               });
             }
@@ -7541,36 +9148,67 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 errorText = null;
               });
 
-              String extractAction = 'extract_hdmaal_details';
-              if (tab == 1) extractAction = 'extract_uncutmasti_details';
-              if (tab == 2) extractAction = 'extract_hdmove99_details';
-              if (tab == 3) extractAction = 'extract_skymovies_details';
+              String? streamUrl;
+              String? extractedPoster;
 
-              final res = await _adminPhpApi(extractAction, {'page_url': pageUrl});
+              if (tab == 0) {
+                // HDMaal: instant client extraction
+                final clientData = await _scrapeHdmaalDetails(pageUrl);
+                if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                  streamUrl = clientData['stream_url'].toString();
+                  extractedPoster = (clientData['poster'] ?? '').toString();
+                } else {
+                  final res = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    streamUrl = res['data']['stream_url'].toString().trim();
+                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                  }
+                }
+              } else if (tab == 1) {
+                // UFFMaal: instant client extraction
+                final clientData = await _scrapeUffmaalDetails(pageUrl);
+                if (clientData != null) {
+                  if ((clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    streamUrl = clientData['stream_url'].toString();
+                    extractedPoster = (clientData['poster'] ?? '').toString();
+                  } else if ((clientData['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
+                    // It's a series page: extract the first episode stream
+                    final firstEp = (clientData['episodes'] as List<dynamic>).first;
+                    final epDetails = await _scrapeUffmaalDetails(firstEp['episode_url'] ?? '');
+                    if (epDetails != null && (epDetails['stream_url'] ?? '').toString().isNotEmpty) {
+                      streamUrl = epDetails['stream_url'].toString();
+                      extractedPoster = (epDetails['poster'] ?? firstEp['poster'] ?? clientData['poster'] ?? '').toString();
+                    }
+                  }
+                }
+              } else {
+                String extractAction = 'extract_uncutmasti_details';
+                if (tab == 3) extractAction = 'extract_hdmove99_details';
+                if (tab == 4) extractAction = 'extract_skymovies_details';
+                final res = await _adminPhpApi(extractAction, {'page_url': pageUrl});
+                if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                  streamUrl = res['data']['stream_url'].toString().trim();
+                  extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                }
+              }
 
               if (!dialogCtx.mounted) return;
               dialogSetState(() => isExtracting = false);
 
-              if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                var streamUrl = res['data']['stream_url'].toString().trim();
+              if (streamUrl != null && streamUrl.isNotEmpty) {
                 if (streamUrl.contains(' ')) {
                   streamUrl = streamUrl.replaceAll(' ', '%20');
                 }
-                if (streamUrl.isNotEmpty) {
-                  final extractedPoster = (res['data']['poster'] ?? '').toString();
-                  onLinkSelected(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null);
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(extractedPoster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                } else {
-                  dialogSetState(() => errorText = "No video link found on selected page.");
-                }
+                onLinkSelected(streamUrl, posterUrl: (extractedPoster != null && extractedPoster.isNotEmpty) ? extractedPoster : null);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text((extractedPoster != null && extractedPoster.isNotEmpty) ? "Extracted stream link & poster!" : "Extracted stream link!"),
+                    backgroundColor: Colors.green,
+                  ),
+                );
               } else {
-                dialogSetState(() => errorText = res['message'] ?? "Extraction failed");
+                dialogSetState(() => errorText = "No video link found on selected page.");
               }
             }
 
@@ -7595,7 +9233,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Source Tabs (HDMaal, Uncut, HDMove99, SKY)
+                    // Source Tabs (HDMaal, UFFMaal, Uncut, HDMove99, SKY)
                     Container(
                       height: 34,
                       decoration: BoxDecoration(color: const Color(0xFF161B22), borderRadius: BorderRadius.circular(8)),
@@ -7629,9 +9267,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                 runSearch();
                               },
                               child: Container(
-                                decoration: BoxDecoration(color: tab == 1 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                decoration: BoxDecoration(color: tab == 1 ? Colors.amberAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
                                 alignment: Alignment.center,
-                                child: Text("Uncut", style: TextStyle(color: tab == 1 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                                child: Text("UFFMaal", style: TextStyle(color: tab == 1 ? Colors.amberAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                               ),
                             ),
                           ),
@@ -7646,9 +9284,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                 runSearch();
                               },
                               child: Container(
-                                decoration: BoxDecoration(color: tab == 2 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                decoration: BoxDecoration(color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
                                 alignment: Alignment.center,
-                                child: Text("HDMove99", style: TextStyle(color: tab == 2 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                                child: Text("Uncut", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                               ),
                             ),
                           ),
@@ -7663,9 +9301,26 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                 runSearch();
                               },
                               child: Container(
-                                decoration: BoxDecoration(color: tab == 3 ? Colors.cyanAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                decoration: BoxDecoration(color: tab == 3 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
                                 alignment: Alignment.center,
-                                child: Text("SKY", style: TextStyle(color: tab == 3 ? Colors.cyanAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                                child: Text("HDMove99", style: TextStyle(color: tab == 3 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                dialogSetState(() {
+                                  tab = 4;
+                                  searchResults = [];
+                                  errorText = null;
+                                });
+                                runSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(color: tab == 4 ? Colors.cyanAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
+                                alignment: Alignment.center,
+                                child: Text("SKY", style: TextStyle(color: tab == 4 ? Colors.cyanAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                               ),
                             ),
                           ),
@@ -7813,6 +9468,647 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
   }
 
+  // ── Multi-Episode Batch Importer Dialog (UFFMaal / HDMaal / Uncut) ──
+  void _showBatchEpisodeImportDialog({
+    required int seriesId,
+    required String seriesTitle,
+    required dynamic currentSeason,
+    required List<dynamic> currentEpisodes,
+    required Future<void> Function() refresh,
+  }) {
+    final searchCtrl = TextEditingController(text: seriesTitle.trim());
+    int tab = 0; // 0 = UFFMaal, 1 = HDMaal, 2 = Uncut
+    bool isSearching = false;
+    bool isImporting = false;
+    String importStatus = '';
+    double importProgress = 0.0;
+    List<Map<String, dynamic>> episodeItems = [];
+    String namingMode = 'episode'; // 'episode' (Episode 1,2..), 'part' (Part 1,2..), 'original'
+    String selectedQuality = '720p';
+    int startOrder = currentEpisodes.length + 1;
+    String? errorText;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, dialogSetState) {
+            Future<void> performSearch() async {
+              final q = searchCtrl.text.trim();
+              if (q.isEmpty) return;
+              dialogSetState(() {
+                isSearching = true;
+                errorText = null;
+                episodeItems = [];
+              });
+
+              try {
+                // If direct URL is pasted
+                if (q.startsWith('http://') || q.startsWith('https://')) {
+                  if (q.contains('uffmaal') || tab == 0) {
+                    final details = await _scrapeUffmaalDetails(q);
+                    if (details != null) {
+                      final eps = (details['episodes'] as List<dynamic>? ?? []);
+                      if (eps.isNotEmpty) {
+                        episodeItems = eps.map((e) => {
+                          'title': e['title'] ?? 'Episode ${e['episode_number']}',
+                          'url': e['episode_url'] ?? '',
+                          'poster': e['poster'] ?? details['poster'] ?? '',
+                          'ep_num': e['episode_number'] ?? '',
+                          'selected': true,
+                        }).toList();
+                      } else if ((details['stream_url'] ?? '').toString().isNotEmpty) {
+                        episodeItems = [{
+                          'title': details['title'] ?? 'Episode 1',
+                          'url': q,
+                          'stream_url': details['stream_url'],
+                          'poster': details['poster'] ?? '',
+                          'ep_num': '1',
+                          'selected': true,
+                        }];
+                      }
+                    }
+                  }
+                } else {
+                  // Search query
+                  if (tab == 0) {
+                    // UFFMaal catalog search
+                    final results = await _scrapeUffmaalCatalog(query: q);
+                    if (results.isNotEmpty) {
+                      // Find first series or list all results
+                      final seriesItem = results.firstWhere((r) => r['is_episode'] != true, orElse: () => results.first);
+                      final details = await _scrapeUffmaalDetails(seriesItem['page_url'] ?? '');
+                      if (details != null && (details['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
+                        final eps = details['episodes'] as List<dynamic>;
+                        episodeItems = eps.map((e) => {
+                          'title': e['title'] ?? 'Episode ${e['episode_number']}',
+                          'url': e['episode_url'] ?? '',
+                          'poster': e['poster'] ?? details['poster'] ?? '',
+                          'ep_num': e['episode_number'] ?? '',
+                          'selected': true,
+                        }).toList();
+                      } else {
+                        // All results as episodes
+                        episodeItems = results.map((r) => {
+                          'title': r['title'] ?? 'Episode',
+                          'url': r['page_url'] ?? '',
+                          'poster': r['poster'] ?? '',
+                          'ep_num': '',
+                          'selected': true,
+                        }).toList();
+                      }
+                    }
+                  } else if (tab == 1) {
+                    // HDMaal
+                    final results = await _scrapeHdmaalSearch(q);
+                    episodeItems = results.map((r) => {
+                      'title': r['title'] ?? 'Episode',
+                      'url': r['page_url'] ?? '',
+                      'poster': r['poster'] ?? '',
+                      'ep_num': '',
+                      'selected': true,
+                    }).toList();
+                  } else {
+                    // Uncut
+                    final res = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      final items = res['data']['items'] as List<dynamic>;
+                      episodeItems = items.map((r) => {
+                        'title': r['title'] ?? 'Episode',
+                        'url': r['page_url'] ?? '',
+                        'poster': r['poster'] ?? '',
+                        'ep_num': '',
+                        'selected': true,
+                      }).toList();
+                    }
+                  }
+                }
+                if (episodeItems.isEmpty) {
+                  errorText = "No episodes found for '$q'. Try another title or paste series URL.";
+                }
+              } catch (e) {
+                errorText = "Search error: $e";
+              }
+
+              if (!dialogCtx.mounted) return;
+              dialogSetState(() => isSearching = false);
+            }
+
+            Future<void> runBatchImport() async {
+              final selectedList = episodeItems.where((e) => e['selected'] == true).toList();
+              if (selectedList.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please select at least 1 episode to import"), backgroundColor: Colors.orange),
+                );
+                return;
+              }
+
+              dialogSetState(() {
+                isImporting = true;
+                importProgress = 0.0;
+                importStatus = "Starting batch extraction & import...";
+              });
+
+              final episodesPayload = <Map<String, dynamic>>[];
+              int successCount = 0;
+
+              for (int i = 0; i < selectedList.length; i++) {
+                final item = selectedList[i];
+                final epIndex = i + 1;
+                final epOrder = startOrder + i;
+                dialogSetState(() {
+                  importStatus = "Resolving stream $epIndex of ${selectedList.length}...";
+                  importProgress = (i) / selectedList.length;
+                });
+
+                String streamUrl = (item['stream_url'] ?? '').toString();
+                String poster = (item['poster'] ?? '').toString();
+
+                if (streamUrl.isEmpty) {
+                  final pageUrl = (item['url'] ?? '').toString();
+                  if (pageUrl.contains('uffmaal')) {
+                    final d = await _scrapeUffmaalDetails(pageUrl);
+                    if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
+                      streamUrl = d['stream_url'].toString();
+                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString();
+                    }
+                  } else if (pageUrl.contains('hdmaal')) {
+                    final d = await _scrapeHdmaalDetails(pageUrl);
+                    if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
+                      streamUrl = d['stream_url'].toString();
+                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString();
+                    }
+                  } else {
+                    final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString();
+                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString();
+                    }
+                  }
+                }
+
+                if (streamUrl.isNotEmpty) {
+                  String epName = "Episode $epIndex";
+                  if (namingMode == 'part') {
+                    epName = "Part $epIndex";
+                  } else if (namingMode == 'original') {
+                    epName = (item['title'] ?? "Episode $epIndex").toString();
+                  }
+
+                  episodesPayload.add({
+                    'name': epName,
+                    'url': streamUrl,
+                    'episode_image': poster,
+                    'stream_type': 'MP4/MKV Direct Link',
+                    'quality': selectedQuality,
+                    'order': epOrder,
+                    'play_links': [
+                      {
+                        'name': 'Server 1',
+                        'type': 'MP4/MKV Direct Link',
+                        'quality': selectedQuality,
+                        'url': streamUrl,
+                      }
+                    ],
+                  });
+                }
+              }
+
+              if (episodesPayload.isEmpty) {
+                dialogSetState(() {
+                  isImporting = false;
+                  errorText = "Could not extract playable streams for any selected episode.";
+                });
+                return;
+              }
+
+              dialogSetState(() {
+                importStatus = "Saving ${episodesPayload.length} episodes to database...";
+                importProgress = 0.9;
+              });
+
+              final seasonName = (currentSeason?['Session_Name'] ?? 'Season 1').toString().trim();
+              final batchRes = await _adminPhpApi('batch_add_episodes', {
+                'series_id': seriesId,
+                'season_name': seasonName,
+                'episodes': episodesPayload,
+              });
+
+              if (batchRes['status'] == 'success') {
+                successCount = batchRes['data']?['inserted_count'] ?? episodesPayload.length;
+              } else {
+                for (final ep in episodesPayload) {
+                  final sRes = await _adminPhpApi('add_episode_link', {
+                    'series_id': seriesId,
+                    'season_name': seasonName,
+                    'name': ep['name'],
+                    'url': ep['url'],
+                    'stream_type': ep['stream_type'],
+                    'episode_image': ep['episode_image'],
+                    'quality': ep['quality'],
+                    'order': ep['order'],
+                    'play_links': ep['play_links'],
+                  });
+                  if (sRes['status'] == 'success') successCount++;
+                }
+              }
+
+              if (!dialogCtx.mounted) return;
+              Navigator.pop(ctx);
+              await refresh();
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text("Successfully imported $successCount episode(s) into $seasonName!")),
+                    ],
+                  ),
+                  backgroundColor: Colors.green,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+
+            if (searchCtrl.text.trim().isNotEmpty && !isSearching && episodeItems.isEmpty && errorText == null && !isImporting) {
+              WidgetsBinding.instance.addPostFrameCallback((_) => performSearch());
+            }
+
+            final selectedCount = episodeItems.where((e) => e['selected'] == true).length;
+
+            return Dialog(
+              backgroundColor: const Color(0xFF0F131D),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.95,
+                constraints: const BoxConstraints(maxWidth: 540, maxHeight: 680),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(colors: [Color(0xFFFF8008), Color(0xFFFFC837)]),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.bolt_rounded, color: Colors.black, size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "⚡ Batch Import Multi Episodes",
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              Text(
+                                "Target Season: ${(currentSeason?['Session_Name'] ?? 'Season').toString().trim()}",
+                                style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (!isImporting)
+                          IconButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Source Tabs
+                    Container(
+                      height: 32,
+                      decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isImporting ? null : () {
+                                dialogSetState(() {
+                                  tab = 0;
+                                  episodeItems = [];
+                                  errorText = null;
+                                });
+                                performSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: tab == 0 ? Colors.amberAccent.withOpacity(0.2) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text("UFFMaal (Fast CDN)", style: TextStyle(color: tab == 0 ? Colors.amberAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isImporting ? null : () {
+                                dialogSetState(() {
+                                  tab = 1;
+                                  episodeItems = [];
+                                  errorText = null;
+                                });
+                                performSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: tab == 1 ? Colors.purpleAccent.withOpacity(0.2) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text("HDMaal", style: TextStyle(color: tab == 1 ? Colors.purpleAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isImporting ? null : () {
+                                dialogSetState(() {
+                                  tab = 2;
+                                  episodeItems = [];
+                                  errorText = null;
+                                });
+                                performSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text("UncutMasti", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Search input
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF141722),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: TextField(
+                              controller: searchCtrl,
+                              enabled: !isImporting,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                              decoration: const InputDecoration(
+                                hintText: "Search series title or paste series URL...",
+                                hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                                prefixIcon: Icon(Icons.search_rounded, color: Colors.amberAccent, size: 18),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              ),
+                              onSubmitted: (_) => performSearch(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: isSearching || isImporting ? null : performSearch,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amberAccent,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Search", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Naming Format & Quality Controls
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141722),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("Title Naming Format:", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              _buildFormatChip("Episode 1, 2...", namingMode == 'episode', () {
+                                dialogSetState(() => namingMode = 'episode');
+                              }),
+                              const SizedBox(width: 6),
+                              _buildFormatChip("Part 1, 2...", namingMode == 'part', () {
+                                dialogSetState(() => namingMode = 'part');
+                              }),
+                              const SizedBox(width: 6),
+                              _buildFormatChip("Original Titles", namingMode == 'original', () {
+                                dialogSetState(() => namingMode = 'original');
+                              }),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              const Text("Quality:", style: TextStyle(color: Colors.white60, fontSize: 11)),
+                              const SizedBox(width: 8),
+                              DropdownButton<String>(
+                                value: selectedQuality,
+                                dropdownColor: const Color(0xFF141722),
+                                underline: const SizedBox.shrink(),
+                                style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                items: ['480p', '720p', '1080p'].map((q) => DropdownMenuItem(value: q, child: Text(q))).toList(),
+                                onChanged: isImporting ? null : (val) {
+                                  if (val != null) dialogSetState(() => selectedQuality = val);
+                                },
+                              ),
+                              const Spacer(),
+                              if (episodeItems.isNotEmpty)
+                                TextButton(
+                                  onPressed: isImporting ? null : () {
+                                    final allSelected = episodeItems.every((e) => e['selected'] == true);
+                                    dialogSetState(() {
+                                      for (var e in episodeItems) {
+                                        e['selected'] = !allSelected;
+                                      }
+                                    });
+                                  },
+                                  style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: EdgeInsets.zero),
+                                  child: Text(
+                                    episodeItems.every((e) => e['selected'] == true) ? "Deselect All" : "Select All",
+                                    style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Episodes List / Loading Status
+                    if (isImporting) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Column(
+                          children: [
+                            LinearProgressIndicator(value: importProgress > 0 ? importProgress : null, backgroundColor: Colors.white12, color: Colors.amberAccent),
+                            const SizedBox(height: 12),
+                            Text(importStatus, style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
+                          ],
+                        ),
+                      ),
+                    ] else if (isSearching) ...[
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: CircularProgressIndicator(color: Colors.amberAccent),
+                        ),
+                      ),
+                    ] else if (errorText != null) ...[
+                      Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 11), textAlign: TextAlign.center),
+                      ),
+                    ] else if (episodeItems.isNotEmpty) ...[
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF141722),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white.withOpacity(0.06)),
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.all(8),
+                            itemCount: episodeItems.length,
+                            separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
+                            itemBuilder: (c, i) {
+                              final ep = episodeItems[i];
+                              final isChecked = ep['selected'] == true;
+                              final poster = (ep['poster'] ?? '').toString();
+                              String displayName = namingMode == 'part' ? "Part ${i + 1}" : (namingMode == 'episode' ? "Episode ${i + 1}" : ep['title']);
+
+                              return CheckboxListTile(
+                                value: isChecked,
+                                activeColor: Colors.amberAccent,
+                                checkColor: Colors.black,
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                                secondary: poster.isNotEmpty
+                                    ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: CachedNetworkImage(
+                                          imageUrl: poster,
+                                          width: 48,
+                                          height: 32,
+                                          fit: BoxFit.cover,
+                                          errorWidget: (cx, u, e) => const Icon(Icons.tv, color: Colors.white24, size: 20),
+                                        ),
+                                      )
+                                    : const Icon(Icons.tv, color: Colors.white24, size: 20),
+                                title: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                                subtitle: Text(ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                onChanged: (val) {
+                                  dialogSetState(() => ep['selected'] = val == true);
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ] else ...[
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: Text("Search for a series title or paste a series URL to discover episodes.", style: TextStyle(color: Colors.white38, fontSize: 11), textAlign: TextAlign.center),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 14),
+
+                    // Actions
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed: isImporting ? null : () => Navigator.pop(ctx),
+                            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
+                            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton.icon(
+                            onPressed: isImporting || selectedCount == 0 ? null : runBatchImport,
+                            icon: const Icon(Icons.bolt_rounded, size: 16),
+                            label: Text(
+                              selectedCount > 0 ? "⚡ IMPORT ($selectedCount) EPISODES" : "Select Episodes",
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amberAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFormatChip(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.amberAccent.withOpacity(0.2) : Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: isSelected ? Colors.amberAccent : Colors.white12, width: isSelected ? 1 : 0.5),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.amberAccent : Colors.white70,
+            fontSize: 10,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<List<String>> _doClientSideImageSearch(String query) async {
     final List<String> results = [];
@@ -8197,9 +10493,264 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   },
                 ),
               ),
+            const SizedBox(height: 16),
+
+            // 5. FLY MODE ANALYTICS
+            ..._buildFlyModeAnalyticsWidgets(_telemetryDashboardData?['fly_mode'] as Map<String, dynamic>?),
             const SizedBox(height: 20),
           ],
         ),
+      ),
+    );
+  }
+
+  List<Widget> _buildFlyModeAnalyticsWidgets(Map<String, dynamic>? fly) {
+    if (fly == null) return const [];
+    final totalPlays = int.tryParse(fly['total_plays']?.toString() ?? '0') ?? 0;
+    final totalDownloads = int.tryParse(fly['total_downloads']?.toString() ?? '0') ?? 0;
+    final playsToday = int.tryParse(fly['plays_today']?.toString() ?? '0') ?? 0;
+    final playsWeek = int.tryParse(fly['plays_week']?.toString() ?? '0') ?? 0;
+    final uniqueUsers = int.tryParse(fly['unique_users']?.toString() ?? '0') ?? 0;
+    final topSources = (fly['top_sources'] as List? ?? []);
+    final topUsers = (fly['top_users'] as List? ?? []);
+    final topVideos = (fly['top_videos'] as List? ?? []);
+    final recent = (fly['recent'] as List? ?? []);
+    final int maxSourcePlays = topSources.fold(0, (m, s) {
+      final p = int.tryParse(s['plays']?.toString() ?? '0') ?? 0;
+      return p > m ? p : m;
+    });
+
+    return [
+      _buildSectionHeader(Icons.flight_takeoff_rounded, "FLY MODE ANALYTICS", Colors.deepPurpleAccent),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(
+            child: _buildFlyStatCard("Total Plays", "$totalPlays", const Color(0xFFE50914), Icons.play_circle_fill_rounded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildFlyStatCard("Downloads", "$totalDownloads", Colors.cyanAccent, Icons.download_done_rounded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildFlyStatCard("Plays Today", "$playsToday", Colors.amberAccent, Icons.today_rounded),
+          ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(
+            child: _buildFlyStatCard("Plays (7d)", "$playsWeek", Colors.blueAccent, Icons.date_range_rounded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildFlyStatCard("Unique Users", "$uniqueUsers", Colors.deepPurpleAccent, Icons.person_pin_rounded),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+
+      // Most visited sites
+      _buildSectionHeader(Icons.language_rounded, "MOST VISITED SITES", Colors.deepPurpleAccent),
+      const SizedBox(height: 8),
+      if (topSources.isEmpty)
+        _buildEmptyCard("No Fly Mode plays registered yet.")
+      else
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF161924),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: topSources.length,
+            separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+            itemBuilder: (context, index) {
+              final s = topSources[index];
+              final name = s['source_name'] ?? s['source_id'] ?? 'Unknown';
+              final plays = int.tryParse(s['plays']?.toString() ?? '0') ?? 0;
+              final downloads = int.tryParse(s['download_count']?.toString() ?? '0') ?? 0;
+              final pct = maxSourcePlays > 0 ? plays / maxSourcePlays : 0.0;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                        ),
+                        Text("$plays plays • $downloads dl", style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: pct,
+                        minHeight: 6,
+                        backgroundColor: Colors.white10,
+                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepPurpleAccent),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      const SizedBox(height: 16),
+
+      // Most active users
+      _buildSectionHeader(Icons.military_tech_rounded, "MOST ACTIVE FLY MODE USERS", Colors.orangeAccent),
+      const SizedBox(height: 8),
+      if (topUsers.isEmpty)
+        _buildEmptyCard("No Fly Mode user activity yet.")
+      else
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF161924),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: topUsers.length,
+            separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+            itemBuilder: (context, index) {
+              final u = topUsers[index];
+              final name = u['user_name'] ?? 'User';
+              final plays = int.tryParse(u['plays']?.toString() ?? '0') ?? 0;
+              return ListTile(
+                dense: true,
+                leading: CircleAvatar(
+                  radius: 12,
+                  backgroundColor: index == 0
+                      ? Colors.amber
+                      : index == 1
+                          ? Colors.grey[400]
+                          : index == 2
+                              ? Colors.brown[400]
+                              : Colors.white12,
+                  child: Text(
+                    "${index + 1}",
+                    style: TextStyle(color: index < 3 ? Colors.black : Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                trailing: Text("$plays plays", style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+              );
+            },
+          ),
+        ),
+      const SizedBox(height: 16),
+
+      // Most watched videos
+      _buildSectionHeader(Icons.local_fire_department_rounded, "MOST WATCHED FLY MODE VIDEOS", Colors.redAccent),
+      const SizedBox(height: 8),
+      if (topVideos.isEmpty)
+        _buildEmptyCard("No Fly Mode video statistics yet.")
+      else
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF161924),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: topVideos.length,
+            separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+            itemBuilder: (context, index) {
+              final v = topVideos[index];
+              final title = v['video_title'] ?? 'Unknown Video';
+              final source = v['source_name'] ?? 'Unknown';
+              final plays = int.tryParse(v['plays']?.toString() ?? '0') ?? 0;
+              return ListTile(
+                dense: true,
+                leading: const Icon(Icons.movie_rounded, size: 18, color: Colors.redAccent),
+                title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                subtitle: Text("$source • $plays plays", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              );
+            },
+          ),
+        ),
+      const SizedBox(height: 16),
+
+      // Recent activity
+      _buildSectionHeader(Icons.sensors_rounded, "RECENT FLY MODE ACTIVITY", Colors.greenAccent),
+      const SizedBox(height: 8),
+      if (recent.isEmpty)
+        _buildEmptyCard("No Fly Mode activity yet.")
+      else
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF161924),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: recent.length,
+            separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+            itemBuilder: (context, index) {
+              final r = recent[index];
+              final name = r['user_name'] ?? 'Guest';
+              final source = r['source_name'] ?? '';
+              final title = r['video_title'] ?? '';
+              final isPlay = (r['action'] ?? 'play') == 'play';
+              final when = (r['created_at'] ?? '').toString();
+              return ListTile(
+                dense: true,
+                leading: Icon(isPlay ? Icons.play_arrow_rounded : Icons.download_done_rounded, size: 18, color: isPlay ? Colors.greenAccent : Colors.cyanAccent),
+                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  "${isPlay ? "Played" : "Downloaded"}${source.isNotEmpty ? " on $source" : ""}${when.isNotEmpty ? " • $when" : ""}",
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: title.isNotEmpty
+                    ? Icon(isPlay ? Icons.play_circle_fill : Icons.download_done, size: 18, color: isPlay ? Colors.greenAccent : Colors.cyanAccent)
+                    : null,
+              );
+            },
+          ),
+        ),
+    ];
+  }
+
+  Widget _buildFlyStatCard(String label, String value, Color color, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [color.withOpacity(0.25), const Color(0xFF161924)]),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+        ],
       ),
     );
   }
@@ -9659,135 +12210,310 @@ class _MovieRepairDialogState extends State<_MovieRepairDialog> {
   @override
   Widget build(BuildContext context) {
     final links = widget.item['dead_links'] as List? ?? [];
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1A2132),
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
-      title: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: (widget.item['poster'] ?? '').toString().isNotEmpty
-                ? CachedNetworkImage(imageUrl: widget.item['poster'].toString(), width: 34, height: 44, fit: BoxFit.cover, errorWidget: (c, u, e) => const Icon(Icons.movie, color: Colors.white38))
-                : const Icon(Icons.movie, color: Colors.white38),
-          ),
-          const SizedBox(width: 10),
-          Expanded(child: Text(widget.item['name'] ?? 'Movie', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-        ],
+    return Dialog(
+      backgroundColor: const Color(0xFF0F131D),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: Colors.white.withOpacity(0.1)),
       ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("OLD (dead) LINKS:", style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            if (links.isEmpty)
-              const Text("No old links found", style: TextStyle(color: Colors.white38, fontSize: 12))
-            else
-              ...links.map((l) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.95,
+        constraints: const BoxConstraints(maxWidth: 480),
+        padding: const EdgeInsets.all(20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header Card ──
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: (widget.item['poster'] ?? '').toString().isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: widget.item['poster'].toString(),
+                            width: 50,
+                            height: 68,
+                            fit: BoxFit.cover,
+                            errorWidget: (c, u, e) => Container(
+                              width: 50,
+                              height: 68,
+                              color: const Color(0xFF1E2436),
+                              child: const Icon(Icons.movie, color: Colors.white38),
+                            ),
+                          )
+                        : Container(
+                            width: 50,
+                            height: 68,
+                            color: const Color(0xFF1E2436),
+                            child: const Icon(Icons.movie, color: Colors.white38),
+                          ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text("• ${l['url']}", style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontFamily: 'monospace')),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.link_off_rounded, color: Colors.redAccent, size: 12),
+                              SizedBox(width: 4),
+                              Text("DEAD LINK REPAIR", style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                            ],
+                          ),
                         ),
-                        IconButton(
-                          onPressed: () => _openInBrowser(l['url']?.toString() ?? ''),
-                          icon: const Icon(Icons.open_in_browser_rounded, color: Colors.cyanAccent, size: 18),
-                          tooltip: 'Open in browser to verify',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          visualDensity: VisualDensity.compact,
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.item['name'] ?? 'Movie',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
-                  )),
-            const SizedBox(height: 12),
-            const Text("NEW LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _newUrlCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: "Paste new Streamtape / MP4 link",
-                      hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
-                      filled: true,
-                      fillColor: const Color(0xFF090A0F),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  IconButton(
+                    onPressed: _busy ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.05),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // ── Old Broken Links Section ──
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161B28),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: links.isNotEmpty ? Colors.redAccent.withOpacity(0.25) : Colors.white.withOpacity(0.06)),
                 ),
-                const SizedBox(width: 6),
-                ElevatedButton(
-                  onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
-                    setState(() => _newUrlCtrl.text = extractedUrl);
-                  }, defaultSearchText: widget.item['name'] ?? ''),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber.withOpacity(0.15),
-                    foregroundColor: Colors.amberAccent,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(links.isNotEmpty ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
+                            color: links.isNotEmpty ? Colors.redAccent : Colors.greenAccent, size: 15),
+                        const SizedBox(width: 6),
+                        Text(
+                          links.isNotEmpty ? "REPORTED BROKEN LINK" : "LINK STATUS",
+                          style: TextStyle(
+                            color: links.isNotEmpty ? Colors.redAccent : Colors.greenAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    if (links.isEmpty)
+                      const Text("No broken link log recorded for this title.", style: TextStyle(color: Colors.white38, fontSize: 12))
+                    else
+                      ...links.map((l) => Container(
+                            margin: const EdgeInsets.only(top: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    "${l['url']}",
+                                    style: const TextStyle(color: Color(0xFFFF8080), fontSize: 11, fontFamily: 'monospace'),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                InkWell(
+                                  onTap: () => _openInBrowser(l['url']?.toString() ?? ''),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(5),
+                                    decoration: BoxDecoration(
+                                      color: Colors.cyanAccent.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Icon(Icons.open_in_new_rounded, color: Colors.cyanAccent, size: 14),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ── New Stream Link Input ──
+              const Text("NEW PLAYABLE STREAM LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141722),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: TextField(
+                        controller: _newUrlCtrl,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        decoration: const InputDecoration(
+                          hintText: "Paste Streamtape / MP4 / Luluvdo link...",
+                          hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                          prefixIcon: Icon(Icons.link_rounded, color: Colors.cyanAccent, size: 18),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        ),
+                      ),
+                    ),
                   ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
+                  const SizedBox(width: 8),
+                  ElevatedButton.icon(
+                    onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
+                      setState(() => _newUrlCtrl.text = extractedUrl);
+                    }, defaultSearchText: widget.item['name'] ?? ''),
+                    icon: const Icon(Icons.bolt_rounded, size: 16),
+                    label: const Text("EXTRACT", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amberAccent,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                  ),
+                ],
+              ),
+
+              // ── Live Check Feedback Banner ──
+              if (_checkResult != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: (_checkOk ? Colors.green : Colors.red).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: (_checkOk ? Colors.greenAccent : Colors.redAccent).withOpacity(0.4)),
+                  ),
+                  child: Row(
                     children: [
-                      Icon(Icons.bolt_rounded, size: 14),
-                      SizedBox(width: 2),
-                      Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                      Icon(_checkOk ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                          color: _checkOk ? Colors.greenAccent : Colors.redAccent, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _checkResult!,
+                          style: TextStyle(color: _checkOk ? Colors.greenAccent : Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ],
-            ),
-            if (_checkResult != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: (_checkOk ? Colors.green : Colors.red).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(_checkResult!, style: TextStyle(color: _checkOk ? Colors.greenAccent : Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 20),
+
+              // ── Action Buttons Matrix ──
+              // Primary Row: Check & Update
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _busy || _checking ? null : _check,
+                      icon: _checking
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                          : const Icon(Icons.troubleshoot_rounded, size: 16),
+                      label: const Text("VERIFY LINK", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.cyanAccent,
+                        side: const BorderSide(color: Colors.cyanAccent),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _busy ? null : _update,
+                      icon: _busy
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                          : const Icon(Icons.check_circle_rounded, size: 16),
+                      label: const Text("RESTORE LINK", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.greenAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // Secondary Row: Full Edit & Delete
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _busy ? null : () {
+                        Navigator.pop(context);
+                        widget.onEdit(widget.item, 'movie');
+                      },
+                      icon: const Icon(Icons.edit_rounded, size: 15, color: Colors.orangeAccent),
+                      label: const Text("Edit Full Details", style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.orangeAccent.withOpacity(0.08),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _busy ? null : _delete,
+                      icon: const Icon(Icons.delete_outline_rounded, size: 15, color: Colors.redAccent),
+                      label: const Text("Delete Movie", style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.redAccent.withOpacity(0.08),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
-          ],
+          ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context),
-          child: const Text("Close", style: TextStyle(color: Colors.grey)),
-        ),
-        TextButton(
-          onPressed: _busy ? null : _check,
-          child: _checking
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text("CHECK", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
-        ),
-        TextButton(
-          onPressed: _busy ? null : _update,
-          child: const Text("UPDATE", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-        ),
-        TextButton(
-          onPressed: _busy ? null : () {
-            Navigator.pop(context);
-            widget.onEdit(widget.item, 'movie');
-          },
-          child: const Text("EDIT DETAILS", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-        ),
-        TextButton(
-          onPressed: _busy ? null : _delete,
-          child: const Text("DELETE MOVIE", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        ),
-      ],
     );
   }
-
 }
 
 class _SeriesRepairDialog extends StatefulWidget {
@@ -9957,277 +12683,435 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
   @override
   Widget build(BuildContext context) {
     final deadEpisodes = widget.item['dead_episodes'] as List? ?? [];
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1A2132),
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
-      title: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: (widget.item['poster'] ?? '').toString().isNotEmpty
-                ? CachedNetworkImage(imageUrl: widget.item['poster'].toString(), width: 34, height: 44, fit: BoxFit.cover, errorWidget: (c, u, e) => const Icon(Icons.tv, color: Colors.white38))
-                : const Icon(Icons.tv, color: Colors.white38),
-          ),
-          const SizedBox(width: 10),
-          Expanded(child: Text(widget.item['name'] ?? 'Series', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-        ],
+    return Dialog(
+      backgroundColor: const Color(0xFF0F131D),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: Colors.white.withOpacity(0.1)),
       ),
-      content: SizedBox(
-        width: 360,
-        child: _selectedEpisode == null
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.95,
+        constraints: const BoxConstraints(maxWidth: 520),
+        padding: const EdgeInsets.all(20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header Card ──
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text("${deadEpisodes.length} DEAD EPISODE(S) — tap to repair", style: const TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  if (deadEpisodes.isEmpty)
-                    const Text("No dead episodes", style: TextStyle(color: Colors.white38))
-                  else
-                    ...deadEpisodes.map((ep) => Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(10),
-                            onTap: () => setState(() {
-                              _selectedEpisode = ep;
-                              _checkResult = null;
-                              _newUrlCtrl.clear();
-                              _newImageCtrl.text = (ep['episoade_image'] ?? ep['image'] ?? '').toString();
-                            }),
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF141722),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.purpleAccent.withOpacity(0.3)),
-                              ),
-                              child: Row(
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: (ep['episoade_image'] ?? '').toString().isNotEmpty
-                                        ? CachedNetworkImage(
-                                            imageUrl: ep['episoade_image'].toString(),
-                                            width: 42, height: 42, fit: BoxFit.cover,
-                                            errorWidget: (c, u, e) => Container(width: 42, height: 42, color: const Color(0xFF2A3145), child: const Icon(Icons.tv, color: Colors.white24)))
-                                        : Container(width: 42, height: 42, color: const Color(0xFF2A3145), child: const Icon(Icons.tv, color: Colors.white24)),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text("${ep['season_name'] ?? 'Season'} • ${ep['episode_name'] ?? 'Episode'}",
-                                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                        const SizedBox(height: 2),
-                                        Text(ep['old_url'] ?? '', style: const TextStyle(color: Colors.redAccent, fontSize: 10, fontFamily: 'monospace'), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () => _openInBrowser(ep['old_url']?.toString() ?? ''),
-                                    icon: const Icon(Icons.open_in_browser_rounded, color: Colors.cyanAccent, size: 18),
-                                    tooltip: 'Open in browser to verify',
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(),
-                                    visualDensity: VisualDensity.compact,
-                                  ),
-                                  const Icon(Icons.chevron_right, color: Colors.white24, size: 18),
-                                ],
-                              ),
-                            ),
-                          ),
-                        )),
-                ],
-              )
-            : SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          onPressed: _busy ? null : () => setState(() {
-                            _selectedEpisode = null;
-                            _checkResult = null;
-                            _newUrlCtrl.clear();
-                            _newImageCtrl.clear();
-                          }),
-                          icon: const Icon(Icons.arrow_back, color: Colors.white70),
-                        ),
-                        Expanded(
-                          child: Text("${_selectedEpisode['season_name'] ?? 'Season'} • ${_selectedEpisode['episode_name'] ?? 'Episode'}",
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    const Text("OLD (dead) LINK:", style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(_selectedEpisode['old_url'] ?? '', style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontFamily: 'monospace')),
-                        ),
-                        IconButton(
-                          onPressed: () => _openInBrowser(_selectedEpisode['old_url']?.toString() ?? ''),
-                          icon: const Icon(Icons.open_in_browser_rounded, color: Colors.cyanAccent, size: 18),
-                          tooltip: 'Open in browser to verify',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    const Text("EPISODE IMAGE URL", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    TextField(
-                      controller: _newImageCtrl,
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: "Episode thumbnail image URL",
-                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
-                        filled: true,
-                        fillColor: const Color(0xFF090A0F),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
-                    // Live image preview
-                    if (_newImageCtrl.text.trim().isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: AspectRatio(
-                          aspectRatio: 16 / 9,
-                          child: CachedNetworkImage(
-                            imageUrl: _newImageCtrl.text.trim(),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: (widget.item['poster'] ?? '').toString().isNotEmpty
+                        ? CachedNetworkImage(
+                            imageUrl: widget.item['poster'].toString(),
+                            width: 50,
+                            height: 68,
                             fit: BoxFit.cover,
-                            placeholder: (c, u) => Container(
-                              color: const Color(0xFF141722),
-                              child: const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent)),
-                            ),
                             errorWidget: (c, u, e) => Container(
-                              color: const Color(0xFF141722),
-                              child: const Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.broken_image_rounded, color: Colors.white24, size: 28),
-                                  SizedBox(height: 4),
-                                  Text("Image not found", style: TextStyle(color: Colors.white38, fontSize: 10)),
-                                ],
-                              ),
+                              width: 50,
+                              height: 68,
+                              color: const Color(0xFF1E2436),
+                              child: const Icon(Icons.tv, color: Colors.white38),
                             ),
+                          )
+                        : Container(
+                            width: 50,
+                            height: 68,
+                            color: const Color(0xFF1E2436),
+                            child: const Icon(Icons.tv, color: Colors.white38),
                           ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    const Text("NEW STREAM LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    Row(
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _newUrlCtrl,
-                            style: const TextStyle(color: Colors.white, fontSize: 12),
-                            decoration: InputDecoration(
-                              hintText: "Paste new Streamtape / MP4 link",
-                              hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
-                              filled: true,
-                              fillColor: const Color(0xFF090A0F),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.purpleAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: Colors.purpleAccent.withOpacity(0.3)),
                           ),
-                        ),
-                        const SizedBox(width: 6),
-                        ElevatedButton(
-                          onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
-                            setState(() {
-                              _newUrlCtrl.text = extractedUrl;
-                              if (posterUrl != null && posterUrl.isNotEmpty) {
-                                _newImageCtrl.text = posterUrl;
-                              }
-                            });
-                          }, defaultSearchText: widget.item['name'] ?? ''),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.amber.withOpacity(0.15),
-                            foregroundColor: Colors.amberAccent,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.amberAccent, width: 0.8)),
-                          ),
-                          child: const Row(
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.bolt_rounded, size: 14),
-                              SizedBox(width: 2),
-                              Text("EXTRACT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              const Icon(Icons.tv_rounded, color: Colors.purpleAccent, size: 12),
+                              const SizedBox(width: 4),
+                              Text(
+                                "${deadEpisodes.length} BROKEN EPISODE(S)",
+                                style: const TextStyle(color: Colors.purpleAccent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                              ),
                             ],
                           ),
                         ),
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.item['name'] ?? 'Web Series',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
-                    if (_checkResult != null) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
+                  ),
+                  IconButton(
+                    onPressed: _busy ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.05),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              if (_selectedEpisode == null) ...[
+                // ── Level 1: Episodes Selection List ──
+                const Text("SELECT EPISODE TO REPAIR", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                const SizedBox(height: 8),
+                if (deadEpisodes.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF161B28),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Center(
+                      child: Text("All episodes are healthy. No broken links detected!", style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+                    ),
+                  )
+                else
+                  ...deadEpisodes.map((ep) => Container(
+                        margin: const EdgeInsets.only(bottom: 8),
                         decoration: BoxDecoration(
-                          color: (_checkOk ? Colors.green : Colors.red).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(10),
+                          color: const Color(0xFF141724),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.purpleAccent.withOpacity(0.2)),
                         ),
-                        child: Text(_checkResult!, style: TextStyle(color: _checkOk ? Colors.greenAccent : Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          onTap: () => setState(() {
+                            _selectedEpisode = ep;
+                            _checkResult = null;
+                            _newUrlCtrl.clear();
+                            _newImageCtrl.text = (ep['episoade_image'] ?? ep['image'] ?? '').toString();
+                          }),
+                          leading: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: (ep['episoade_image'] ?? '').toString().isNotEmpty
+                                ? CachedNetworkImage(
+                                    imageUrl: ep['episoade_image'].toString(),
+                                    width: 44,
+                                    height: 44,
+                                    fit: BoxFit.cover,
+                                    errorWidget: (c, u, e) => Container(width: 44, height: 44, color: const Color(0xFF2A3145), child: const Icon(Icons.tv, color: Colors.white24, size: 20)),
+                                  )
+                                : Container(width: 44, height: 44, color: const Color(0xFF2A3145), child: const Icon(Icons.tv, color: Colors.white24, size: 20)),
+                          ),
+                          title: Text(
+                            "${ep['season_name'] ?? 'Season'} • ${ep['episode_name'] ?? 'Episode'}",
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            ep['old_url'] ?? '',
+                            style: const TextStyle(color: Color(0xFFFF8080), fontSize: 10, fontFamily: 'monospace'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.purpleAccent.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text("Fix", style: TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                SizedBox(width: 2),
+                                Icon(Icons.chevron_right_rounded, color: Colors.purpleAccent, size: 16),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )),
+                const SizedBox(height: 16),
+
+                // Series Actions Row
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: _busy ? null : () {
+                          Navigator.pop(context);
+                          widget.onEdit(widget.item, 'series');
+                        },
+                        icon: const Icon(Icons.edit_rounded, size: 15, color: Colors.orangeAccent),
+                        label: const Text("Edit Series Studio", style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.orangeAccent.withOpacity(0.08),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
                       ),
-                    ],
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextButton.icon(
+                        onPressed: _busy ? null : _deleteSeries,
+                        icon: const Icon(Icons.delete_outline_rounded, size: 15, color: Colors.redAccent),
+                        label: const Text("Delete Series", style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                        style: TextButton.styleFrom(
+                          backgroundColor: Colors.redAccent.withOpacity(0.08),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              ),
-      ),
-      actions: _selectedEpisode == null
-          ? [
-              TextButton(
-                onPressed: _busy ? null : () => Navigator.pop(context),
-                child: const Text("Close", style: TextStyle(color: Colors.grey)),
-              ),
-              TextButton(
-                onPressed: _busy ? null : () {
-                  Navigator.pop(context);
-                  widget.onEdit(widget.item, 'series');
-                },
-                child: const Text("EDIT SERIES", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-              ),
-              TextButton(
-                onPressed: _busy ? null : _deleteSeries,
-                child: const Text("DELETE SERIES", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-              ),
-            ]
-          : [
-              TextButton(
-                onPressed: _busy ? null : () => Navigator.pop(context),
-                child: const Text("Close", style: TextStyle(color: Colors.grey)),
-              ),
-              TextButton(
-                onPressed: _busy ? null : _check,
-                child: _checking
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Text("CHECK", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
-              ),
-              TextButton(
-                onPressed: _busy ? null : _updateEpisode,
-                child: const Text("UPDATE", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-              ),
-              TextButton(
-                onPressed: _busy ? null : _deleteEpisode,
-                child: const Text("DELETE EP", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-              ),
+              ] else ...[
+                // ── Level 2: Individual Episode Repair ──
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: _busy ? null : () => setState(() {
+                        _selectedEpisode = null;
+                        _checkResult = null;
+                        _newUrlCtrl.clear();
+                        _newImageCtrl.clear();
+                      }),
+                      icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70, size: 18),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.05),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "${_selectedEpisode['season_name'] ?? 'Season'} • ${_selectedEpisode['episode_name'] ?? 'Episode'}",
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Broken Link Box
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 14),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _selectedEpisode['old_url'] ?? '',
+                          style: const TextStyle(color: Color(0xFFFF8080), fontSize: 11, fontFamily: 'monospace'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      InkWell(
+                        onTap: () => _openInBrowser(_selectedEpisode['old_url']?.toString() ?? ''),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4.0),
+                          child: Icon(Icons.open_in_new_rounded, color: Colors.cyanAccent, size: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // Episode Image Input
+                const Text("EPISODE POSTER / THUMBNAIL", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                const SizedBox(height: 6),
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141722),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: TextField(
+                    controller: _newImageCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      hintText: "https://.../episode_thumb.jpg",
+                      hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                      prefixIcon: Icon(Icons.image_outlined, color: Colors.purpleAccent, size: 18),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                  ),
+                ),
+                if (_newImageCtrl.text.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: CachedNetworkImage(
+                        imageUrl: _newImageCtrl.text.trim(),
+                        fit: BoxFit.cover,
+                        errorWidget: (c, u, e) => Container(
+                          color: const Color(0xFF141722),
+                          child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white24, size: 24)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+
+                // Stream Link Input
+                const Text("NEW STREAM LINK", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141722),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: TextField(
+                          controller: _newUrlCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            hintText: "Paste Streamtape / MP4 link...",
+                            hintStyle: TextStyle(color: Colors.white30, fontSize: 11),
+                            prefixIcon: Icon(Icons.link_rounded, color: Colors.cyanAccent, size: 18),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: () => widget.showExtractor((extractedUrl, {posterUrl}) {
+                        setState(() {
+                          _newUrlCtrl.text = extractedUrl;
+                          if (posterUrl != null && posterUrl.isNotEmpty) {
+                            _newImageCtrl.text = posterUrl;
+                          }
+                        });
+                      }, defaultSearchText: widget.item['name'] ?? ''),
+                      icon: const Icon(Icons.bolt_rounded, size: 16),
+                      label: const Text("EXTRACT", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amberAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ],
+                ),
+
+                if (_checkResult != null) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: (_checkOk ? Colors.green : Colors.red).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: (_checkOk ? Colors.greenAccent : Colors.redAccent).withOpacity(0.4)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(_checkOk ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                            color: _checkOk ? Colors.greenAccent : Colors.redAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _checkResult!,
+                            style: TextStyle(color: _checkOk ? Colors.greenAccent : Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+
+                // Episode Action Matrix
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _busy || _checking ? null : _check,
+                        icon: _checking
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                            : const Icon(Icons.troubleshoot_rounded, size: 16),
+                        label: const Text("VERIFY", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.cyanAccent,
+                          side: const BorderSide(color: Colors.cyanAccent),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _busy ? null : _updateEpisode,
+                        icon: _busy
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                            : const Icon(Icons.check_circle_rounded, size: 16),
+                        label: const Text("SAVE EPISODE", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.greenAccent,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _deleteEpisode,
+                    icon: const Icon(Icons.delete_outline_rounded, size: 15, color: Colors.redAccent),
+                    label: const Text("Delete This Episode", style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.redAccent.withOpacity(0.08),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
             ],
+          ),
+        ),
+      ),
     );
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10237,11 +13121,19 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
 class _GoogleImagesWebView extends StatefulWidget {
   final String query;
   final void Function(String imageUrl) onImageSelected;
+  // Pass the admin API URL so the widget can upload images server-side
+  final String adminApiUrl;
+  final String adminApiKey;
+  // OTT name hint to build better search queries (e.g. 'HotStar', 'Prime')
+  final String ottHint;
 
   const _GoogleImagesWebView({
     Key? key,
     required this.query,
     required this.onImageSelected,
+    this.adminApiUrl = '',
+    this.adminApiKey = '',
+    this.ottHint = '',
   }) : super(key: key);
 
   @override
@@ -10253,66 +13145,124 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
   bool _loading = true;
   String _currentQuery = '';
 
-  // JS that intercepts image taps and posts the best available URL back to Flutter
+  // JS that allows normal thumbnail clicks (opening Google's big preview & related images)
+  // and only intercepts clicks on the enlarged detail image.
   static const String _interceptJs = r'''
     (function() {
       if (window.__pinInterceptDone) return;
       window.__pinInterceptDone = true;
 
-      function extractBestUrl(el) {
+      function extractFullResUrl(el) {
         var candidates = [];
         var img = el.tagName === 'IMG' ? el : el.querySelector('img');
 
-        if (img) {
-          ['data-src', 'src', 'data-iurl'].forEach(function(attr) {
-            var v = img.getAttribute(attr);
-            if (v && v.startsWith('http') && !v.includes('encrypted-tbn') && !v.includes('data:'))
-              candidates.push(v);
-          });
+        // Check if there is an anchor href with imgurl param anywhere in the container
+        var container = el.closest('[jscontroller], [role="dialog"], div[data-ved], .tvh9oe, .eA0Zlc') || el.parentElement;
+        if (container) {
+          var fullLinks = container.querySelectorAll('a[href*="imgurl="]');
+          for (var i = 0; i < fullLinks.length; i++) {
+            var h = fullLinks[i].getAttribute('href') || '';
+            var m = h.match(/imgurl=([^&]+)/);
+            if (m) {
+              var dec = decodeURIComponent(m[1]);
+              if (dec.startsWith('http') && !dec.includes('encrypted-tbn')) candidates.unshift(dec);
+            }
+          }
         }
 
-        // Walk up for data-iurl / data-src
-        var cur = el;
-        for (var i = 0; i < 8; i++) {
-          if (!cur) break;
-          ['data-src', 'data-iurl', 'data-url'].forEach(function(attr) {
-            var v = cur.getAttribute && cur.getAttribute(attr);
-            if (v && v.startsWith('http') && !v.includes('encrypted-tbn')) candidates.push(v);
-          });
-          cur = cur.parentElement;
-        }
-
-        // Try anchor href imgurl param
         var a = el.closest('a');
         if (a) {
           var href = a.getAttribute('href') || '';
-          var m = href.match(/imgurl=([^&]+)/);
-          if (m) candidates.push(decodeURIComponent(m[1]));
+          var m2 = href.match(/imgurl=([^&]+)/);
+          if (m2) {
+            var dec2 = decodeURIComponent(m2[1]);
+            if (dec2.startsWith('http') && !dec2.includes('encrypted-tbn')) candidates.unshift(dec2);
+          }
         }
 
-        // Fallback: allow encrypted thumbnails
         if (img) {
-          var s = img.getAttribute('src') || '';
-          if (s.startsWith('http')) candidates.push(s);
+          ['src', 'data-src', 'data-iurl', 'data-url'].forEach(function(attr) {
+            var v = img.getAttribute(attr);
+            if (v && v.startsWith('http') && !v.includes('encrypted-tbn') && !v.includes('data:')) {
+              candidates.push(v);
+            }
+          });
+          if (img.currentSrc && img.currentSrc.startsWith('http') && !img.currentSrc.includes('encrypted-tbn')) {
+            candidates.push(img.currentSrc);
+          }
+          if (img.src && img.src.startsWith('http')) {
+            candidates.push(img.src);
+          }
         }
 
         return candidates.find(function(u) { return u && u.startsWith('http'); }) || null;
       }
 
-      document.addEventListener('click', function(e) {
-        var url = extractBestUrl(e.target);
-        if (url) {
-          e.preventDefault();
-          e.stopPropagation();
-          window.flutter_inappwebview.callHandler('onImageTap', url);
-          return false;
+      function isBigEnlargedImage(el) {
+        var img = el.tagName === 'IMG' ? el : el.querySelector('img');
+        if (!img) return false;
+        var r = img.getBoundingClientRect();
+        // Check if rendered dimensions match enlarged detail image (> 180px height or width)
+        if (r.height >= 180 || r.width >= 190) {
+          return true;
         }
+        // Check if inside Google Images detail viewer dialog/overlay
+        var detailView = img.closest('[role="dialog"], .tvh9oe, .eA0Zlc, div.isv-r.isv-selected');
+        if (detailView != null && (r.height >= 140 || r.width >= 140)) {
+          return true;
+        }
+        return false;
+      }
+
+      document.addEventListener('click', function(e) {
+        var target = e.target;
+        var img = target.tagName === 'IMG' ? target : target.querySelector('img');
+
+        // Only intercept if user clicked on the big enlarged preview image!
+        if (img && isBigEnlargedImage(img)) {
+          var url = extractFullResUrl(img);
+          if (url) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.flutter_inappwebview.callHandler('onImageTap', url);
+            return false;
+          }
+        }
+        // Otherwise allow normal Google Images grid interaction to open the big preview
       }, true);
+
+      window.__getCurrentlyActiveBigImage = function() {
+        var imgs = document.querySelectorAll('img');
+        var best = null;
+        var maxArea = 0;
+        for (var i = 0; i < imgs.length; i++) {
+          var r = imgs[i].getBoundingClientRect();
+          var area = r.width * r.height;
+          if ((r.height >= 160 || r.width >= 170) && area > maxArea) {
+            maxArea = area;
+            best = imgs[i];
+          }
+        }
+        if (best) return extractFullResUrl(best);
+        return null;
+      };
     })();
   ''';
 
   String _buildGoogleUrl(String query) {
-    final q = Uri.encodeQueryComponent(query.trim().isEmpty ? 'movie poster' : '${query.trim()} movie poster');
+    final cleanQuery = query.trim();
+    final ott = widget.ottHint.trim();
+    
+    // Construct query: "(Name) + (OTT) + Webseries Poster Portrait"
+    final List<String> parts = [];
+    if (cleanQuery.isNotEmpty) parts.add(cleanQuery);
+    if (ott.isNotEmpty && !cleanQuery.toLowerCase().contains(ott.toLowerCase())) {
+      parts.add(ott);
+    }
+    parts.add('Webseries Poster Portrait');
+
+    final fullQuery = parts.join(' ');
+    final q = Uri.encodeQueryComponent(fullQuery);
     return 'https://www.google.com/search?q=$q&tbm=isch&hl=en&safe=off';
   }
 
@@ -10325,106 +13275,198 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         side: BorderSide(color: Colors.white12),
       ),
-      builder: (sheetCtx) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40, height: 4,
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                color: Colors.white24, borderRadius: BorderRadius.circular(2)),
-            ),
-            const Row(
-              children: [
-                Icon(Icons.image_search_rounded, color: Colors.cyanAccent, size: 18),
-                SizedBox(width: 8),
-                Text('Image Preview', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: CachedNetworkImage(
-                imageUrl: url,
-                width: double.infinity,
-                height: 230,
-                fit: BoxFit.contain,
-                placeholder: (c, u) => Container(
-                  height: 230,
-                  color: const Color(0xFF161B22),
-                  child: const Center(child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 2)),
-                ),
-                errorWidget: (c, u, e) => Container(
-                  height: 230,
-                  color: const Color(0xFF161B22),
-                  child: const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.broken_image_rounded, color: Colors.white24, size: 44),
-                        SizedBox(height: 8),
-                        Text('Image failed to load', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                        SizedBox(height: 4),
-                        Text('(You can still import the URL)', style: TextStyle(color: Colors.white24, fontSize: 11)),
-                      ],
+      builder: (sheetCtx) {
+        // Track image load state inside the bottom sheet
+        bool imageLoaded = false;
+        bool imageError = false;
+        bool uploading = false;
+
+        return StatefulBuilder(
+          builder: (ssCtx, ssSetState) {
+            // Upload image to our server then call onImageSelected with hosted URL
+            Future<void> _uploadAndSelect() async {
+              ssSetState(() => uploading = true);
+              try {
+                final apiUrl = widget.adminApiUrl.isNotEmpty
+                    ? widget.adminApiUrl
+                    : 'https://red.goprivate.fun/api/admin_api.php';
+                final apiKey = widget.adminApiKey.isNotEmpty
+                    ? widget.adminApiKey
+                    : 'ku9qFY6XKp5OC1bG';
+                final res = await http.post(
+                  Uri.parse(apiUrl),
+                  headers: {'Content-Type': 'application/json'},
+                  body: jsonEncode({
+                    'action': 'upload_image',
+                    'api_key': apiKey,
+                    'image_url': url,
+                  }),
+                ).timeout(const Duration(seconds: 40));
+                final data = jsonDecode(res.body);
+                final hostedUrl = (data['data']?['url'] ?? '').toString();
+                if (ssCtx.mounted) Navigator.pop(sheetCtx);
+                widget.onImageSelected(hostedUrl.isNotEmpty ? hostedUrl : url);
+              } catch (_) {
+                // On any upload failure fall back to original URL
+                if (ssCtx.mounted) Navigator.pop(sheetCtx);
+                widget.onImageSelected(url);
+              }
+            }
+
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40, height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                  ),
+                  const Row(
+                    children: [
+                      Icon(Icons.image_search_rounded, color: Colors.cyanAccent, size: 18),
+                      SizedBox(width: 8),
+                      Text('Image Preview & Import', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Image loads at full quality before the button becomes active
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(
+                      url,
+                      width: double.infinity,
+                      height: 250,
+                      fit: BoxFit.contain,
+                      loadingBuilder: (c, child, loadingProgress) {
+                        if (loadingProgress == null) {
+                          // Fully loaded — schedule a setState
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!imageLoaded && ssCtx.mounted) ssSetState(() => imageLoaded = true);
+                          });
+                          return child;
+                        }
+                        final total = loadingProgress.expectedTotalBytes;
+                        final pct = total != null
+                            ? loadingProgress.cumulativeBytesLoaded / total
+                            : null;
+                        return Container(
+                          height: 250,
+                          color: const Color(0xFF161B22),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircularProgressIndicator(
+                                  value: pct,
+                                  color: Colors.cyanAccent,
+                                  strokeWidth: 2,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  pct != null
+                                      ? 'Loading ${(pct * 100).toStringAsFixed(0)}%'
+                                      : 'Loading full quality…',
+                                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (c, e, s) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!imageError && ssCtx.mounted) ssSetState(() { imageError = true; imageLoaded = true; });
+                        });
+                        return Container(
+                          height: 250,
+                          color: const Color(0xFF161B22),
+                          child: const Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.broken_image_rounded, color: Colors.white24, size: 44),
+                                SizedBox(height: 8),
+                                Text('Image failed to load', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                                SizedBox(height: 4),
+                                Text('(Will still try to import the URL)', style: TextStyle(color: Colors.white24, fontSize: 11)),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                url,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => Navigator.pop(sheetCtx),
-                    icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white54),
-                    label: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.white12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      url,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(sheetCtx);
-                      widget.onImageSelected(url);
-                    },
-                    icon: const Icon(Icons.check_circle_rounded, size: 16),
-                    label: const Text('Use as Poster', style: TextStyle(fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.cyanAccent,
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: uploading ? null : () => Navigator.pop(sheetCtx),
+                          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white54),
+                          label: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.white12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          // Only enabled once image is fully loaded
+                          onPressed: (!imageLoaded || uploading)
+                              ? null
+                              : _uploadAndSelect,
+                          icon: uploading
+                              ? const SizedBox(
+                                  width: 16, height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                )
+                              : const Icon(Icons.check_circle_rounded, size: 16),
+                          label: Text(
+                            uploading
+                                ? 'Uploading…'
+                                : !imageLoaded
+                                    ? 'Loading image…'
+                                    : 'Use as Poster',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.cyanAccent,
+                            foregroundColor: Colors.black,
+                            disabledBackgroundColor: Colors.cyanAccent.withOpacity(0.3),
+                            disabledForegroundColor: Colors.black45,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -10457,42 +13499,92 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
 
     return Stack(
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: InAppWebView(
-            initialUrlRequest: URLRequest(url: WebUri(_buildGoogleUrl(widget.query))),
-            initialSettings: InAppWebViewSettings(
-              javaScriptEnabled: true,
-              userAgent: 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
-              transparentBackground: false,
-              supportZoom: true,
-              builtInZoomControls: false,
-              displayZoomControls: false,
-              useOnLoadResource: false,
+        Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              color: const Color(0xFF141722),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline_rounded, color: Colors.cyanAccent, size: 14),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Tap any image to view enlarged with related images. Tap the big image (or button below) to import.',
+                      style: TextStyle(color: Colors.white70, fontSize: 10),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            onWebViewCreated: (controller) {
-              _wvc = controller;
-              controller.addJavaScriptHandler(
-                handlerName: 'onImageTap',
-                callback: (args) {
-                  final url = args.isNotEmpty ? args[0].toString() : '';
-                  if (url.isNotEmpty && mounted) {
-                    _showPreview(context, url);
-                  }
-                },
-              );
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: InAppWebView(
+                  initialUrlRequest: URLRequest(url: WebUri(_buildGoogleUrl(widget.query))),
+                  initialSettings: InAppWebViewSettings(
+                    javaScriptEnabled: true,
+                    userAgent: 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
+                    transparentBackground: false,
+                    supportZoom: true,
+                    builtInZoomControls: false,
+                    displayZoomControls: false,
+                    useOnLoadResource: false,
+                  ),
+                  onWebViewCreated: (controller) {
+                    _wvc = controller;
+                    controller.addJavaScriptHandler(
+                      handlerName: 'onImageTap',
+                      callback: (args) {
+                        final url = args.isNotEmpty ? args[0].toString() : '';
+                        if (url.isNotEmpty && mounted) {
+                          _showPreview(context, url);
+                        }
+                      },
+                    );
+                  },
+                  onLoadStart: (controller, url) {
+                    if (mounted) setState(() => _loading = true);
+                  },
+                  onLoadStop: (controller, url) async {
+                    await controller.evaluateJavascript(source: _interceptJs);
+                    if (mounted) setState(() => _loading = false);
+                  },
+                  onReceivedError: (controller, request, error) {
+                    if (mounted) setState(() => _loading = false);
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+        Positioned(
+          bottom: 10,
+          right: 10,
+          child: ElevatedButton.icon(
+            onPressed: () async {
+              if (_wvc != null) {
+                final res = await _wvc!.evaluateJavascript(source: "window.__getCurrentlyActiveBigImage ? window.__getCurrentlyActiveBigImage() : null;");
+                if (res != null && res.toString().isNotEmpty && res.toString() != 'null') {
+                  _showPreview(context, res.toString());
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Tap an image in Google to open it first, then tap this button or tap the big preview!"),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
+                }
+              }
             },
-            onLoadStart: (controller, url) {
-              if (mounted) setState(() => _loading = true);
-            },
-            onLoadStop: (controller, url) async {
-              // Inject interceptor JS after page loads
-              await controller.evaluateJavascript(source: _interceptJs);
-              if (mounted) setState(() => _loading = false);
-            },
-            onReceivedError: (controller, request, error) {
-              if (mounted) setState(() => _loading = false);
-            },
+            icon: const Icon(Icons.bolt_rounded, color: Colors.black, size: 16),
+            label: const Text("USE VIEWED POSTER", style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amberAccent,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 4,
+            ),
           ),
         ),
         if (_loading)

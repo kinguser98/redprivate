@@ -1,7 +1,7 @@
 name: red_app
 description: "Red App - Modern OTT Movie & Web Series Streaming Application"
 publish_to: 'none'
-version: 1.0.15+16
+version: 1.0.17+2022
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

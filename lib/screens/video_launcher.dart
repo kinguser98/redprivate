@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
+import '../services/aagmaal_resolver.dart';
 import '../services/streamtape_service.dart';
 import '../services/embed_resolver.dart';
 import '../services/luluvdo_resolver.dart';
@@ -14,7 +15,14 @@ import 'video_player_screen.dart';
 
 Future<void> playVideo(
     BuildContext context, String rawUrl, String title,
-    {bool premium = false, int? contentId, int? contentType, Map<String, String>? qualities, String? initialQuality, Map<String, String>? headers}) async {
+    {bool premium = false,
+    int? contentId,
+    int? contentType,
+    Map<String, String>? qualities,
+    String? initialQuality,
+    Map<String, String>? headers,
+    List<Map<String, dynamic>>? playlist,
+    int initialEpisodeIndex = 0}) async {
   // Refresh VIP status from the server so admin grants / coupon redemptions take effect
   final uid = AppSession.user?.id ?? 0;
   if (uid > 0) {
@@ -59,6 +67,8 @@ Future<void> playVideo(
       finalUrl = rawUrl;
       streamQualities = qualities;
       currentQuality = initialQuality;
+    } else if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
+      finalUrl = await AagmaalResolver.resolveStream(rawUrl);
     } else if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8') || lowerRaw.contains('rdtcdn') || lowerRaw.contains('sb-cdn') || lowerRaw.contains('spankbang')) {
       finalUrl = rawUrl;
     } else if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
@@ -140,6 +150,8 @@ Future<void> playVideo(
           qualities: qualities ?? streamQualities,
           initialQuality: initialQuality ?? currentQuality,
           headers: headers,
+          playlist: playlist,
+          initialEpisodeIndex: initialEpisodeIndex,
         ),
       ),
     );

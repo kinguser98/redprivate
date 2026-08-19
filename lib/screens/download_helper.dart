@@ -10,6 +10,7 @@ import '../services/streamtape_service.dart';
 import '../services/embed_resolver.dart';
 import '../services/luluvdo_resolver.dart';
 import '../services/xhamster_resolver.dart';
+import '../services/tnaflix_resolver.dart';
 import '../services/hls_quality_parser.dart';
 import '../widgets/resolving_dialog.dart';
 import 'downloads_screen.dart';
@@ -121,6 +122,12 @@ Future<void> _startDownload(BuildContext context, String rawUrl, String title,
     final lowerRaw = rawUrl.toLowerCase();
     if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
       final res = await XHamsterResolver.resolveQualities(rawUrl, forceRefresh: true);
+      if (res != null && res.defaultUrl.isNotEmpty) {
+        url = res.defaultUrl;
+        availableQualities = res.qualities;
+      }
+    } else if (TnaflixResolver.isTnaflixUrl(rawUrl)) {
+      final res = await TnaflixResolver.resolveQualities(rawUrl, forceRefresh: true);
       if (res != null && res.defaultUrl.isNotEmpty) {
         url = res.defaultUrl;
         availableQualities = res.qualities;

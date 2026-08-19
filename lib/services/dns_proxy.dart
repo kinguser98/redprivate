@@ -247,6 +247,14 @@ class CustomDnsProxy {
   }
 
   Future<void> _handleHttp(HttpRequest request) async {
+    // Media forwarder for DNS-poisoned hosts (eporner). The native video player
+    // cannot use Dart's DoH connectionFactory, so we give it a localhost URL
+    // and stream the media here through the DoH-enabled client.
+    if (request.method == 'GET' && request.uri.path == '/ep') {
+      await _handleMediaForward(request);
+      return;
+    }
+
     final client = _getHttpClient();
     try {
       final host =
@@ -312,6 +320,78 @@ class CustomDnsProxy {
       s2?.close();
     } catch (_) {}
   }
+
+  // Stream a media URL through the DoH-enabled client so native players can
+  // play DNS-poisoned hosts (eporner). Range requests are passed through so
+  // seeking works. Media bytes still flow device<->CDN (localhost only hops).
+  static const String _mediaUa =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+  Future<void> _handleMediaForward(HttpRequest request) async {
+    final client = _getHttpClient();
+    try {
+      final target = request.uri.queryParameters['u'] ?? '';
+      if (target.isEmpty ||
+          !(target.startsWith('https://') || target.startsWith('http://'))) {
+        request.response.statusCode = 400;
+        await request.response.close();
+        return;
+      }
+      final referer = request.uri.queryParameters['r'] ??
+          'https://www.eporner.com/';
+
+      final req = await client.getUrl(Uri.parse(target));
+      req.followRedirects = true;
+      req.headers.set('User-Agent', _mediaUa);
+      req.headers.set('Referer', referer);
+      req.headers.set('Accept', '*/*');
+      req.headers.set('Connection', 'close');
+      req.headers.set('Accept-Encoding', 'identity');
+      final range = request.headers.value('range');
+      if (range != null && range.isNotEmpty) {
+        req.headers.set('Range', range);
+      }
+
+      final resp = await req.close();
+
+      request.response.statusCode = resp.statusCode;
+      if (resp.contentLength != -1) {
+        request.response.contentLength = resp.contentLength;
+      }
+      resp.headers.forEach((name, values) {
+        final nameLower = name.toLowerCase();
+        if (nameLower != 'connection' &&
+            nameLower != 'transfer-encoding' &&
+            nameLower != 'content-length' &&
+            nameLower != 'content-encoding' &&
+            nameLower != 'content-security-policy' &&
+            nameLower != 'set-cookie') {
+          for (final value in values) {
+            request.response.headers.add(name, value);
+          }
+        }
+      });
+      await request.response.addStream(resp);
+      await request.response.close();
+    } catch (e) {
+      debugPrint('CustomDnsProxy media forward error: $e');
+      try {
+        request.response.statusCode = 502;
+        await request.response.close();
+      } catch (_) {}
+    }
+  }
+}
+
+/// If [url] points at a DNS-poisoned host the native player cannot resolve,
+/// returns a localhost URL that streams the media through the app's DoH
+/// connection. Returns null for everything else (existing behavior untouched).
+String? mediaForwardUrlIfNeeded(String url) {
+  if (url.contains('/ep?u=')) return null; // already proxied
+  if (!url.toLowerCase().contains('eporner')) return null;
+  final p = CustomDnsProxy().port;
+  if (p == null) return null;
+  return 'http://127.0.0.1:$p/ep?u=${Uri.encodeComponent(url)}&r=${Uri.encodeComponent('https://www.eporner.com/')}';
 }
 
 // ---------------------------------------------------------------------------
@@ -356,18 +436,29 @@ class MyHttpOverrides extends HttpOverrides {
     'advtpe.com',
     'advtpe.net',
     'tpead.com',
+    'eporner',
+    'tnaflix',
+    'fourhoi',
+    'surrit',
   ];
 
   @override
   String findProxyFromEnvironment(Uri uri, Map<String, String>? environment) {
     final host = uri.host.toLowerCase();
     final path = uri.path.toLowerCase();
+    final isEporner = host.contains('eporner');
+    final isTnaflix = host.contains('tnaflix');
+    final isSurrit = host.contains('surrit');
+    final isFourhoi = host.contains('fourhoi');
 
-    // Direct video content streams MUST ALWAYS be DIRECT (0 proxy socket overhead)
-    if (path.contains('get_video') ||
-        host.contains('tapecontent') ||
-        uri.path.endsWith('.mp4') ||
-        uri.path.endsWith('.mkv')) {
+    // Direct video content streams MUST ALWAYS be DIRECT (0 proxy socket overhead).
+    // Exception: eporner/tnaflix hosts are DNS-poisoned in some regions, so their
+    // media keeps the proxy route so it is resolved via DoH instead of the ISP DNS.
+    if (!isEporner && !isTnaflix && !isSurrit && !isFourhoi &&
+        (path.contains('get_video') ||
+            host.contains('tapecontent') ||
+            uri.path.endsWith('.mp4') ||
+            uri.path.endsWith('.mkv'))) {
       return 'DIRECT';
     }
 

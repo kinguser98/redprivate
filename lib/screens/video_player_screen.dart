@@ -6,10 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:video_player/video_player.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/streamtape_service.dart';
+import '../services/aagmaal_resolver.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/hls_quality_parser.dart';
+import '../services/dns_proxy.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -23,6 +26,8 @@ class VideoPlayerScreen extends StatefulWidget {
     this.qualities,
     this.initialQuality,
     this.headers,
+    this.playlist,
+    this.initialEpisodeIndex = 0,
   });
 
   final String videoUrl;
@@ -34,6 +39,8 @@ class VideoPlayerScreen extends StatefulWidget {
   final Map<String, String>? qualities;
   final String? initialQuality;
   final Map<String, String>? headers;
+  final List<Map<String, dynamic>>? playlist;
+  final int initialEpisodeIndex;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -88,9 +95,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   String? _activeQuality;
   String _currentVideoUrl = '';
 
+  // Playlist & Episode Management
+  List<Map<String, dynamic>> _episodes = [];
+  int _currentEpisodeIndex = 0;
+  String _currentTitle = '';
+  bool _isSwitchingEpisode = false;
+
   @override
   void initState() {
     super.initState();
+    _currentTitle = widget.videoTitle;
+    _currentEpisodeIndex = widget.initialEpisodeIndex;
+    _episodes = widget.playlist != null ? List<Map<String, dynamic>>.from(widget.playlist!) : [];
     _currentVideoUrl = widget.videoUrl;
     _qualities = widget.qualities;
     if (_qualities == null || _qualities!.isEmpty) {
@@ -166,6 +182,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         playUrl = playUrl.split('#')[0];
       }
 
+      // 3. DNS-poisoned hosts (eporner) can't be resolved by the native player,
+      // so stream them through the local DoH proxy (media stays device<->CDN).
+      final proxied = mediaForwardUrlIfNeeded(playUrl);
+      if (proxied != null) {
+        playUrl = proxied;
+      }
+
       if (!playUrl.contains('stream=1') &&
           (StreamtapeService.isStreamtapeFamily(playUrl) || playUrl.contains('tapecontent'))) {
         playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
@@ -194,9 +217,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (origin != null) {
         playHeaders['Origin'] = origin;
       }
-      if (widget.headers != null && widget.headers!.isNotEmpty) {
-        playHeaders.addAll(widget.headers!);
-      }
+      // Server-driven headers (from scraper resolve) override domain defaults
+      widget.headers?.forEach((k, v) {
+        playHeaders[k] = v;
+      });
 
       final isLocal = File(playUrl).existsSync() ||
           playUrl.startsWith('/') ||
@@ -262,6 +286,279 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       _playing = value.isPlaying;
       _buffering = value.isBuffering;
     });
+
+    // Auto-advance to next episode when current video reaches the end
+    if (value.isInitialized &&
+        value.duration > Duration.zero &&
+        value.position >= value.duration - const Duration(milliseconds: 700) &&
+        !value.isPlaying &&
+        !_isSwitchingEpisode &&
+        _episodes.isNotEmpty &&
+        _currentEpisodeIndex < _episodes.length - 1) {
+      _playEpisodeAtIndex(_currentEpisodeIndex + 1);
+    }
+  }
+
+  Future<void> _playEpisodeAtIndex(int index) async {
+    if (index < 0 || index >= _episodes.length || _isSwitchingEpisode) return;
+    _isSwitchingEpisode = true;
+    _saveProgress();
+
+    final ep = _episodes[index];
+    final epTitle = (ep['title'] ?? ep['name'] ?? 'Episode ${index + 1}').toString();
+    String rawUrl = (ep['url'] ?? '').toString().trim();
+
+    if (rawUrl.isEmpty && ep['play_links'] is List && (ep['play_links'] as List).isNotEmpty) {
+      rawUrl = ((ep['play_links'] as List).first['url'] ?? '').toString().trim();
+    }
+
+    setState(() {
+      _currentEpisodeIndex = index;
+      _currentTitle = epTitle;
+      _ready = false;
+      _buffering = true;
+      _position = Duration.zero;
+      _duration = Duration.zero;
+    });
+
+    _controller?.removeListener(_onControllerUpdated);
+    try {
+      await _controller?.pause();
+    } catch (_) {}
+    await _controller?.dispose();
+    _controller = null;
+
+    try {
+      if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
+        final resolved = await AagmaalResolver.resolveStream(rawUrl);
+        if (resolved != null && resolved.isNotEmpty) rawUrl = resolved;
+      } else if (StreamtapeService.isStreamtapeFamily(rawUrl) &&
+          !rawUrl.contains('tapecontent.net') &&
+          !rawUrl.contains('get_video')) {
+        final resolved = await StreamtapeService.getDirectStreamUrl(rawUrl);
+        if (resolved != null && resolved.isNotEmpty) rawUrl = resolved;
+      }
+
+      _currentVideoUrl = rawUrl;
+      _qualities = null;
+      _activeQuality = 'HD';
+      if (_currentVideoUrl.contains('.m3u8')) {
+        HlsQualityParser.parseQualities(_currentVideoUrl).then((hlsQ) {
+          if (mounted && hlsQ.isNotEmpty) {
+            setState(() {
+              _qualities = hlsQ;
+              _activeQuality = hlsQ.keys.first;
+            });
+          }
+        });
+      }
+
+      await _open();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load $epTitle: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      _isSwitchingEpisode = false;
+    }
+  }
+
+  void _showEpisodeDropdown() {
+    if (_episodes.isEmpty) return;
+    _armHideControls();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Center(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 380),
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F1420).withOpacity(0.96),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.cyanAccent.withOpacity(0.3), width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.8),
+                  blurRadius: 30,
+                  spreadRadius: 8,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      decoration: const BoxDecoration(
+                        border: Border(bottom: BorderSide(color: Colors.white10)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.cyanAccent.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.playlist_play_rounded, color: Colors.cyanAccent, size: 20),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            "Select Episode",
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white12,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              "${_episodes.length} Episodes",
+                              style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () => Navigator.of(ctx).pop(),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.white10,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close_rounded, color: Colors.white70, size: 18),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Episode List
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        itemCount: _episodes.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (c, idx) {
+                          final ep = _episodes[idx];
+                          final isCurrent = idx == _currentEpisodeIndex;
+                          final epTitle = (ep['title'] ?? ep['name'] ?? 'Episode ${idx + 1}').toString();
+                          final epImage = (ep['image'] ?? ep['poster'] ?? '').toString();
+
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: isCurrent
+                                  ? Colors.cyanAccent.withOpacity(0.15)
+                                  : const Color(0xFF161C2C),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: isCurrent
+                                    ? Colors.cyanAccent
+                                    : Colors.white.withOpacity(0.06),
+                                width: isCurrent ? 1.5 : 1,
+                              ),
+                            ),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                              dense: true,
+                              leading: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: SizedBox(
+                                  width: 52,
+                                  height: 34,
+                                  child: epImage.isNotEmpty
+                                      ? CachedNetworkImage(
+                                          imageUrl: epImage,
+                                          fit: BoxFit.cover,
+                                          errorWidget: (_, __, ___) => Container(
+                                            color: Colors.white10,
+                                            child: const Icon(Icons.play_arrow_rounded, color: Colors.white54, size: 18),
+                                          ),
+                                        )
+                                      : Container(
+                                          color: isCurrent ? Colors.cyanAccent.withOpacity(0.2) : Colors.white10,
+                                          child: Icon(
+                                            isCurrent ? Icons.play_arrow_rounded : Icons.video_library_rounded,
+                                            color: isCurrent ? Colors.cyanAccent : Colors.white54,
+                                            size: 18,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                              title: Text(
+                                epTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: isCurrent ? Colors.cyanAccent : Colors.white,
+                                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
+                                  fontSize: 13.5,
+                                ),
+                              ),
+                              subtitle: Text(
+                                'Episode ${idx + 1}',
+                                style: TextStyle(
+                                  color: isCurrent ? Colors.cyanAccent.withOpacity(0.8) : Colors.white38,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              trailing: isCurrent
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.cyanAccent,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.graphic_eq_rounded, color: Colors.black, size: 14),
+                                          SizedBox(width: 4),
+                                          Text(
+                                            "PLAYING",
+                                            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : const Icon(Icons.play_circle_outline_rounded, color: Colors.white38, size: 20),
+                              onTap: () {
+                                Navigator.of(ctx).pop();
+                                if (!isCurrent) {
+                                  _playEpisodeAtIndex(idx);
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showQualityDialog() {
@@ -412,12 +709,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     if (origin != null) {
       playHeaders['Origin'] = origin;
     }
-    if (widget.headers != null && widget.headers!.isNotEmpty) {
-      playHeaders.addAll(widget.headers!);
-    }
+    // Server-driven headers (from scraper resolve) override domain defaults
+    widget.headers?.forEach((k, v) {
+      playHeaders[k] = v;
+    });
 
+    // DNS-poisoned hosts (eporner) stream through the local DoH proxy.
+    final playTarget = mediaForwardUrlIfNeeded(qUrl) ?? qUrl;
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(qUrl),
+      Uri.parse(playTarget),
       httpHeaders: playHeaders,
     );
 
@@ -956,7 +1256,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                             const SizedBox(width: 10),
                             Flexible(
                               child: Text(
-                                widget.videoTitle,
+                                _currentTitle.isNotEmpty ? _currentTitle : widget.videoTitle,
                                 overflow: TextOverflow.ellipsis,
                                 maxLines: 1,
                                 style: GoogleFonts.outfit(
@@ -1002,8 +1302,50 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     // SPACER TO ALIGN ALL ACTION BUTTONS TO THE FAR TOP RIGHT!
                     const Spacer(),
 
-                    // Top Right Action Buttons: PiP, Fit Adjust, Speed, Lock
+                    // Top Right Action Buttons: Episodes, Next Ep, PiP, Fit Adjust, Speed, Lock
                     if (!_controlsLocked) ...[
+                      // Episodes Selector Dropdown Button
+                      if (_episodes.isNotEmpty)
+                        _buildTopBarIcon(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.playlist_play_rounded, color: Colors.cyanAccent, size: 18),
+                              const SizedBox(width: 4),
+                              Text(
+                                "Episodes (${_currentEpisodeIndex + 1}/${_episodes.length})",
+                                style: const TextStyle(
+                                  color: Colors.cyanAccent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          _showEpisodeDropdown,
+                        ),
+
+                      // Next Episode Button
+                      if (_episodes.isNotEmpty && _currentEpisodeIndex < _episodes.length - 1)
+                        _buildTopBarIcon(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.skip_next_rounded, color: Colors.greenAccent, size: 18),
+                              const SizedBox(width: 4),
+                              const Text(
+                                "Next Ep",
+                                style: TextStyle(
+                                  color: Colors.greenAccent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          () => _playEpisodeAtIndex(_currentEpisodeIndex + 1),
+                        ),
+
                       // PiP Button
                       _buildTopBarIcon(
                         const Icon(Icons.picture_in_picture_alt_rounded,

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:io';
 import '../models/user_model.dart';
 import 'home_screen.dart';
 import 'all_movies_series_screen.dart';
@@ -29,8 +28,6 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> {
 
   Future<void> _checkUpdates() async {
     try {
-      // APK updates only for Android; iOS uses App Store
-      if (!Platform.isAndroid) return;
       final res = await ApiService.fetchAppSettings();
       if (res['status'] == 'success' && res['data']?['settings'] != null) {
         final s = res['data']['settings'];
