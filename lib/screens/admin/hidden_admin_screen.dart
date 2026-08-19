@@ -1348,6 +1348,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       if (isEdit) {
                                         res = await _adminPhpApi('update_episode', {
                                           'id': existing['id'],
+                                          'season_id': currentSeason?['id'],
                                           'Episoade_Name': selectedEpName.trim(),
                                           'episoade_image': epImageCtrl.text.trim(),
                                           'url': epUrlCtrl.text.trim(),
@@ -1359,6 +1360,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       } else {
                                         res = await _adminPhpApi('add_episode_link', {
                                           'series_id': seriesId,
+                                          'season_id': currentSeason?['id'],
                                           'season_name': (currentSeason?['Session_Name'] ?? 'Season').toString().trim(),
                                           'name': selectedEpName.trim(),
                                           'url': epUrlCtrl.text.trim(),
@@ -1688,10 +1690,14 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   Future<List<dynamic>?> _loadEpisodes(int seriesId) async {
-    // Try the dedicated endpoint first (returns seasons with full episodes)
-    final res = await _adminPhpApi('get_episodes', {'id': seriesId});
+    // Try dedicated episode loading endpoint (returns seasons with complete episode play_links)
+    final res = await _adminPhpApi('get_series_episodes', {'series_id': seriesId, 'id': seriesId});
     if (res['status'] == 'success' && res['data']?['seasons'] != null) {
       return res['data']['seasons'];
+    }
+    final epRes = await _adminPhpApi('get_episodes', {'id': seriesId, 'series_id': seriesId});
+    if (epRes['status'] == 'success' && epRes['data']?['seasons'] != null) {
+      return epRes['data']['seasons'];
     }
     // Fall back to a fresh list_series call (works even on older server builds)
     final sRes = await _adminPhpApi('list_series', {});
@@ -9689,8 +9695,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               });
 
               final seasonName = (currentSeason?['Session_Name'] ?? 'Season 1').toString().trim();
+              final seasonId = currentSeason?['id'];
               final batchRes = await _adminPhpApi('batch_add_episodes', {
                 'series_id': seriesId,
+                'season_id': seasonId,
                 'season_name': seasonName,
                 'episodes': episodesPayload,
               });
@@ -9701,6 +9709,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 for (final ep in episodesPayload) {
                   final sRes = await _adminPhpApi('add_episode_link', {
                     'series_id': seriesId,
+                    'season_id': seasonId,
                     'season_name': seasonName,
                     'name': ep['name'],
                     'url': ep['url'],

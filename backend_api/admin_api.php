@@ -834,25 +834,27 @@ if ($action === 'list_series') {
 }
 
 // Load full episode details (including play_links) for a single series — called lazily when editing
-if ($action === 'get_series_episodes') {
-    $series_id = intval($input['series_id'] ?? 0);
+if ($action === 'get_series_episodes' || $action === 'get_episodes' || $action === 'list_episodes') {
+    $series_id = intval($input['series_id'] ?? $input['id'] ?? $_GET['series_id'] ?? $_GET['id'] ?? 0);
     if ($series_id <= 0) json_response(false, [], "Series ID required");
-    $seasons = $pdo->prepare("SELECT * FROM web_series_seasons WHERE web_series_id = ? AND status = 1 ORDER BY season_order ASC");
+    $seasons = $pdo->prepare("SELECT * FROM web_series_seasons WHERE web_series_id = ? ORDER BY season_order ASC, id ASC");
     $seasons->execute([$series_id]);
     $seasonRows = $seasons->fetchAll();
     $seasonIds = array_column($seasonRows, 'id');
     $epBySeason = [];
     if (!empty($seasonIds)) {
         $sin = implode(',', array_map('intval', $seasonIds));
-        $episodes = $pdo->query("SELECT * FROM web_series_episoade WHERE season_id IN ($sin) ORDER BY season_id ASC, episoade_order ASC")->fetchAll();
+        $episodes = $pdo->query("SELECT *, Episoade_Name as name, episoade_image as poster, episoade_description as description FROM web_series_episoade WHERE season_id IN ($sin) ORDER BY season_id ASC, episoade_order ASC, id ASC")->fetchAll();
         $epIds = array_column($episodes, 'id');
         $linkByEp = [];
         if (!empty($epIds)) {
             $ein = implode(',', array_map('intval', $epIds));
-            $links = $pdo->query("SELECT * FROM episode_play_links WHERE episode_id IN ($ein) ORDER BY episode_id ASC, link_order ASC")->fetchAll();
+            $links = $pdo->query("SELECT * FROM episode_play_links WHERE episode_id IN ($ein) ORDER BY episode_id ASC, link_order ASC, id ASC")->fetchAll();
             foreach ($links as $l) { $linkByEp[$l['episode_id']][] = $l; }
         }
-        foreach ($episodes as &$e) { $e['play_links'] = $linkByEp[$e['id']] ?? []; }
+        foreach ($episodes as &$e) {
+            $e['play_links'] = $linkByEp[$e['id']] ?? [];
+        }
         foreach ($seasonRows as &$season) {
             $season['episodes'] = array_values(array_filter($episodes, fn($e) => $e['season_id'] == $season['id']));
         }
@@ -1026,107 +1028,114 @@ if ($action === 'edit_series') {
 //
 // 7. ADD/EDIT EPISODE (alias for add_episode_link  Flutter compat)
 //
-if ($action === 'add_episode_link') {
-    $series_id = intval($input['series_id'] ?? 0);
+if ($action === 'add_episode_link' || $action === 'add_episode') {
+    $series_id = intval($input['series_id'] ?? $input['id'] ?? 0);
+    $season_id = intval($input['season_id'] ?? 0);
     $season_name = trim($input['season_name'] ?? 'Season 1');
-    $name = trim($input['name'] ?? 'Episode');
-    $url = trim($input['url'] ?? '');
+    $name = trim($input['name'] ?? $input['Episoade_Name'] ?? 'Episode');
+    $url = trim($input['url'] ?? $input['stream_url'] ?? '');
     $stream_type = trim($input['stream_type'] ?? 'MP4/MKV Direct Link');
-    $episode_image = trim($input['episode_image'] ?? '');
-    $quality = trim($input['quality'] ?? 'HD');
+    $episode_image = trim($input['episode_image'] ?? $input['image'] ?? $input['poster'] ?? '');
+    $quality = trim($input['quality'] ?? '720p');
+    $order = intval($input['order'] ?? $input['episoade_order'] ?? 1);
 
-    if ($series_id <= 0) json_response(false, [], "Series ID required");
+    if ($series_id <= 0 && $season_id <= 0) json_response(false, [], "Series or Season ID required");
 
-    // Find or create season (trim match: DB names may contain trailing spaces)
-    $season_id = 0;
-    $stmt = $pdo->prepare("SELECT id FROM web_series_seasons WHERE web_series_id = ? AND TRIM(Session_Name) = TRIM(?) AND status = 1");
-    $stmt->execute([$series_id, $season_name]);
-    $season = $stmt->fetch();
-    if ($season) {
-        $season_id = $season['id'];
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, ?, 1)");
-        $stmt->execute([$series_id, $season_name, 1]);
-        $season_id = $pdo->lastInsertId();
+    // Find or create season
+    if ($season_id <= 0) {
+        $stmt = $pdo->prepare("SELECT id FROM web_series_seasons WHERE web_series_id = ? AND TRIM(Session_Name) = TRIM(?)");
+        $stmt->execute([$series_id, $season_name]);
+        $season = $stmt->fetch();
+        if ($season) {
+            $season_id = intval($season['id']);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, ?, 1)");
+            $stmt->execute([$series_id, $season_name, 1]);
+            $season_id = intval($pdo->lastInsertId());
+        }
     }
 
-    // Create episode with image (include all NOT NULL columns  strict SQL mode)
-    $stmt = $pdo->prepare("INSERT INTO web_series_episoade (season_id, Episoade_Name, episoade_image, episoade_description, episoade_order, downloadable, type, source, url, skip_available, intro_start, intro_end, end_credits_marker, drm_uuid, drm_license_uri, status) VALUES (?, ?, ?, '', 1, 1, 0, ' ', ' ', 0, ' ', ' ', ' ', ' ', ' ', 1)");
-    $stmt->execute([$season_id, $name, $episode_image]);
-    $ep_id = $pdo->lastInsertId();
+    // Create episode
+    $stmt = $pdo->prepare("INSERT INTO web_series_episoade (season_id, Episoade_Name, episoade_image, episoade_description, episoade_order, downloadable, type, source, url, skip_available, intro_start, intro_end, end_credits_marker, drm_uuid, drm_license_uri, status) VALUES (?, ?, ?, '', ?, 1, 0, ' ', ' ', 0, ' ', ' ', ' ', ' ', ' ', 1)");
+    $stmt->execute([$season_id, $name, $episode_image, $order]);
+    $ep_id = intval($pdo->lastInsertId());
 
-    // Add play links if play_links array or URL provided
+    // Add play links
     if ($ep_id > 0) {
-        if (isset($input['play_links']) && is_array($input['play_links'])) {
-            $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
+        $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
+        if (isset($input['play_links']) && is_array($input['play_links']) && !empty($input['play_links'])) {
             $ord = 1;
             foreach ($input['play_links'] as $link) {
-                if (!empty($link['url'])) {
-                    $st_type = $link['type'] ?? 'MP4/MKV Direct Link';
+                $link_url = trim($link['url'] ?? '');
+                if (!empty($link_url)) {
+                    $st_type = $link['type'] ?? $stream_type;
                     $st_name = $link['name'] ?? ("Server " . $ord);
                     $st_qual = $link['quality'] ?? $quality;
-                    $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $st_name, $st_qual, $link['url'], $st_type, $ord]);
+                    $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $st_name, $st_qual, $link_url, $st_type, $ord]);
                     $ord++;
                 }
             }
         } elseif (!empty($url)) {
-            $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
             $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, 'Server 1', ?, ?, ?, 1, 1, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $quality, $url, $stream_type]);
         }
     }
 
-    json_response(true, ["episode_id" => $ep_id, "season_id" => $season_id], "Episode added");
+    json_response(true, ["episode_id" => $ep_id, "season_id" => $season_id], "Episode added successfully");
 }
 
 //
 // 7b. BATCH ADD EPISODES (Multi-episode import)
 //
-if ($action === 'batch_add_episodes') {
-    $series_id = intval($input['series_id'] ?? 0);
+if ($action === 'batch_add_episodes' || $action === 'import_episodes') {
+    $series_id = intval($input['series_id'] ?? $input['id'] ?? 0);
+    $season_id = intval($input['season_id'] ?? 0);
     $season_name = trim($input['season_name'] ?? 'Season 1');
     $episodes = $input['episodes'] ?? [];
 
-    if ($series_id <= 0) json_response(false, [], "Series ID required");
+    if ($series_id <= 0 && $season_id <= 0) json_response(false, [], "Series or Season ID required");
     if (empty($episodes) || !is_array($episodes)) json_response(false, [], "No episodes provided");
 
     // Find or create season
-    $season_id = 0;
-    $stmt = $pdo->prepare("SELECT id FROM web_series_seasons WHERE web_series_id = ? AND TRIM(Session_Name) = TRIM(?) AND status = 1");
-    $stmt->execute([$series_id, $season_name]);
-    $season = $stmt->fetch();
-    if ($season) {
-        $season_id = $season['id'];
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, 1, 1)");
+    if ($season_id <= 0) {
+        $stmt = $pdo->prepare("SELECT id FROM web_series_seasons WHERE web_series_id = ? AND TRIM(Session_Name) = TRIM(?)");
         $stmt->execute([$series_id, $season_name]);
-        $season_id = $pdo->lastInsertId();
+        $season = $stmt->fetch();
+        if ($season) {
+            $season_id = intval($season['id']);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO web_series_seasons (web_series_id, Session_Name, season_order, status) VALUES (?, ?, 1, 1)");
+            $stmt->execute([$series_id, $season_name]);
+            $season_id = intval($pdo->lastInsertId());
+        }
     }
 
     $inserted = 0;
     foreach ($episodes as $ep) {
-        $ep_name = trim($ep['name'] ?? 'Episode');
-        $ep_url = trim($ep['url'] ?? '');
-        $ep_image = trim($ep['episode_image'] ?? $ep['poster'] ?? '');
+        $ep_name = trim($ep['name'] ?? $ep['Episoade_Name'] ?? 'Episode');
+        $ep_url = trim($ep['url'] ?? $ep['stream_url'] ?? '');
+        $ep_image = trim($ep['episode_image'] ?? $ep['image'] ?? $ep['poster'] ?? '');
         $ep_type = trim($ep['stream_type'] ?? 'MP4/MKV Direct Link');
         $ep_qual = trim($ep['quality'] ?? '720p');
-        $ep_ord = intval($ep['order'] ?? ($inserted + 1));
+        $ep_ord = intval($ep['order'] ?? $ep['episoade_order'] ?? ($inserted + 1));
 
         if (empty($ep_url) && empty($ep['play_links'])) continue;
 
         $stmt = $pdo->prepare("INSERT INTO web_series_episoade (season_id, Episoade_Name, episoade_image, episoade_description, episoade_order, downloadable, type, source, url, skip_available, intro_start, intro_end, end_credits_marker, drm_uuid, drm_license_uri, status) VALUES (?, ?, ?, '', ?, 1, 0, ' ', ' ', 0, ' ', ' ', ' ', ' ', ' ', 1)");
         $stmt->execute([$season_id, $ep_name, $ep_image, $ep_ord]);
-        $ep_id = $pdo->lastInsertId();
+        $ep_id = intval($pdo->lastInsertId());
 
         if ($ep_id > 0) {
             $inserted++;
+            $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
             if (!empty($ep['play_links']) && is_array($ep['play_links'])) {
                 $lord = 1;
                 foreach ($ep['play_links'] as $pl) {
-                    if (!empty($pl['url'])) {
+                    $pl_url = trim($pl['url'] ?? '');
+                    if (!empty($pl_url)) {
                         $pl_name = $pl['name'] ?? ("Server " . $lord);
                         $pl_type = $pl['type'] ?? $ep_type;
                         $pl_qual = $pl['quality'] ?? $ep_qual;
-                        $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $pl_name, $pl_qual, $pl['url'], $pl_type, $lord]);
+                        $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $pl_name, $pl_qual, $pl_url, $pl_type, $lord]);
                         $lord++;
                     }
                 }
@@ -1142,40 +1151,40 @@ if ($action === 'batch_add_episodes') {
 //
 // 7c. SAVE EPISODE (existing, kept for compatibility)
 //
-if ($action === 'save_episode' || $action === 'update_episode') {
+if ($action === 'save_episode' || $action === 'update_episode' || $action === 'edit_episode') {
     $ep_id = intval($input['episode_id'] ?? $input['id'] ?? 0);
     $season_id = intval($input['season_id'] ?? 0);
     $name = trim($input['name'] ?? $input['Episoade_Name'] ?? 'Episode');
-    $image = trim($input['image'] ?? $input['episoade_image'] ?? '');
-    $desc = trim($input['description'] ?? '');
-    $order = intval($input['order'] ?? 1);
+    $image = trim($input['image'] ?? $input['episoade_image'] ?? $input['poster'] ?? '');
+    $desc = trim($input['description'] ?? $input['episoade_description'] ?? '');
+    $order = intval($input['order'] ?? $input['episoade_order'] ?? 1);
     $quality = trim($input['quality'] ?? '720p');
     $stream_type = trim($input['stream_type'] ?? 'MP4/MKV Direct Link');
 
     if ($ep_id > 0) {
-        $pdo->prepare("UPDATE web_series_episoade SET Episoade_Name = ?, episoade_image = ?, episoade_description = ?, episoade_order = ? WHERE id = ?")->execute([$name, $image, $desc, $order, $ep_id]);
+        $pdo->prepare("UPDATE web_series_episoade SET Episoade_Name = ?, episoade_image = ?, episoade_description = ?, episoade_order = ?, status = 1 WHERE id = ?")->execute([$name, $image, $desc, $order, $ep_id]);
     } else {
         $pdo->prepare("INSERT INTO web_series_episoade (season_id, Episoade_Name, episoade_image, episoade_description, episoade_order, downloadable, type, source, url, skip_available, intro_start, intro_end, end_credits_marker, drm_uuid, drm_license_uri, status) VALUES (?, ?, ?, ?, ?, 1, 0, ' ', ' ', 0, ' ', ' ', ' ', ' ', ' ', 1)")->execute([$season_id, $name, $image, $desc, $order]);
-        $ep_id = $pdo->lastInsertId();
+        $ep_id = intval($pdo->lastInsertId());
     }
 
     if ($ep_id > 0) {
-        if (isset($input['play_links']) && is_array($input['play_links'])) {
-            $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
+        $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
+        if (isset($input['play_links']) && is_array($input['play_links']) && !empty($input['play_links'])) {
             $ord = 1;
             foreach ($input['play_links'] as $link) {
-                if (!empty($link['url'])) {
-                    $st_type = $link['type'] ?? 'MP4/MKV Direct Link';
+                $link_url = trim($link['url'] ?? '');
+                if (!empty($link_url)) {
+                    $st_type = $link['type'] ?? $stream_type;
                     $st_name = $link['name'] ?? ("Server " . $ord);
                     $st_qual = $link['quality'] ?? $quality;
-                    $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $st_name, $st_qual, $link['url'], $st_type, $ord]);
+                    $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, ?, ?, ?, ?, 1, ?, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $st_name, $st_qual, $link_url, $st_type, $ord]);
                     $ord++;
                 }
             }
         } else {
             $stream_url = trim($input['stream_url'] ?? $input['url'] ?? '');
             if (!empty($stream_url)) {
-                $pdo->prepare("DELETE FROM episode_play_links WHERE episode_id = ?")->execute([$ep_id]);
                 $pdo->prepare("INSERT INTO episode_play_links (episode_id, name, quality, url, type, status, link_order, size, skip_available, intro_start, intro_end, end_credits_marker, link_type, drm_uuid, drm_license_uri) VALUES (?, 'Server 1', ?, ?, ?, 1, 1, ' ', 0, ' ', ' ', ' ', 0, ' ', ' ')")->execute([$ep_id, $quality, $stream_url, $stream_type]);
             }
         }
