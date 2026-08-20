@@ -440,6 +440,8 @@ class MyHttpOverrides extends HttpOverrides {
     'tnaflix',
     'fourhoi',
     'surrit',
+    'dropmms',
+    'imagetwist',
   ];
 
   @override

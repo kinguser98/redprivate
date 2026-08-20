@@ -7,10 +7,11 @@ import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter/services.dart';
 import '../../config/api_config.dart';
 import '../../services/aagmaal_resolver.dart';
 import '../../services/streamtape_service.dart';
+import '../../services/dropmms_service.dart';
 import '../streamtape_domains_screen.dart';
 import '../video_player_screen.dart';
 import 'fly_mode_manager_screen.dart';
@@ -11733,6 +11734,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   // ── ⚡ EXTRACTOR CINEMA (AD-FREE DIRECT WEB PLAYER) ──
   //
 
+  String _dropmmsCategory = 'all';
+
   final List<Map<String, dynamic>> _cinemaSources = const [
     {
       'name': 'UFFMaal',
@@ -11775,6 +11778,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       'badge': 'BOLLYWOOD • CINEMA',
       'color': Color(0xFFFFD600),
       'icon': Icons.theaters_rounded,
+    },
+    {
+      'name': 'DropMMS',
+      'domain': 'dropmms.co',
+      'badge': 'PHOTOS • VIDEOS • DL',
+      'color': Color(0xFFFFB300),
+      'icon': Icons.forum_rounded,
     },
   ];
 
@@ -11825,6 +11835,24 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         if (res['status'] == 'success' && res['data']?['items'] != null) {
           results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
         }
+      } else if (_cinemaSource == 6) {
+        // DropMMS
+        final items = await DropmmsService.fetchCatalog(
+          category: _dropmmsCategory,
+          query: q,
+          page: _cinemaPage,
+        );
+        results = items.map((e) => e.toJson()).toList();
+        if (results.isEmpty) {
+          final res = await _adminPhpApi('fetch_dropmms_catalog', {
+            'category': _dropmmsCategory,
+            'query': q,
+            'page': _cinemaPage,
+          });
+          if (res['status'] == 'success' && res['data']?['items'] != null) {
+            results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+          }
+        }
       }
 
       if (mounted) {
@@ -11841,7 +11869,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   Future<void> _playOrBrowseCinemaItem(Map<String, dynamic> item) async {
-    final pageUrl = (item['page_url'] ?? '').toString().trim();
+    final pageUrl = (item['page_url'] ?? item['topic_url'] ?? '').toString().trim();
     final title = (item['title'] ?? 'Video').toString().trim();
     final poster = (item['poster'] ?? '').toString().trim();
     if (pageUrl.isEmpty) {
@@ -11869,9 +11897,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 3),
               ),
               const SizedBox(height: 20),
-              const Text(
-                "Extracting Direct Stream...",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              Text(
+                _cinemaSource == 6 ? "Loading Post & Media..." : "Extracting Direct Stream...",
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
@@ -11906,6 +11934,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
 
     try {
+      if (_cinemaSource == 6 || item['is_dropmms'] == true) {
+        final details = await DropmmsService.fetchTopicDetails(pageUrl);
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+        if (details != null && mounted) {
+          _showDropmmsPostSheet(details);
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Failed to load DropMMS topic details"), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+
       Map<String, dynamic>? details;
       if (_cinemaSource == 0) {
         details = await _scrapeUffmaalDetails(pageUrl);
@@ -12227,6 +12270,417 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
   }
 
+  void _showDropmmsPostSheet(DropmmsTopicDetails details) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (bctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.88,
+          maxChildSize: 0.95,
+          minChildSize: 0.5,
+          builder: (_, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFF121622),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(top: BorderSide(color: Color(0xFFFFB300), width: 1.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 10, bottom: 12),
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFB300).withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFFFFB300), width: 0.8),
+                              ),
+                              child: Text(
+                                details.categoryName.toUpperCase(),
+                                style: const TextStyle(color: Color(0xFFFFB300), fontSize: 10.5, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.greenAccent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                "ZERO ADS • IN-APP PLAY & DOWNLOAD",
+                                style: TextStyle(color: Colors.greenAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                              onPressed: () => Navigator.pop(bctx),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          details.title,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16, height: 1.25),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "Posted: ${details.date} • ${details.images.length} Screenshots • ${details.videoLinks.length} Video Streams",
+                          style: const TextStyle(color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(color: Colors.white10, height: 1),
+                  Expanded(
+                    child: ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        // 1. Screenshots Gallery
+                        if (details.images.isNotEmpty) ...[
+                          Row(
+                            children: [
+                              const Icon(Icons.photo_library_rounded, color: Colors.cyanAccent, size: 18),
+                              const SizedBox(width: 8),
+                              Text(
+                                "PREVIEW SCREENSHOTS (${details.images.length})",
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                              ),
+                              const Spacer(),
+                              const Text("Tap image to zoom", style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 140,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: details.images.length,
+                              itemBuilder: (context, imgIdx) {
+                                final imgUrl = details.images[imgIdx];
+                                return Container(
+                                  width: 110,
+                                  margin: const EdgeInsets.only(right: 10),
+                                  child: InkWell(
+                                    onTap: () => _showFullscreenImageGallery(details.images, imgIdx),
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          CachedNetworkImage(
+                                            imageUrl: imgUrl,
+                                            fit: BoxFit.cover,
+                                            errorWidget: (_, __, ___) => Container(
+                                              color: const Color(0xFF1E2433),
+                                              child: const Icon(Icons.broken_image_rounded, color: Colors.white24),
+                                            ),
+                                          ),
+                                          Positioned(
+                                            bottom: 4,
+                                            right: 4,
+                                            child: Container(
+                                              padding: const EdgeInsets.all(3),
+                                              decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(4)),
+                                              child: const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+
+                        // 2. Video Streams (Zero Ads)
+                        Row(
+                          children: [
+                            const Icon(Icons.play_circle_filled_rounded, color: Color(0xFF00E676), size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              "IN-APP VIDEO STREAMS (${details.videoLinks.length})",
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        if (details.videoLinks.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(color: const Color(0xFF161B26), borderRadius: BorderRadius.circular(12)),
+                            child: const Text("No video streams found for this post. Check download mirrors below.", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                          )
+                        else
+                          ...details.videoLinks.map((vLink) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B26),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: vLink.type == 'streamtape' ? const Color(0xFF00E676).withValues(alpha: 0.18) : Colors.cyanAccent.withValues(alpha: 0.18),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          vLink.host.toUpperCase(),
+                                          style: TextStyle(
+                                            color: vLink.type == 'streamtape' ? const Color(0xFF00E676) : Colors.cyanAccent,
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          vLink.name,
+                                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: () {
+                                            Navigator.pop(bctx);
+                                            _playDirectStream(vLink.url, details.title);
+                                          },
+                                          icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                                          label: const Text("PLAY IN-APP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFF00E676),
+                                            foregroundColor: Colors.black,
+                                            padding: const EdgeInsets.symmetric(vertical: 9),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: () {
+                                            DropmmsService.downloadInApp(
+                                              context: context,
+                                              rawUrl: vLink.url,
+                                              defaultFileName: "${details.title}_${vLink.host}.mp4",
+                                            );
+                                          },
+                                          icon: const Icon(Icons.download_rounded, size: 16),
+                                          label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFF1E2638),
+                                            foregroundColor: Colors.cyanAccent,
+                                            padding: const EdgeInsets.symmetric(vertical: 9),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+
+                        const SizedBox(height: 16),
+
+                        // 3. Download Mirrors
+                        if (details.downloadLinks.isNotEmpty) ...[
+                          Row(
+                            children: [
+                              const Icon(Icons.cloud_download_rounded, color: Colors.amberAccent, size: 18),
+                              const SizedBox(width: 8),
+                              Text(
+                                "DOWNLOAD MIRRORS (${details.downloadLinks.length})",
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          ...details.downloadLinks.map((dl) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF161B26),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.white10),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.insert_drive_file_outlined, color: Colors.amberAccent, size: 16),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      dl.name,
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      DropmmsService.downloadInApp(
+                                        context: context,
+                                        rawUrl: dl.url,
+                                        defaultFileName: "${details.title}_${dl.host}.mp4",
+                                      );
+                                    },
+                                    icon: const Icon(Icons.download_rounded, size: 14),
+                                    label: const Text("Download", style: TextStyle(fontSize: 11)),
+                                    style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.copy_rounded, color: Colors.white38, size: 16),
+                                    tooltip: "Copy Link",
+                                    onPressed: () {
+                                      Clipboard.setData(ClipboardData(text: dl.url));
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text("Download link copied to clipboard")),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showFullscreenImageGallery(List<String> images, int initialIndex) {
+    int currentIdx = initialIndex;
+    final pageController = PageController(initialPage: initialIndex);
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.95),
+      builder: (dlgCtx) {
+        return StatefulBuilder(
+          builder: (context, setDlgState) {
+            return Scaffold(
+              backgroundColor: Colors.transparent,
+              body: SafeArea(
+                child: Stack(
+                  children: [
+                    // Swipeable Zoomable Photo Viewer
+                    PageView.builder(
+                      controller: pageController,
+                      itemCount: images.length,
+                      onPageChanged: (idx) => setDlgState(() => currentIdx = idx),
+                      itemBuilder: (ctx, idx) {
+                        return InteractiveViewer(
+                          minScale: 0.8,
+                          maxScale: 4.0,
+                          child: Center(
+                            child: CachedNetworkImage(
+                              imageUrl: images[idx],
+                              fit: BoxFit.contain,
+                              placeholder: (_, __) => const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+                              errorWidget: (_, __, ___) => const Center(child: Icon(Icons.broken_image_rounded, color: Colors.white24, size: 64)),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    // Top Bar
+                    Positioned(
+                      top: 10,
+                      left: 14,
+                      right: 14,
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, color: Colors.white, size: 26),
+                            onPressed: () => Navigator.pop(dlgCtx),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.white12)),
+                            child: Text(
+                              "${currentIdx + 1} / ${images.length}",
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.download_rounded, color: Colors.cyanAccent, size: 24),
+                            tooltip: "Save Image",
+                            onPressed: () {
+                              final imgUrl = images[currentIdx];
+                              DropmmsService.downloadInApp(
+                                context: context,
+                                rawUrl: imgUrl,
+                                defaultFileName: "dropmms_image_${currentIdx + 1}.jpg",
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildExtractorCinemaView() {
     if (_cinemaCatalog.isEmpty && !_cinemaLoading) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -12357,6 +12811,49 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   }),
                 ),
               ),
+
+              // DropMMS Subcategory Chips (when DropMMS is selected)
+              if (_cinemaSource == 6) ...[
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: DropmmsService.categories.entries.map((entry) {
+                      final isCatSel = _dropmmsCategory == entry.key;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text(entry.value),
+                          selected: isCatSel,
+                          onSelected: (selected) {
+                            if (selected && _dropmmsCategory != entry.key) {
+                              setState(() {
+                                _dropmmsCategory = entry.key;
+                                _cinemaCatalog.clear();
+                              });
+                              _loadCinemaCatalog(resetPage: true);
+                            }
+                          },
+                          backgroundColor: const Color(0xFF161B26),
+                          selectedColor: const Color(0xFFFFB300).withValues(alpha: 0.25),
+                          labelStyle: TextStyle(
+                            color: isCatSel ? const Color(0xFFFFB300) : Colors.white60,
+                            fontWeight: isCatSel ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 11.5,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: BorderSide(
+                              color: isCatSel ? const Color(0xFFFFB300) : Colors.white10,
+                            ),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 10),
 
