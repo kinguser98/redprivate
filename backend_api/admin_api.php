@@ -3734,12 +3734,16 @@ if ($action === 'fetch_skymovies_catalog') {
     json_response(true, ['items' => $items, 'domain' => $skymovies_domain], 'Skymovies catalog fetched');
 }
 
-if ($action === 'search_skymovies_catalog') {
+if ($action === 'search_skymovies_catalog' || $action === 'fetch_skymovies_catalog') {
     list($skymovies_domain, $hdmaal_domain) = get_scraper_domains($pdo);
-    $query = trim($input['query'] ?? $_POST['query'] ?? '');
-    if (empty($query)) json_response(false, [], 'Query required');
+    $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
+    $page = intval($input['page'] ?? $_POST['page'] ?? $_GET['page'] ?? 1);
+    if ($page <= 0) $page = 1;
 
-    $search_url = "$skymovies_domain/search.php?search=" . urlencode($query) . "&cat=All";
+    $search_url = !empty($query)
+        ? "$skymovies_domain/search.php?search=" . urlencode($query) . "&cat=All"
+        : "$skymovies_domain/";
+
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL            => $search_url,
@@ -3753,30 +3757,39 @@ if ($action === 'search_skymovies_catalog') {
 
     $items = [];
     if ($html) {
-        preg_match_all('/<div class=[\'"](?:L|Let|Fmvideo)[\'"][^>]*>.*?<a href=[\'"]([^\'"]+)[\'"][^>]*>(?:<img[^>]*>)?\s*(.*?)\s*<\/a>/is', $html, $matches, PREG_SET_ORDER);
+        preg_match_all('/<div class=[\'"](?:L|Let|Fmvideo|thumbnail|poster)[\'"][^>]*>.*?<a href=[\'"]([^\'"]+)[\'"][^>]*>(?:<img[^>]+(?:src|data-src)=[\'"]([^\'"]+)[\'"][^>]*>)?\s*(.*?)\s*<\/a>/is', $html, $matches, PREG_SET_ORDER);
         foreach ($matches as $m) {
             $item_link = $m[1];
-            $item_title = trim(strip_tags(html_entity_decode($m[2])));
+            $item_poster = $m[2] ?? '';
+            $item_title = trim(strip_tags(html_entity_decode($m[3])));
             if (empty($item_link) || strpos($item_link, 'disclaimer') !== false || strpos($item_link, 'index.php') !== false) continue;
             if (strpos($item_link, 'http') === false) {
                 $item_link = $skymovies_domain . '/' . ltrim($item_link, '/');
             }
+            if (!empty($item_poster) && strpos($item_poster, 'http') === false) {
+                $item_poster = $skymovies_domain . '/' . ltrim($item_poster, '/');
+            }
             $items[] = [
                 'title' => $item_title,
                 'page_url' => $item_link,
+                'poster' => $item_poster,
             ];
         }
     }
 
-    json_response(true, ['items' => $items], 'Skymovies catalog search completed');
+    json_response(true, ['items' => $items, 'page' => $page], 'Skymovies catalog search completed');
 }
 
-if ($action === 'search_hdmaal_catalog') {
+if ($action === 'search_hdmaal_catalog' || $action === 'fetch_hdmaal_catalog') {
     list($skymovies_domain, $hdmaal_domain) = get_scraper_domains($pdo);
     $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
-    if (empty($query)) json_response(false, [], 'Query required');
+    $page = intval($input['page'] ?? $_POST['page'] ?? $_GET['page'] ?? 1);
+    if ($page <= 0) $page = 1;
 
-    $search_url = "$hdmaal_domain/?s=" . urlencode($query);
+    $search_url = !empty($query)
+        ? ( $page > 1 ? "$hdmaal_domain/page/$page/?s=" . urlencode($query) : "$hdmaal_domain/?s=" . urlencode($query) )
+        : ( $page > 1 ? "$hdmaal_domain/page/$page/" : "$hdmaal_domain/" );
+
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL            => $search_url,
@@ -3810,7 +3823,7 @@ if ($action === 'search_hdmaal_catalog') {
         }
     }
 
-    json_response(true, ['items' => $items], 'HDMaal catalog search completed');
+    json_response(true, ['items' => $items, 'page' => $page], 'HDMaal catalog search completed');
 }
 
 
@@ -4057,12 +4070,16 @@ if ($action === 'resolve_server_stream') {
     }
 }
 
-if ($action === 'search_uncutmasti_catalog') {
-    $query = trim($input['query'] ?? $_POST['query'] ?? '');
-    if (empty($query)) json_response(false, [], 'Query required');
+if ($action === 'search_uncutmasti_catalog' || $action === 'fetch_uncutmasti_catalog') {
+    $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
+    $page = intval($input['page'] ?? $_POST['page'] ?? $_GET['page'] ?? 1);
+    if ($page <= 0) $page = 1;
 
     list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain) = get_scraper_domains($pdo);
-    $search_url = "$uncutmasti_domain/wp-json/wp/v2/posts?search=" . urlencode($query) . "&per_page=25&_embed=1";
+    $search_url = !empty($query)
+        ? "$uncutmasti_domain/wp-json/wp/v2/posts?search=" . urlencode($query) . "&page=$page&per_page=24&_embed=1"
+        : "$uncutmasti_domain/wp-json/wp/v2/posts?page=$page&per_page=24&_embed=1";
+
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL            => $search_url,
@@ -4082,15 +4099,24 @@ if ($action === 'search_uncutmasti_catalog') {
             if (isset($post['_embedded']['wp:featuredmedia'][0]['source_url'])) {
                 $poster = $post['_embedded']['wp:featuredmedia'][0]['source_url'];
             }
+            if (empty($poster) && isset($post['content']['rendered'])) {
+                if (preg_match('/https?:\/\/blogger\.googleusercontent\.com\/img\/[^\s\'"<>]+/i', $post['content']['rendered'], $bm)) {
+                    $poster = $bm[0];
+                }
+            }
+            $raw_date = $post['date'] ?? '';
+            $date = !empty($raw_date) ? date('Y-m-d', strtotime($raw_date)) : '';
+
             $items[] = [
                 'title' => html_entity_decode($post['title']['rendered'] ?? ''),
                 'page_url' => $post['link'] ?? '',
                 'poster' => $poster,
+                'date' => $date,
             ];
         }
     }
 
-    json_response(true, ['items' => $items], 'UncutMasti catalog search completed');
+    json_response(true, ['items' => $items, 'page' => $page], 'UncutMasti catalog search completed');
 }
 
 if ($action === 'extract_uncutmasti_details') {
