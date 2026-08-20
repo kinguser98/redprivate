@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -18,10 +19,16 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
   InAppWebViewController? _webViewController;
   bool _isLoading = true;
   bool _useDesktopUa = false;
+  String? _errorMessage;
 
-  static const String _mobileUa =
-      'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36';
-  static const String _desktopUa =
+  static const String _iosMobileUa =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  static const String _iosDesktopUa =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15';
+
+  static const String _androidMobileUa =
+      'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+  static const String _androidDesktopUa =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   @override
@@ -38,11 +45,24 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
     super.dispose();
   }
 
-  String get _ua => _useDesktopUa ? _desktopUa : _mobileUa;
+  String get _ua {
+    if (Platform.isIOS) {
+      return _useDesktopUa ? _iosDesktopUa : _iosMobileUa;
+    }
+    return _useDesktopUa ? _androidDesktopUa : _androidMobileUa;
+  }
 
   Future<void> _reload({bool toggleUa = false}) async {
     if (toggleUa) {
-      setState(() => _useDesktopUa = !_useDesktopUa);
+      setState(() {
+        _useDesktopUa = !_useDesktopUa;
+        _errorMessage = null;
+      });
+      await _webViewController?.setSettings(
+        settings: InAppWebViewSettings(userAgent: _ua),
+      );
+    } else {
+      setState(() => _errorMessage = null);
     }
     await _webViewController?.reload();
   }
@@ -78,7 +98,11 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
               InAppWebView(
                 initialUrlRequest: URLRequest(
                   url: WebUri('https://www.cambaddies.com'),
-                  headers: {'User-Agent': _ua},
+                  headers: {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Upgrade-Insecure-Requests': '1',
+                  },
                 ),
                 initialUserScripts: UnmodifiableListView<UserScript>([
                   UserScript(
@@ -88,12 +112,17 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
                   ),
                 ]),
                 initialSettings: InAppWebViewSettings(
+                  userAgent: _ua,
                   javaScriptEnabled: true,
                   domStorageEnabled: true,
                   supportMultipleWindows: false,
                   javaScriptCanOpenWindowsAutomatically: false,
                   mediaPlaybackRequiresUserGesture: false,
                   allowsInlineMediaPlayback: true,
+                  allowsAirPlayForMediaPlayback: true,
+                  allowsBackForwardNavigationGestures: true,
+                  isFraudulentWebsiteWarningEnabled: false,
+                  transparentBackground: false,
                   useOnDownloadStart: true,
                   mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
                 ),
@@ -105,7 +134,12 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
                   return true;
                 },
                 onLoadStart: (controller, url) {
-                  if (mounted) setState(() => _isLoading = true);
+                  if (mounted) {
+                    setState(() {
+                      _isLoading = true;
+                      _errorMessage = null;
+                    });
+                  }
                 },
                 onLoadStop: (controller, url) {
                   if (mounted) setState(() => _isLoading = false);
@@ -113,6 +147,28 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
                 onProgressChanged: (controller, progress) {
                   if (progress >= 100 && mounted) {
                     setState(() => _isLoading = false);
+                  }
+                },
+                onReceivedError: (controller, request, error) {
+                  if (request.isForMainFrame ?? true) {
+                    if (mounted) {
+                      setState(() {
+                        _isLoading = false;
+                        _errorMessage = error.description;
+                      });
+                    }
+                  }
+                },
+                onReceivedHttpError: (controller, request, errorResponse) {
+                  if (request.isForMainFrame ?? true) {
+                    if (errorResponse.statusCode != null && errorResponse.statusCode! >= 400) {
+                      if (mounted) {
+                        setState(() {
+                          _isLoading = false;
+                          _errorMessage = "HTTP ${errorResponse.statusCode}: ${errorResponse.reasonPhrase ?? 'Error'}";
+                        });
+                      }
+                    }
                   }
                 },
                 shouldOverrideUrlLoading: (controller, navigationAction) async {
@@ -126,9 +182,51 @@ class _LiveCamsScreenState extends State<LiveCamsScreen> {
               ),
 
               // Loading spinner.
-              if (_isLoading)
+              if (_isLoading && _errorMessage == null)
                 const Center(
                   child: CircularProgressIndicator(color: Color(0xFF00C6FF)),
+                ),
+
+              // Error display with retry
+              if (_errorMessage != null)
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF161B26),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.wifi_off_rounded, color: Colors.orangeAccent, size: 48),
+                        const SizedBox(height: 12),
+                        const Text(
+                          "Failed to Load Cambaddies",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: () => _reload(),
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
+                          label: const Text("Retry"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00C6FF),
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
 
               // Top bar: back, title, UA toggle, reload.

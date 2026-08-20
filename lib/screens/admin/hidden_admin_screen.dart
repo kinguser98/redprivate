@@ -8529,6 +8529,45 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
   // ── Client-side Scrapers for HDMaal & Aagmaal (Instant Fallback) ──
 
+  Future<List<Map<String, dynamic>>> _scrapeHdmaalCatalog({String query = '', int page = 1}) async {
+    if (query.isNotEmpty) {
+      return _scrapeHdmaalSearch(query);
+    }
+    try {
+      final pageSegment = page > 1 ? "page/$page/" : "";
+      final uri = Uri.parse("https://hdmaal.gg/$pageSegment");
+      final res = await http.get(uri, headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://hdmaal.gg/',
+      }).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return [];
+      final html = res.body;
+      final results = <Map<String, dynamic>>[];
+
+      final reg = RegExp(r'<a[^>]+class="[^"]*video[^"]*"[^>]*href="([^"]+)"[^>]*title="([^"]*)"[^>]*style="([^"]*)"|<a[^>]+class="[^"]*video[^"]*"[^>]*style="([^"]*)"[^>]*title="([^"]*)"[^>]*href="([^"]+)"', caseSensitive: false);
+      for (final match in reg.allMatches(html)) {
+        final url = (match.group(1) ?? match.group(6) ?? '').trim();
+        final title = (match.group(2) ?? match.group(5) ?? '').trim();
+        final style = match.group(3) ?? match.group(4) ?? '';
+        var poster = '';
+        final bgMatch = RegExp(r'''background-image:\s*url\(['"]?([^'")]+)['"]?\)''').firstMatch(style);
+        if (bgMatch != null) {
+          poster = bgMatch.group(1) ?? '';
+        }
+        if (url.isNotEmpty && title.isNotEmpty) {
+          results.add({
+            'title': title,
+            'page_url': url,
+            'poster': poster,
+          });
+        }
+      }
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _scrapeHdmaalSearch(String query) async {
     try {
       final uri = Uri.parse("https://hdmaal.gg/?s=${Uri.encodeComponent(query)}");
@@ -11689,6 +11728,996 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       ),
     );
   }
+
+  //
+  // ── ⚡ EXTRACTOR CINEMA (AD-FREE DIRECT WEB PLAYER) ──
+  //
+
+  final List<Map<String, dynamic>> _cinemaSources = const [
+    {
+      'name': 'UFFMaal',
+      'domain': 'uffmaal.com',
+      'badge': 'DIRECT CDN • SERIES',
+      'color': Color(0xFFE50914),
+      'icon': Icons.flash_on_rounded,
+    },
+    {
+      'name': 'HDMaal',
+      'domain': 'hdmaal.gg',
+      'badge': '1080P HD • MOVIES',
+      'color': Color(0xFF00E676),
+      'icon': Icons.hd_rounded,
+    },
+    {
+      'name': 'AAGMaal',
+      'domain': 'aagmaal.mba',
+      'badge': 'ADULT OTT • SERIES',
+      'color': Color(0xFFFF9100),
+      'icon': Icons.local_fire_department_rounded,
+    },
+    {
+      'name': 'UncutMasti',
+      'domain': 'uncutmasti.com',
+      'badge': 'UNCUT • HOT SCENES',
+      'color': Color(0xFFD500F9),
+      'icon': Icons.auto_awesome_rounded,
+    },
+    {
+      'name': 'HDMove99',
+      'domain': 'hdmove99.store',
+      'badge': 'HINDI OTT • FULL SERIES',
+      'color': Color(0xFF00B0FF),
+      'icon': Icons.movie_filter_rounded,
+    },
+    {
+      'name': 'SkyMoviesHD',
+      'domain': 'skymovieshd.ink',
+      'badge': 'BOLLYWOOD • CINEMA',
+      'color': Color(0xFFFFD600),
+      'icon': Icons.theaters_rounded,
+    },
+  ];
+
+  Future<void> _loadCinemaCatalog({bool resetPage = false}) async {
+    if (resetPage) _cinemaPage = 1;
+    setState(() => _cinemaLoading = true);
+
+    try {
+      final q = _cinemaSearchCtrl.text.trim();
+      List<Map<String, dynamic>> results = [];
+
+      if (_cinemaSource == 0) {
+        // UFFMaal
+        results = await _scrapeUffmaalCatalog(query: q, page: _cinemaPage);
+      } else if (_cinemaSource == 1) {
+        // HDMaal
+        results = await _scrapeHdmaalCatalog(query: q, page: _cinemaPage);
+        if (results.isEmpty) {
+          final res = await _adminPhpApi('fetch_hdmaal_catalog', {'query': q, 'page': _cinemaPage});
+          if (res['status'] == 'success' && res['data']?['items'] != null) {
+            results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+          }
+        }
+      } else if (_cinemaSource == 2) {
+        // AAGMaal
+        results = await _scrapeAagmaalCatalog(query: q, page: _cinemaPage);
+        if (results.isEmpty) {
+          final res = await _adminPhpApi('search_aagmaal_catalog', {'query': q, 'page': _cinemaPage});
+          if (res['status'] == 'success' && res['data']?['items'] != null) {
+            results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+          }
+        }
+      } else if (_cinemaSource == 3) {
+        // UncutMasti
+        final res = await _adminPhpApi('fetch_uncutmasti_catalog', {'query': q, 'page': _cinemaPage});
+        if (res['status'] == 'success' && res['data']?['items'] != null) {
+          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+      } else if (_cinemaSource == 4) {
+        // HDMove99
+        final res = await _adminPhpApi('fetch_hdmove99_catalog', {'query': q, 'page': _cinemaPage});
+        if (res['status'] == 'success' && res['data']?['items'] != null) {
+          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+      } else if (_cinemaSource == 5) {
+        // SkyMoviesHD
+        final res = await _adminPhpApi('fetch_skymovies_catalog', {'query': q, 'page': _cinemaPage});
+        if (res['status'] == 'success' && res['data']?['items'] != null) {
+          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _cinemaCatalog = results;
+          _cinemaLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _cinemaLoading = false);
+      }
+    }
+  }
+
+  Future<void> _playOrBrowseCinemaItem(Map<String, dynamic> item) async {
+    final pageUrl = (item['page_url'] ?? '').toString().trim();
+    final title = (item['title'] ?? 'Video').toString().trim();
+    final poster = (item['poster'] ?? '').toString().trim();
+    if (pageUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No URL found for this item")),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      builder: (_) => Dialog(
+        backgroundColor: const Color(0xFF141824),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.cyanAccent, width: 1.2)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 48,
+                height: 48,
+                child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 3),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                "Extracting Direct Stream...",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.greenAccent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.greenAccent, width: 0.8),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shield_rounded, color: Colors.greenAccent, size: 14),
+                    SizedBox(width: 6),
+                    Text("Zero Ads • Direct Fast Stream", style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      Map<String, dynamic>? details;
+      if (_cinemaSource == 0) {
+        details = await _scrapeUffmaalDetails(pageUrl);
+      } else if (_cinemaSource == 1) {
+        details = await _scrapeHdmaalDetails(pageUrl);
+        if (details == null || (details['stream_url'] == null && (details['play_links'] == null || (details['play_links'] as List).isEmpty))) {
+          final res = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
+          if (res['status'] == 'success' && res['data'] != null) {
+            details = Map<String, dynamic>.from(res['data']);
+          }
+        }
+      } else if (_cinemaSource == 2) {
+        details = await _scrapeAagmaalDetails(pageUrl);
+        if (details == null || (details['stream_url'] == null && (details['play_links'] == null || (details['play_links'] as List).isEmpty))) {
+          final res = await _adminPhpApi('extract_aagmaal_details', {'page_url': pageUrl});
+          if (res['status'] == 'success' && res['data'] != null) {
+            details = Map<String, dynamic>.from(res['data']);
+          }
+        }
+      } else if (_cinemaSource == 3) {
+        final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
+        if (res['status'] == 'success' && res['data'] != null) {
+          details = Map<String, dynamic>.from(res['data']);
+        }
+      } else if (_cinemaSource == 4) {
+        final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
+        if (res['status'] == 'success' && res['data'] != null) {
+          details = Map<String, dynamic>.from(res['data']);
+        }
+      } else if (_cinemaSource == 5) {
+        final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
+        if (res['status'] == 'success' && res['data'] != null) {
+          details = Map<String, dynamic>.from(res['data']);
+        }
+      }
+
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      if (details == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Failed to extract stream details from this page."), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+
+      final episodes = (details['episodes'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
+
+      if (episodes.length > 1) {
+        _showSeriesEpisodesSheet(details, title, poster);
+        return;
+      }
+
+      var streamUrl = (details['stream_url'] ?? '').toString().trim();
+      if (streamUrl.isEmpty && details['play_links'] != null && (details['play_links'] as List).isNotEmpty) {
+        final firstPl = (details['play_links'] as List).first;
+        streamUrl = (firstPl['url'] ?? '').toString().trim();
+      }
+
+      if (streamUrl.isEmpty && episodes.isNotEmpty) {
+        final ep = episodes.first;
+        final epUrl = (ep['episode_url'] ?? ep['url'] ?? '').toString().trim();
+        if (epUrl.isNotEmpty) {
+          final epDetails = await _scrapeUffmaalDetails(epUrl);
+          streamUrl = (epDetails?['stream_url'] ?? '').toString().trim();
+        }
+      }
+
+      if (streamUrl.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("No playable stream link found on this page."), backgroundColor: Colors.orange),
+          );
+        }
+        return;
+      }
+
+      _playDirectStream(streamUrl, title.isNotEmpty ? title : (details['title'] ?? 'Video'));
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Extraction error: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _playDirectStream(String rawUrl, String videoTitle, {List<Map<String, dynamic>>? playlist, int episodeIndex = 0}) async {
+    String finalUrl = rawUrl;
+
+    if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
+      final stRes = await StreamtapeService.getDirectStreamUrl(finalUrl);
+      if (stRes != null && stRes.isNotEmpty) {
+        finalUrl = stRes;
+      }
+    } else if (finalUrl.contains('aagmaal') || finalUrl.contains('hdmaal') || finalUrl.contains('uffmaal')) {
+      final aagRes = await AagmaalResolver.resolveStream(finalUrl);
+      if (aagRes != null && aagRes.isNotEmpty) {
+        finalUrl = aagRes;
+      }
+    }
+
+    if (!mounted) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VideoPlayerScreen(
+          videoUrl: finalUrl,
+          videoTitle: videoTitle,
+          playlist: playlist,
+          initialEpisodeIndex: episodeIndex,
+        ),
+      ),
+    );
+  }
+
+  void _showSeriesEpisodesSheet(Map<String, dynamic> details, String fallbackTitle, String fallbackPoster) {
+    final seriesTitle = (details['title'] ?? fallbackTitle).toString().trim();
+    final seriesPoster = (details['poster'] ?? fallbackPoster).toString().trim();
+    final episodes = (details['episodes'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (bctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          builder: (ctx, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Color(0xFF10141E),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(top: BorderSide(color: Colors.cyanAccent, width: 1.5)),
+              ),
+              child: Column(
+                children: [
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 10, bottom: 12),
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: Row(
+                      children: [
+                        if (seriesPoster.isNotEmpty)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: CachedNetworkImage(
+                              imageUrl: seriesPoster,
+                              width: 60,
+                              height: 80,
+                              fit: BoxFit.cover,
+                              errorWidget: (_, __, ___) => Container(width: 60, height: 80, color: Colors.white10, child: const Icon(Icons.movie, color: Colors.white38)),
+                            ),
+                          ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                seriesTitle,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: const Color(0xFFE50914), width: 0.8),
+                                    ),
+                                    child: Text(
+                                      "${episodes.length} EPISODES",
+                                      style: const TextStyle(color: Color(0xFFFF5252), fontSize: 11, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: Colors.greenAccent.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      "AD-FREE LIVE STREAM",
+                                      style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Divider(color: Colors.white10, height: 1),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      itemCount: episodes.length,
+                      itemBuilder: (context, idx) {
+                        final ep = episodes[idx];
+                        final epTitle = (ep['title'] ?? 'Episode ${idx + 1}').toString();
+                        final epPoster = (ep['poster'] ?? seriesPoster).toString();
+                        final epNum = (ep['episode_number'] ?? '${idx + 1}').toString();
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF161B26),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            leading: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  if (epPoster.isNotEmpty)
+                                    CachedNetworkImage(
+                                      imageUrl: epPoster,
+                                      width: 65,
+                                      height: 45,
+                                      fit: BoxFit.cover,
+                                      errorWidget: (_, __, ___) => Container(width: 65, height: 45, color: Colors.white10),
+                                    )
+                                  else
+                                    Container(width: 65, height: 45, color: const Color(0xFF22283A)),
+                                  Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black54),
+                                    child: const Icon(Icons.play_arrow_rounded, color: Colors.cyanAccent, size: 18),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            title: Text(
+                              epTitle,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              "Episode $epNum • Direct CDN",
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            ),
+                            trailing: ElevatedButton.icon(
+                              onPressed: () async {
+                                Navigator.pop(bctx);
+                                var epStreamUrl = (ep['stream_url'] ?? '').toString().trim();
+                                if (epStreamUrl.isEmpty) {
+                                  final epPageUrl = (ep['episode_url'] ?? ep['page_url'] ?? '').toString().trim();
+                                  if (epPageUrl.isNotEmpty) {
+                                    final epData = await _scrapeUffmaalDetails(epPageUrl);
+                                    epStreamUrl = (epData?['stream_url'] ?? '').toString().trim();
+                                  }
+                                }
+                                if (epStreamUrl.isNotEmpty) {
+                                  final playlist = episodes.map((e) {
+                                    return {
+                                      'title': (e['title'] ?? 'Episode').toString(),
+                                      'url': (e['stream_url'] ?? e['episode_url'] ?? '').toString(),
+                                    };
+                                  }).toList();
+
+                                  _playDirectStream(epStreamUrl, epTitle, playlist: playlist, episodeIndex: idx);
+                                } else {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Failed to extract episode stream link."), backgroundColor: Colors.red),
+                                    );
+                                  }
+                                }
+                              },
+                              icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                              label: const Text("PLAY"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF00E676),
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildExtractorCinemaView() {
+    if (_cinemaCatalog.isEmpty && !_cinemaLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _cinemaCatalog.isEmpty && !_cinemaLoading) {
+          _loadCinemaCatalog();
+        }
+      });
+    }
+
+    final activeSource = _cinemaSources[_cinemaSource];
+    final activeColor = activeSource['color'] as Color;
+
+    return Column(
+      children: [
+        // ── Top Header Banner with Glowing Source Picker ──
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+          decoration: const BoxDecoration(
+            color: Color(0xFF10141F),
+            border: Border(bottom: BorderSide(color: Colors.white10)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [activeColor, activeColor.withValues(alpha: 0.5)]),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(activeSource['icon'] as IconData, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Text("⚡ EXTRACTOR CINEMA", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.8)),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(color: Colors.greenAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(4)),
+                              child: const Text("ZERO ADS", style: TextStyle(color: Colors.greenAccent, fontSize: 9.5, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          "Direct live browser • ${activeSource['name']} (${activeSource['domain']})",
+                          style: const TextStyle(color: Colors.white60, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Layout Toggle (Landscape 16:9 vs Portrait)
+                  IconButton(
+                    icon: Icon(_cinemaLandscape ? Icons.view_agenda_rounded : Icons.grid_view_rounded, color: Colors.cyanAccent),
+                    tooltip: _cinemaLandscape ? "Switch to Portrait Grid" : "Switch to Landscape Cards",
+                    onPressed: () => setState(() => _cinemaLandscape = !_cinemaLandscape),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.amberAccent),
+                    tooltip: "Reload Catalog",
+                    onPressed: () => _loadCinemaCatalog(resetPage: true),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 10),
+
+              // Source Selector Tabs
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(_cinemaSources.length, (idx) {
+                    final isSel = idx == _cinemaSource;
+                    final s = _cinemaSources[idx];
+                    final sColor = s['color'] as Color;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: InkWell(
+                        onTap: () {
+                          if (_cinemaSource != idx) {
+                            setState(() {
+                              _cinemaSource = idx;
+                              _cinemaCatalog.clear();
+                            });
+                            _loadCinemaCatalog(resetPage: true);
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(10),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: isSel ? sColor.withValues(alpha: 0.22) : const Color(0xFF191F2D),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isSel ? sColor : Colors.white10,
+                              width: isSel ? 1.5 : 1,
+                            ),
+                            boxShadow: isSel
+                                ? [BoxShadow(color: sColor.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2))]
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(s['icon'] as IconData, color: isSel ? sColor : Colors.white60, size: 15),
+                              const SizedBox(width: 6),
+                              Text(
+                                s['name'] as String,
+                                style: TextStyle(
+                                  color: isSel ? Colors.white : Colors.white70,
+                                  fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // Search Bar
+              Container(
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161B28),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: TextField(
+                  controller: _cinemaSearchCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: "Search ${activeSource['name']} catalog live...",
+                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search_rounded, color: Colors.cyanAccent, size: 20),
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_cinemaSearchCtrl.text.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(Icons.clear_rounded, color: Colors.white54, size: 16),
+                            onPressed: () {
+                              _cinemaSearchCtrl.clear();
+                              _loadCinemaCatalog(resetPage: true);
+                            },
+                          ),
+                        IconButton(
+                          icon: const Icon(Icons.arrow_forward_rounded, color: Colors.cyanAccent, size: 18),
+                          onPressed: () => _loadCinemaCatalog(resetPage: true),
+                        ),
+                      ],
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                  ),
+                  onSubmitted: (_) => _loadCinemaCatalog(resetPage: true),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // ── Main Catalog Grid / List ──
+        Expanded(
+          child: _cinemaLoading
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: activeColor),
+                      const SizedBox(height: 16),
+                      Text("Fetching live content from ${activeSource['name']}...", style: const TextStyle(color: Colors.white60, fontSize: 13)),
+                    ],
+                  ),
+                )
+              : _cinemaCatalog.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.movie_filter_outlined, color: Colors.white24, size: 54),
+                          const SizedBox(height: 14),
+                          const Text("No items found on this page", style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 6),
+                          const Text("Try searching with another keyword or reload catalog.", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            onPressed: () => _loadCinemaCatalog(resetPage: true),
+                            icon: const Icon(Icons.refresh_rounded, size: 18),
+                            label: const Text("Reload Catalog"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: activeColor,
+                              foregroundColor: Colors.black,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _cinemaLandscape
+                      ? _buildCinemaLandscapeList(activeColor)
+                      : _buildCinemaPortraitGrid(activeColor),
+        ),
+
+        // ── Pagination Footer Bar ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFF10141F),
+            border: Border(top: BorderSide(color: Colors.white10)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _cinemaPage > 1
+                    ? () {
+                        setState(() => _cinemaPage--);
+                        _loadCinemaCatalog();
+                      }
+                    : null,
+                icon: const Icon(Icons.chevron_left_rounded, size: 18),
+                label: const Text("Previous"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1C2230),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.white10,
+                  disabledForegroundColor: Colors.white24,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: activeColor.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: activeColor, width: 0.8),
+                ),
+                child: Text(
+                  "Page $_cinemaPage",
+                  style: TextStyle(color: activeColor, fontWeight: FontWeight.bold, fontSize: 12.5),
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: () {
+                  setState(() => _cinemaPage++);
+                  _loadCinemaCatalog();
+                },
+                icon: const Icon(Icons.chevron_right_rounded, size: 18),
+                label: const Text("Next Page"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1C2230),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 16:9 Landscape Widescreen Cards View (OTT Style)
+  Widget _buildCinemaLandscapeList(Color activeColor) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(14),
+      itemCount: _cinemaCatalog.length,
+      itemBuilder: (context, index) {
+        final item = _cinemaCatalog[index];
+        final title = (item['title'] ?? 'Untitled Video').toString().trim();
+        final poster = (item['poster'] ?? '').toString().trim();
+        final date = (item['date'] ?? 'HD Stream').toString().trim();
+        final isEpisode = item['is_episode'] == true || title.toLowerCase().contains('episode') || title.toLowerCase().contains('ep ');
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF151926),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white12),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 10, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: InkWell(
+            onTap: () => _playOrBrowseCinemaItem(item),
+            borderRadius: BorderRadius.circular(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 16:9 Thumbnail preview
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (poster.isNotEmpty)
+                          CachedNetworkImage(
+                            imageUrl: poster,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => Container(
+                              color: const Color(0xFF22283A),
+                              child: const Icon(Icons.movie_creation_outlined, color: Colors.white24, size: 48),
+                            ),
+                          )
+                        else
+                          Container(
+                            color: const Color(0xFF22283A),
+                            child: const Icon(Icons.movie_creation_outlined, color: Colors.white24, size: 48),
+                          ),
+
+                        // Gradient fade overlay
+                        Container(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [Colors.transparent, Colors.black87],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                          ),
+                        ),
+
+                        // Source Badge Top-Left
+                        Positioned(
+                          top: 10,
+                          left: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.75),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: activeColor, width: 0.8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.bolt_rounded, color: activeColor, size: 13),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _cinemaSources[_cinemaSource]['name'].toString().toUpperCase(),
+                                  style: TextStyle(color: activeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // 0 Ads Tag Top-Right
+                        Positioned(
+                          top: 10,
+                          right: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.greenAccent.withValues(alpha: 0.85),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.shield_rounded, color: Colors.black, size: 12),
+                                SizedBox(width: 3),
+                                Text(
+                                  "ZERO ADS",
+                                  style: TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w900),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Card Info
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14.5, height: 1.25),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(isEpisode ? Icons.video_collection_rounded : Icons.movie_rounded, color: Colors.cyanAccent, size: 14),
+                          const SizedBox(width: 5),
+                          Text(
+                            isEpisode ? "Web Series / Episode" : "Full Movie / Video",
+                            style: const TextStyle(color: Colors.white70, fontSize: 11.5, fontWeight: FontWeight.w500),
+                          ),
+                          const Spacer(),
+                          Text(date, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // 2:3 Portrait Posters Grid View
+  Widget _buildCinemaPortraitGrid(Color activeColor) {
+    final width = MediaQuery.of(context).size.width;
+    int crossCount = width > 900 ? 5 : (width > 600 ? 4 : 3);
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(12),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossCount,
+        childAspectRatio: 0.62,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 12,
+      ),
+      itemCount: _cinemaCatalog.length,
+      itemBuilder: (context, index) {
+        final item = _cinemaCatalog[index];
+        final title = (item['title'] ?? 'Video').toString().trim();
+        final poster = (item['poster'] ?? '').toString().trim();
+
+        return InkWell(
+          onTap: () => _playOrBrowseCinemaItem(item),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF161B26),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (poster.isNotEmpty)
+                          CachedNetworkImage(
+                            imageUrl: poster,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => Container(color: const Color(0xFF22283A)),
+                          )
+                        else
+                          Container(color: const Color(0xFF22283A)),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Text(
+                    title,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _GrantVipDialog extends StatefulWidget {
@@ -13675,1033 +14704,4 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
       ],
     );
   }
-
-  //
-  // ── ⚡ EXTRACTOR CINEMA (AD-FREE DIRECT WEB PLAYER) ──
-  //
-
-  final List<Map<String, dynamic>> _cinemaSources = [
-    {
-      'name': 'UFFMaal',
-      'domain': 'uffmaal.com',
-      'badge': 'DIRECT CDN • SERIES',
-      'color': Color(0xFFE50914),
-      'icon': Icons.flash_on_rounded,
-    },
-    {
-      'name': 'HDMaal',
-      'domain': 'hdmaal.gg',
-      'badge': '1080P HD • MOVIES',
-      'color': Color(0xFF00E676),
-      'icon': Icons.hd_rounded,
-    },
-    {
-      'name': 'AAGMaal',
-      'domain': 'aagmaal.mba',
-      'badge': 'ADULT OTT • SERIES',
-      'color': Color(0xFFFF9100),
-      'icon': Icons.local_fire_department_rounded,
-    },
-    {
-      'name': 'UncutMasti',
-      'domain': 'uncutmasti.com',
-      'badge': 'UNCUT • HOT SCENES',
-      'color': Color(0xFFD500F9),
-      'icon': Icons.auto_awesome_rounded,
-    },
-    {
-      'name': 'HDMove99',
-      'domain': 'hdmove99.store',
-      'badge': 'HINDI OTT • FULL SERIES',
-      'color': Color(0xFF00B0FF),
-      'icon': Icons.movie_filter_rounded,
-    },
-    {
-      'name': 'SkyMoviesHD',
-      'domain': 'skymovieshd.ink',
-      'badge': 'BOLLYWOOD • CINEMA',
-      'color': Color(0xFFFFD600),
-      'icon': Icons.theaters_rounded,
-    },
-  ];
-
-  Future<void> _loadCinemaCatalog({bool resetPage = false}) async {
-    if (resetPage) _cinemaPage = 1;
-    setState(() => _cinemaLoading = true);
-
-    try {
-      final q = _cinemaSearchCtrl.text.trim();
-      List<Map<String, dynamic>> results = [];
-
-      if (_cinemaSource == 0) {
-        // UFFMaal
-        results = await _scrapeUffmaalCatalog(query: q, page: _cinemaPage);
-      } else if (_cinemaSource == 1) {
-        // HDMaal
-        results = await _scrapeHdmaalCatalog(query: q, page: _cinemaPage);
-        if (results.isEmpty) {
-          final res = await _adminPhpApi('fetch_hdmaal_catalog', {'query': q, 'page': _cinemaPage});
-          if (res['status'] == 'success' && res['data']?['items'] != null) {
-            results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
-          }
-        }
-      } else if (_cinemaSource == 2) {
-        // AAGMaal
-        results = await _scrapeAagmaalCatalog(query: q, page: _cinemaPage);
-        if (results.isEmpty) {
-          final res = await _adminPhpApi('search_aagmaal_catalog', {'query': q, 'page': _cinemaPage});
-          if (res['status'] == 'success' && res['data']?['items'] != null) {
-            results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
-          }
-        }
-      } else if (_cinemaSource == 3) {
-        // UncutMasti
-        final res = await _adminPhpApi('fetch_uncutmasti_catalog', {'query': q, 'page': _cinemaPage});
-        if (res['status'] == 'success' && res['data']?['items'] != null) {
-          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
-        }
-      } else if (_cinemaSource == 4) {
-        // HDMove99
-        final res = await _adminPhpApi('fetch_hdmove99_catalog', {'query': q, 'page': _cinemaPage});
-        if (res['status'] == 'success' && res['data']?['items'] != null) {
-          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
-        }
-      } else if (_cinemaSource == 5) {
-        // SkyMoviesHD
-        final res = await _adminPhpApi('fetch_skymovies_catalog', {'query': q, 'page': _cinemaPage});
-        if (res['status'] == 'success' && res['data']?['items'] != null) {
-          results = (res['data']['items'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _cinemaCatalog = results;
-          _cinemaLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _cinemaLoading = false);
-      }
-    }
-  }
-
-  Future<void> _playOrBrowseCinemaItem(Map<String, dynamic> item) async {
-    final pageUrl = (item['page_url'] ?? '').toString().trim();
-    final title = (item['title'] ?? 'Video').toString().trim();
-    final poster = (item['poster'] ?? '').toString().trim();
-    if (pageUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No URL found for this item")),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withOpacity(0.7),
-      builder: (_) => Dialog(
-        backgroundColor: const Color(0xFF141824),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.cyanAccent, width: 1.2)),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(
-                width: 48,
-                height: 48,
-                child: CircularProgressIndicator(color: Colors.cyanAccent, strokeWidth: 3),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                "Extracting Direct Stream...",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.greenAccent.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.greenAccent, width: 0.8),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.shield_rounded, color: Colors.greenAccent, size: 14),
-                    SizedBox(width: 6),
-                    Text("Zero Ads • Direct Fast Stream", style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    try {
-      Map<String, dynamic>? details;
-      if (_cinemaSource == 0) {
-        details = await _scrapeUffmaalDetails(pageUrl);
-      } else if (_cinemaSource == 1) {
-        details = await _scrapeHdmaalDetails(pageUrl);
-        if (details == null || (details['stream_url'] == null && (details['play_links'] == null || (details['play_links'] as List).isEmpty))) {
-          final res = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
-          if (res['status'] == 'success' && res['data'] != null) {
-            details = Map<String, dynamic>.from(res['data']);
-          }
-        }
-      } else if (_cinemaSource == 2) {
-        details = await _scrapeAagmaalDetails(pageUrl);
-        if (details == null || (details['stream_url'] == null && (details['play_links'] == null || (details['play_links'] as List).isEmpty))) {
-          final res = await _adminPhpApi('extract_aagmaal_details', {'page_url': pageUrl});
-          if (res['status'] == 'success' && res['data'] != null) {
-            details = Map<String, dynamic>.from(res['data']);
-          }
-        }
-      } else if (_cinemaSource == 3) {
-        final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
-        if (res['status'] == 'success' && res['data'] != null) {
-          details = Map<String, dynamic>.from(res['data']);
-        }
-      } else if (_cinemaSource == 4) {
-        final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
-        if (res['status'] == 'success' && res['data'] != null) {
-          details = Map<String, dynamic>.from(res['data']);
-        }
-      } else if (_cinemaSource == 5) {
-        final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
-        if (res['status'] == 'success' && res['data'] != null) {
-          details = Map<String, dynamic>.from(res['data']);
-        }
-      }
-
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-      if (details == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to extract stream details from this page."), backgroundColor: Colors.red),
-        );
-        return;
-      }
-
-      final episodes = (details['episodes'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
-
-      if (episodes.length > 1) {
-        _showSeriesEpisodesSheet(details, title, poster);
-        return;
-      }
-
-      var streamUrl = (details['stream_url'] ?? '').toString().trim();
-      if (streamUrl.isEmpty && details['play_links'] != null && (details['play_links'] as List).isNotEmpty) {
-        final firstPl = (details['play_links'] as List).first;
-        streamUrl = (firstPl['url'] ?? '').toString().trim();
-      }
-
-      if (streamUrl.isEmpty && episodes.isNotEmpty) {
-        final ep = episodes.first;
-        final epUrl = (ep['episode_url'] ?? ep['url'] ?? '').toString().trim();
-        if (epUrl.isNotEmpty) {
-          final epDetails = await _scrapeUffmaalDetails(epUrl);
-          streamUrl = (epDetails?['stream_url'] ?? '').toString().trim();
-        }
-      }
-
-      if (streamUrl.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No playable stream link found on this page."), backgroundColor: Colors.orange),
-        );
-        return;
-      }
-
-      _playDirectStream(streamUrl, title.isNotEmpty ? title : (details['title'] ?? 'Video'));
-    } catch (e) {
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Extraction error: $e"), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  Future<void> _playDirectStream(String rawUrl, String videoTitle, {List<Map<String, dynamic>>? playlist, int episodeIndex = 0}) async {
-    String finalUrl = rawUrl;
-
-    if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
-      final stRes = await StreamtapeService.resolveStreamtape(finalUrl);
-      if (stRes != null && stRes.isNotEmpty) {
-        finalUrl = stRes;
-      }
-    } else if (finalUrl.contains('aagmaal') || finalUrl.contains('hdmaal') || finalUrl.contains('uffmaal')) {
-      final aagRes = await AagmaalResolver.resolveAagmaalDirectVideo(finalUrl);
-      if (aagRes != null && aagRes.isNotEmpty) {
-        finalUrl = aagRes;
-      }
-    }
-
-    if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => VideoPlayerScreen(
-          videoUrl: finalUrl,
-          title: videoTitle,
-          playlist: playlist,
-          initialEpisodeIndex: episodeIndex,
-        ),
-      ),
-    );
-  }
-
-  void _showSeriesEpisodesSheet(Map<String, dynamic> details, String fallbackTitle, String fallbackPoster) {
-    final seriesTitle = (details['title'] ?? fallbackTitle).toString().trim();
-    final seriesPoster = (details['poster'] ?? fallbackPoster).toString().trim();
-    final episodes = (details['episodes'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (bctx) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.75,
-          minChildSize: 0.4,
-          maxChildSize: 0.95,
-          builder: (ctx, scrollController) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFF10141E),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(top: BorderSide(color: Colors.cyanAccent, width: 1.5)),
-              ),
-              child: Column(
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(top: 10, bottom: 12),
-                      width: 44,
-                      height: 5,
-                      decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    child: Row(
-                      children: [
-                        if (seriesPoster.isNotEmpty)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: CachedNetworkImage(
-                              imageUrl: seriesPoster,
-                              width: 60,
-                              height: 80,
-                              fit: BoxFit.cover,
-                              errorWidget: (_, __, ___) => Container(width: 60, height: 80, color: Colors.white10, child: const Icon(Icons.movie, color: Colors.white38)),
-                            ),
-                          ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                seriesTitle,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE50914).withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: const Color(0xFFE50914), width: 0.8),
-                                    ),
-                                    child: Text(
-                                      "${episodes.length} EPISODES",
-                                      style: const TextStyle(color: Color(0xFFFF5252), fontSize: 11, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Colors.greenAccent.withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: const Text(
-                                      "AD-FREE LIVE STREAM",
-                                      style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Divider(color: Colors.white10, height: 1),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      itemCount: episodes.length,
-                      itemBuilder: (context, idx) {
-                        final ep = episodes[idx];
-                        final epTitle = (ep['title'] ?? 'Episode ${idx + 1}').toString();
-                        final epPoster = (ep['poster'] ?? seriesPoster).toString();
-                        final epNum = (ep['episode_number'] ?? '${idx + 1}').toString();
-
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF161B26),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white10),
-                          ),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            leading: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  if (epPoster.isNotEmpty)
-                                    CachedNetworkImage(
-                                      imageUrl: epPoster,
-                                      width: 65,
-                                      height: 45,
-                                      fit: BoxFit.cover,
-                                      errorWidget: (_, __, ___) => Container(width: 65, height: 45, color: Colors.white10),
-                                    )
-                                  else
-                                    Container(width: 65, height: 45, color: const Color(0xFF22283A)),
-                                  Container(
-                                    padding: const EdgeInsets.all(4),
-                                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black54),
-                                    child: const Icon(Icons.play_arrow_rounded, color: Colors.cyanAccent, size: 18),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            title: Text(
-                              epTitle,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              "Episode $epNum • Direct CDN",
-                              style: const TextStyle(color: Colors.white54, fontSize: 11),
-                            ),
-                            trailing: ElevatedButton.icon(
-                              onPressed: () async {
-                                Navigator.pop(bctx);
-                                var epStreamUrl = (ep['stream_url'] ?? '').toString().trim();
-                                if (epStreamUrl.isEmpty) {
-                                  final epPageUrl = (ep['episode_url'] ?? ep['page_url'] ?? '').toString().trim();
-                                  if (epPageUrl.isNotEmpty) {
-                                    final epData = await _scrapeUffmaalDetails(epPageUrl);
-                                    epStreamUrl = (epData?['stream_url'] ?? '').toString().trim();
-                                  }
-                                }
-                                if (epStreamUrl.isNotEmpty) {
-                                  final playlist = episodes.map((e) {
-                                    return {
-                                      'title': (e['title'] ?? 'Episode').toString(),
-                                      'url': (e['stream_url'] ?? e['episode_url'] ?? '').toString(),
-                                    };
-                                  }).toList();
-
-                                  _playDirectStream(epStreamUrl, epTitle, playlist: playlist, episodeIndex: idx);
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text("Failed to extract episode stream link."), backgroundColor: Colors.red),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                              label: const Text("PLAY"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF00E676),
-                                foregroundColor: Colors.black,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildExtractorCinemaView() {
-    if (_cinemaCatalog.isEmpty && !_cinemaLoading) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _cinemaCatalog.isEmpty && !_cinemaLoading) {
-          _loadCinemaCatalog();
-        }
-      });
-    }
-
-    final activeSource = _cinemaSources[_cinemaSource];
-    final activeColor = activeSource['color'] as Color;
-
-    return Column(
-      children: [
-        // ── Top Header Banner with Glowing Source Picker ──
-        Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF10141F),
-            border: const Border(bottom: BorderSide(color: Colors.white10)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: [activeColor, activeColor.withOpacity(0.5)]),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(activeSource['icon'] as IconData, color: Colors.white, size: 20),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Text("⚡ EXTRACTOR CINEMA", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.8)),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(color: Colors.greenAccent.withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                              child: const Text("ZERO ADS", style: TextStyle(color: Colors.greenAccent, fontSize: 9.5, fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          "Direct live browser • ${activeSource['name']} (${activeSource['domain']})",
-                          style: const TextStyle(color: Colors.white60, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Layout Toggle (Landscape 16:9 vs Portrait)
-                  IconButton(
-                    icon: Icon(_cinemaLandscape ? Icons.view_agenda_rounded : Icons.grid_view_rounded, color: Colors.cyanAccent),
-                    tooltip: _cinemaLandscape ? "Switch to Portrait Grid" : "Switch to Landscape Cards",
-                    onPressed: () => setState(() => _cinemaLandscape = !_cinemaLandscape),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded, color: Colors.amberAccent),
-                    tooltip: "Reload Catalog",
-                    onPressed: () => _loadCinemaCatalog(resetPage: true),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 10),
-
-              // Source Selector Tabs
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: List.generate(_cinemaSources.length, (idx) {
-                    final isSel = idx == _cinemaSource;
-                    final s = _cinemaSources[idx];
-                    final sColor = s['color'] as Color;
-
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: InkWell(
-                        onTap: () {
-                          if (_cinemaSource != idx) {
-                            setState(() {
-                              _cinemaSource = idx;
-                              _cinemaCatalog.clear();
-                            });
-                            _loadCinemaCatalog(resetPage: true);
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(10),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                          decoration: BoxDecoration(
-                            color: isSel ? sColor.withOpacity(0.22) : const Color(0xFF191F2D),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: isSel ? sColor : Colors.white10,
-                              width: isSel ? 1.5 : 1,
-                            ),
-                            boxShadow: isSel
-                                ? [BoxShadow(color: sColor.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 2))]
-                                : null,
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(s['icon'] as IconData, color: isSel ? sColor : Colors.white60, size: 15),
-                              const SizedBox(width: 6),
-                              Text(
-                                s['name'] as String,
-                                style: TextStyle(
-                                  color: isSel ? Colors.white : Colors.white70,
-                                  fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
-                                  fontSize: 12.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              // Search Bar
-              Container(
-                height: 42,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF161B28),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white12),
-                ),
-                child: TextField(
-                  controller: _cinemaSearchCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: InputDecoration(
-                    hintText: "Search ${activeSource['name']} catalog live...",
-                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-                    prefixIcon: const Icon(Icons.search_rounded, color: Colors.cyanAccent, size: 20),
-                    suffixIcon: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_cinemaSearchCtrl.text.isNotEmpty)
-                          IconButton(
-                            icon: const Icon(Icons.clear_rounded, color: Colors.white54, size: 16),
-                            onPressed: () {
-                              _cinemaSearchCtrl.clear();
-                              _loadCinemaCatalog(resetPage: true);
-                            },
-                          ),
-                        IconButton(
-                          icon: const Icon(Icons.arrow_forward_rounded, color: Colors.cyanAccent, size: 18),
-                          onPressed: () => _loadCinemaCatalog(resetPage: true),
-                        ),
-                      ],
-                    ),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                  onSubmitted: (_) => _loadCinemaCatalog(resetPage: true),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // ── Main Catalog Grid / List ──
-        Expanded(
-          child: _cinemaLoading
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(color: activeColor),
-                      const SizedBox(height: 16),
-                      Text("Fetching live content from ${activeSource['name']}...", style: const TextStyle(color: Colors.white60, fontSize: 13)),
-                    ],
-                  ),
-                )
-              : _cinemaCatalog.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.movie_filter_outlined, color: Colors.white24, size: 54),
-                          const SizedBox(height: 14),
-                          const Text("No items found on this page", style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 6),
-                          const Text("Try searching with another keyword or reload catalog.", style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          const SizedBox(height: 16),
-                          ElevatedButton.icon(
-                            onPressed: () => _loadCinemaCatalog(resetPage: true),
-                            icon: const Icon(Icons.refresh_rounded, size: 18),
-                            label: const Text("Reload Catalog"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: activeColor,
-                              foregroundColor: Colors.black,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : _cinemaLandscape
-                      ? _buildCinemaLandscapeList(activeColor)
-                      : _buildCinemaPortraitGrid(activeColor),
-        ),
-
-        // ── Pagination Footer Bar ──
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: const BoxDecoration(
-            color: Color(0xFF10141F),
-            border: Border(top: BorderSide(color: Colors.white10)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              ElevatedButton.icon(
-                onPressed: _cinemaPage > 1
-                    ? () {
-                        setState(() => _cinemaPage--);
-                        _loadCinemaCatalog();
-                      }
-                    : null,
-                icon: const Icon(Icons.chevron_left_rounded, size: 18),
-                label: const Text("Previous"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1C2230),
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: Colors.white10,
-                  disabledForegroundColor: Colors.white24,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: activeColor.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: activeColor, width: 0.8),
-                ),
-                child: Text(
-                  "Page $_cinemaPage",
-                  style: TextStyle(color: activeColor, fontWeight: FontWeight.bold, fontSize: 12.5),
-                ),
-              ),
-              ElevatedButton.icon(
-                onPressed: () {
-                  setState(() => _cinemaPage++);
-                  _loadCinemaCatalog();
-                },
-                icon: const Icon(Icons.chevron_right_rounded, size: 18),
-                label: const Text("Next Page"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1C2230),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  // 16:9 Landscape Widescreen Cards View (OTT Style)
-  Widget _buildCinemaLandscapeList(Color activeColor) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(14),
-      itemCount: _cinemaCatalog.length,
-      itemBuilder: (context, index) {
-        final item = _cinemaCatalog[index];
-        final title = (item['title'] ?? 'Untitled Video').toString().trim();
-        final poster = (item['poster'] ?? '').toString().trim();
-        final date = (item['date'] ?? 'HD Stream').toString().trim();
-        final isEpisode = item['is_episode'] == true || title.toLowerCase().contains('episode') || title.toLowerCase().contains('ep ');
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF151926),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white12),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, 4)),
-            ],
-          ),
-          child: InkWell(
-            onTap: () => _playOrBrowseCinemaItem(item),
-            borderRadius: BorderRadius.circular(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 16:9 Thumbnail preview
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                  child: AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (poster.isNotEmpty)
-                          CachedNetworkImage(
-                            imageUrl: poster,
-                            fit: BoxFit.cover,
-                            errorWidget: (_, __, ___) => Container(
-                              color: const Color(0xFF22283A),
-                              child: const Icon(Icons.movie_creation_outlined, color: Colors.white24, size: 48),
-                            ),
-                          )
-                        else
-                          Container(
-                            color: const Color(0xFF22283A),
-                            child: const Icon(Icons.movie_creation_outlined, color: Colors.white24, size: 48),
-                          ),
-
-                        // Gradient fade overlay
-                        Container(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Colors.transparent, Colors.black87],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                          ),
-                        ),
-
-                        // Source Badge Top-Left
-                        Positioned(
-                          top: 10,
-                          left: 10,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.75),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: activeColor, width: 0.8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.bolt_rounded, color: activeColor, size: 13),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _cinemaSources[_cinemaSource]['name'].toString().toUpperCase(),
-                                  style: TextStyle(color: activeColor, fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-
-                        // 0 Ads Tag Top-Right
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.greenAccent.withOpacity(0.85),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.shield_rounded, color: Colors.black, size: 12),
-                                SizedBox(width: 3),
-                                Text(
-                                  "ZERO ADS",
-                                  style: TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.w900),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-
-                        // Center Play Icon Button
-                        Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.black.withOpacity(0.6),
-                              border: Border.all(color: Colors.cyanAccent, width: 2),
-                              boxShadow: [
-                                BoxShadow(color: Colors.cyanAccent.withOpacity(0.4), blurRadius: 16),
-                              ],
-                            ),
-                            child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // Card Info & Controls
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14.5, height: 1.25),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Icon(isEpisode ? Icons.video_collection_rounded : Icons.movie_rounded, color: Colors.white54, size: 14),
-                          const SizedBox(width: 5),
-                          Text(
-                            isEpisode ? "Web Series / Episode" : "Full Movie / Video",
-                            style: const TextStyle(color: Colors.white60, fontSize: 11.5),
-                          ),
-                          const Spacer(),
-                          Text(date, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () => _playOrBrowseCinemaItem(item),
-                              icon: const Icon(Icons.play_arrow_rounded, size: 20),
-                              label: Text(
-                                isEpisode ? "SELECT & PLAY EPISODES" : "PLAY NOW (ZERO ADS)",
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: activeColor,
-                                foregroundColor: Colors.black,
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // 2:3 Portrait Posters Grid View
-  Widget _buildCinemaPortraitGrid(Color activeColor) {
-    final width = MediaQuery.of(context).size.width;
-    int crossCount = width > 900 ? 5 : (width > 600 ? 4 : 3);
-
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossCount,
-        childAspectRatio: 0.62,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 12,
-      ),
-      itemCount: _cinemaCatalog.length,
-      itemBuilder: (context, index) {
-        final item = _cinemaCatalog[index];
-        final title = (item['title'] ?? 'Video').toString().trim();
-        final poster = (item['poster'] ?? '').toString().trim();
-
-        return InkWell(
-          onTap: () => _playOrBrowseCinemaItem(item),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF161B26),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (poster.isNotEmpty)
-                          CachedNetworkImage(
-                            imageUrl: poster,
-                            fit: BoxFit.cover,
-                            errorWidget: (_, __, ___) => Container(color: const Color(0xFF22283A)),
-                          )
-                        else
-                          Container(color: const Color(0xFF22283A)),
-                        Positioned(
-                          bottom: 6,
-                          right: 6,
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black87),
-                            child: const Icon(Icons.play_arrow_rounded, color: Colors.greenAccent, size: 20),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(
-                    title,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 }
-
