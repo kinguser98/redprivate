@@ -598,24 +598,6 @@ class _FlyModeScreenState extends State<FlyModeScreen> {
     );
   }
 
-  Future<void> _openNativeBrowser(String url) async {
-    try {
-      final uri = Uri.parse(url);
-      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!launched && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Could not open native browser.")),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Browser error: $e")),
-        );
-      }
-    }
-  }
-
   void _startDownload(String url, String title, String poster,
       {Map<String, String> headers = const {}, String originalUrl = ''}) {
     DownloadManager.instance

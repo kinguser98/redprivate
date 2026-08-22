@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie_model.dart';
 import '../services/api_service.dart';
-import 'details_screen.dart';
 import 'navigation_helper.dart';
 
 class AllMoviesSeriesScreen extends StatefulWidget {

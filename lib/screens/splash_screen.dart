@@ -42,12 +42,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     Timer(const Duration(seconds: 2), () async {
       if (!mounted) return;
 
-      Map<String, dynamic> settings = {};
       try {
-        final sRes = await settingsFuture.timeout(const Duration(seconds: 3));
-        if (sRes['status'] == 'success' && sRes['data']?['settings'] != null) {
-          settings = sRes['data']['settings'];
-        }
+        await settingsFuture.timeout(const Duration(seconds: 3));
       } catch (_) {
         // Server unreachable/timeout — continue with stored session or login
       }

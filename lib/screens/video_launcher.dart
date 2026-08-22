@@ -12,6 +12,7 @@ import '../services/tnaflix_resolver.dart';
 import '../widgets/resolving_dialog.dart';
 import 'subscription_vip_screen.dart';
 import 'video_player_screen.dart';
+import 'webview_player_screen.dart';
 
 Future<void> playVideo(
     BuildContext context, String rawUrl, String title,
@@ -110,6 +111,21 @@ Future<void> playVideo(
       }
     } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
       finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
+    } else if (lowerRaw.contains('playmate')) {
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        final code = rawUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => WebViewPlayerScreen(
+              embedUrl: 'https://playmate.to/embed/$code',
+              videoTitle: title,
+            ),
+          ),
+        );
+        return;
+      }
     } else if (StreamtapeService.isDirectMediaUrl(rawUrl)) {
       finalUrl = rawUrl;
     } else {

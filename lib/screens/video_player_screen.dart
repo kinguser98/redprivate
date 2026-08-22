@@ -170,28 +170,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       // 1. If playUrl is an un-resolved Streamtape web page, resolve it first!
       if (StreamtapeService.isStreamtapeFamily(playUrl) &&
           !playUrl.contains('tapecontent.net') &&
-          !playUrl.contains('get_video')) {
+          !playUrl.contains('get_video') &&
+          !playUrl.contains('/ep?u=')) {
         final resolved = await StreamtapeService.getDirectStreamUrl(playUrl);
         if (resolved != null && resolved.isNotEmpty) {
           playUrl = resolved;
         }
       }
 
-      // 2. Remove fragment #video.mp4 because fragments in HTTP URLs break ExoPlayer requests to tapecontent.net
+      // 2. Remove fragment #video.mp4
       if (playUrl.contains('#')) {
         playUrl = playUrl.split('#')[0];
       }
 
-      // 3. DNS-poisoned hosts (eporner) can't be resolved by the native player,
-      // so stream them through the local DoH proxy (media stays device<->CDN).
+      // 3. Add &stream=1 to direct Streamtape/tapecontent streams before proxying
+      if (!playUrl.contains('stream=1') &&
+          (StreamtapeService.isStreamtapeFamily(playUrl) || playUrl.contains('tapecontent')) &&
+          !playUrl.contains('/ep?u=')) {
+        playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
+      }
+
+      // 4. DNS-poisoned hosts streamed through local DoH forwarder
       final proxied = mediaForwardUrlIfNeeded(playUrl);
       if (proxied != null) {
         playUrl = proxied;
-      }
-
-      if (!playUrl.contains('stream=1') &&
-          (StreamtapeService.isStreamtapeFamily(playUrl) || playUrl.contains('tapecontent'))) {
-        playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
       }
 
       String referer = 'https://streamtape.com/';
@@ -199,8 +201,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (playUrl.contains('ixifile') || playUrl.contains('uncutmasti')) {
         referer = 'https://uncutmasti.com/';
       } else if (playUrl.contains('tnmr.org') || playUrl.contains('luluvdo') || playUrl.contains('lulustream') || playUrl.contains('lulucdn')) {
-        referer = 'https://lulucdn.com/';
-        origin = 'https://lulucdn.com';
+        referer = 'https://luluvdo.com/';
+        origin = 'https://luluvdo.com';
       } else if (playUrl.contains('xhamster') || playUrl.contains('xhvid') || playUrl.contains('xh.video') || playUrl.contains('xhcdn')) {
         referer = 'https://xhamster.com/';
         origin = 'https://xhamster.com';
@@ -691,8 +693,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     if (qUrl.contains('ixifile') || qUrl.contains('uncutmasti')) {
       referer = 'https://uncutmasti.com/';
     } else if (qUrl.contains('tnmr.org') || qUrl.contains('luluvdo') || qUrl.contains('lulustream') || qUrl.contains('lulucdn')) {
-      referer = 'https://lulucdn.com/';
-      origin = 'https://lulucdn.com';
+      referer = 'https://luluvdo.com/';
+      origin = 'https://luluvdo.com';
     } else if (qUrl.contains('xhamster') || qUrl.contains('xhvid') || qUrl.contains('xh.video') || qUrl.contains('xhcdn')) {
       referer = 'https://xhamster.com/';
       origin = 'https://xhamster.com';

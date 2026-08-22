@@ -1,7 +1,6 @@
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import '../config/api_config.dart';
 import '../details/details_data.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';

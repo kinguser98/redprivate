@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'dns_proxy.dart';
 
 class HlsQualityParser {
   /// Fetches an M3U8 master playlist and extracts ONLY real variant stream qualities
@@ -16,11 +17,12 @@ class HlsQualityParser {
           masterUrl.contains('xhcdn') || masterUrl.contains('xhcdn2')) {
         referer = 'https://xhamster.com/';
       } else if (masterUrl.contains('luluvdo') || masterUrl.contains('lulustream') || masterUrl.contains('lulucdn') || masterUrl.contains('tnmr.org')) {
-        referer = 'https://lulucdn.com/';
+        referer = 'https://luluvdo.com/';
       }
 
+      final fetchTarget = mediaForwardUrlIfNeeded(masterUrl) ?? masterUrl;
       final res = await http.get(
-        Uri.parse(masterUrl),
+        Uri.parse(fetchTarget),
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Referer': referer,

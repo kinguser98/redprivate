@@ -307,7 +307,7 @@ class ApiService {
   // Log a content view (feeds trending on the home screen)
   static Future<void> logView(int contentId, String itemType) async {
     try {
-      final uid = AppSession.user?.id?.toString() ?? '1';
+      final uid = AppSession.user?.id.toString() ?? '1';
       final type = (itemType == 'movie' || itemType == '1') ? 1 : 2;
       await _postWithFallback(
         ApiConfig.adminUrl,
@@ -337,7 +337,7 @@ class ApiService {
   static Future<Map<String, dynamic>> _favoriteAction(
       String action, int contentId, String itemType) async {
     try {
-      final uid = AppSession.user?.id?.toString() ?? '1';
+      final uid = AppSession.user?.id.toString() ?? '1';
       final type = (itemType == 'movie' || itemType == '1') ? 1 : 2;
       final res = await _postWithFallback(
         ApiConfig.adminUrl,
@@ -353,7 +353,7 @@ class ApiService {
 
   static Future<List<dynamic>> getFavorites() async {
     try {
-      final uid = AppSession.user?.id?.toString() ?? '1';
+      final uid = AppSession.user?.id.toString() ?? '1';
       final res = await _postWithFallback(
         ApiConfig.adminUrl,
         {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -424,7 +424,7 @@ class ApiService {
     String newPassword = '',
   }) async {
     try {
-      final uid = AppSession.user?.id?.toString() ?? '1';
+      final uid = AppSession.user?.id.toString() ?? '1';
       final body =
           'action=update_profile&user_id=$uid&name=${Uri.encodeComponent(name)}'
           '&profile_pic=${Uri.encodeComponent(profilePic)}'
@@ -445,7 +445,7 @@ class ApiService {
   // Subscription details (current plan + history + available plans)
   static Future<Map<String, dynamic>> getSubscriptionDetails() async {
     try {
-      final uid = AppSession.user?.id?.toString() ?? '1';
+      final uid = AppSession.user?.id.toString() ?? '1';
       final res = await _postWithFallback(
         ApiConfig.adminUrl,
         {'Content-Type': 'application/x-www-form-urlencoded'},

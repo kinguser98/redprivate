@@ -279,10 +279,34 @@ class StreamtapeService {
     return null;
   }
 
-  static Future<String?> _resolveRedirectUrl(String targetUrl, String referer) async {
-    final ioClient = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 6)
+  static HttpClient _createDohClient() {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
       ..badCertificateCallback = (cert, host, port) => true;
+    client.findProxy = (uri) => 'DIRECT';
+    client.connectionFactory = (uri, host, port) async {
+      String targetIp = '104.26.1.182';
+      try {
+        final s = await Socket.connect(targetIp, uri.port, timeout: const Duration(seconds: 4));
+        if (uri.scheme == 'https') {
+          final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
+          return ConnectionTask.fromSocket(Future.value(sec), () {});
+        }
+        return ConnectionTask.fromSocket(Future.value(s), () {});
+      } catch (_) {
+        final s = await Socket.connect('104.26.2.182', uri.port, timeout: const Duration(seconds: 4));
+        if (uri.scheme == 'https') {
+          final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
+          return ConnectionTask.fromSocket(Future.value(sec), () {});
+        }
+        return ConnectionTask.fromSocket(Future.value(s), () {});
+      }
+    };
+    return client;
+  }
+
+  static Future<String?> _resolveRedirectUrl(String targetUrl, String referer) async {
+    final ioClient = _createDohClient();
     try {
       final req = await ioClient.getUrl(Uri.parse(targetUrl));
       req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -303,9 +327,7 @@ class StreamtapeService {
   }
 
   static Future<http.Response> _getFast(String fetchUrl) async {
-    final ioClient = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 6)
-      ..badCertificateCallback = (cert, host, port) => true;
+    final ioClient = _createDohClient();
     final client = IOClient(ioClient);
     try {
       return await client.get(

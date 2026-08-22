@@ -36,11 +36,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
   String? _ottLogo;
   int? _ottId;
 
-  bool get _isMovie =>
-      widget.itemType == 'movie' ||
-      widget.itemType == '1' ||
-      _movieDetails?.itemType == 'movie' ||
-      _movieDetails?.itemType == '1';
+  bool get _isMovie {
+    if (widget.itemType == 'series' || widget.itemType == '2') return false;
+    if (widget.itemType == 'movie' || widget.itemType == '1') return true;
+    if (_seasons.isNotEmpty) return false;
+    final t = _movieDetails?.itemType;
+    if (t == 'series' || t == '2') return false;
+    return true;
+  }
 
   bool get _isPremium {
     final tag = (_movieDetails?.customTag ?? '').toUpperCase();
@@ -66,7 +69,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (res['status'] == 'success' && res['data'] != null) {
       final data = res['data'];
       final detailsJson = data['content'] ?? data['details'] ?? {};
-      final details = MovieModel.fromJson(detailsJson);
+      final detailsMap = Map<String, dynamic>.from(detailsJson);
+      if (detailsMap['item_type'] == null || detailsMap['item_type'].toString().isEmpty) {
+        detailsMap['item_type'] = widget.itemType;
+      }
+      final details = MovieModel.fromJson(detailsMap);
 
       List<PlayLinkModel> links = [];
       if (data['play_links'] != null) {

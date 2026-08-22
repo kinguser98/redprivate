@@ -181,6 +181,22 @@ class DownloadManager {
         // fall through to default
       }
     }
+    if (Platform.isAndroid) {
+      try {
+        final publicDownload = Directory('/storage/emulated/0/Download');
+        if (!publicDownload.existsSync()) publicDownload.createSync(recursive: true);
+        return publicDownload.path;
+      } catch (_) {
+        try {
+          final ext = await getExternalStorageDirectory();
+          if (ext != null) {
+            final f = Directory('${ext.path}/Download');
+            if (!f.existsSync()) f.createSync(recursive: true);
+            return f.path;
+          }
+        } catch (_) {}
+      }
+    }
     final dir = await getApplicationDocumentsDirectory();
     final folder = Directory('${dir.path}/downloads');
     if (!folder.existsSync()) folder.createSync(recursive: true);
@@ -701,7 +717,7 @@ class DownloadManager {
         final it = StreamIterator<List<int>>(res.stream);
         while (await it.moveNext().timeout(const Duration(seconds: 30))) {
           if (task.status != DownloadStatus.downloading) break;
-          final chunk = it.current!;
+          final chunk = it.current;
           sink.add(chunk);
           task.downloaded += chunk.length;
           _updateMetrics(task, chunk.length);
@@ -729,8 +745,8 @@ class DownloadManager {
     } else if (combined.contains('hdmaal') || combined.contains('skymovies')) {
       request.headers['Referer'] = 'https://hdmaal.gg/';
     } else if (combined.contains('luluvdo') || combined.contains('lulustream') || combined.contains('tnmr') || combined.contains('lulucdn')) {
-      request.headers['Referer'] = 'https://lulucdn.com/';
-      request.headers['Origin'] = 'https://lulucdn.com';
+      request.headers['Referer'] = 'https://luluvdo.com/';
+      request.headers['Origin'] = 'https://luluvdo.com';
     } else if (combined.contains('xhamster') || combined.contains('xhvid') || combined.contains('xh.video') || combined.contains('xhcdn') || combined.contains('xhpingcdn') || combined.contains('xhamster46')) {
       request.headers['Referer'] = 'https://xhamster.com/';
       request.headers['Origin'] = 'https://xhamster.com';

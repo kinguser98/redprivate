@@ -90,8 +90,16 @@ class CustomDnsProxy {
     debugPrint('CustomDnsProxy: Stopped');
   }
 
+  static final Map<String, List<String>> _dnsCache = {};
+
   Future<List<String>> _resolveHostList(String host) async {
-    final cleanHost = host.trim().toLowerCase();
+    var cleanHost = host.trim().toLowerCase();
+    while (cleanHost.startsWith('/')) {
+      cleanHost = cleanHost.substring(1);
+    }
+    if (cleanHost.contains(':')) {
+      cleanHost = cleanHost.split(':')[0];
+    }
     if (cleanHost == '127.0.0.1' ||
         cleanHost == 'localhost' ||
         cleanHost == '::1') {
@@ -100,76 +108,114 @@ class CustomDnsProxy {
     if (InternetAddress.tryParse(cleanHost) != null) {
       return [cleanHost];
     }
+    if (cleanHost.contains('dropmms')) {
+      return [
+        '172.67.218.172',
+        '104.26.1.182',
+        '104.26.2.182',
+        '104.21.5.196',
+        '104.18.20.12',
+        '104.18.21.12',
+      ];
+    }
+    if (cleanHost.contains('streamtape') ||
+        cleanHost.contains('tapecontent') ||
+        cleanHost.contains('strcloud') ||
+        cleanHost.contains('stape')) {
+      return ['104.26.1.182', '104.26.2.182'];
+    }
+    if (cleanHost.contains('luluvdo') ||
+        cleanHost.contains('lulustream') ||
+        cleanHost.contains('lulucdn')) {
+      return ['104.26.6.79', '104.26.7.79', '172.67.68.215', '104.20.19.112', '172.66.167.168'];
+    }
+    if (_dnsCache.containsKey(cleanHost) && _dnsCache[cleanHost]!.isNotEmpty) {
+      return _dnsCache[cleanHost]!;
+    }
+
+    final isBlockedDomain = cleanHost.contains('dropmms') ||
+        cleanHost.contains('imagetwist') ||
+        cleanHost.contains('luluvdo') ||
+        cleanHost.contains('lulustream') ||
+        cleanHost.contains('tnmr.org') ||
+        cleanHost.contains('cdn-tnmr.org') ||
+        cleanHost.contains('.tnmr.') ||
+        cleanHost.contains('merivo') ||
+        cleanHost.contains('vidara') ||
+        cleanHost.contains('playmate') ||
+        cleanHost.contains('vibevdo') ||
+        cleanHost.contains('vidsonic') ||
+        cleanHost.contains('eporner') ||
+        cleanHost.contains('aagmaal') ||
+        cleanHost.contains('hdmaal') ||
+        cleanHost.contains('uffmaal');
 
     final List<String> ips = [];
 
-    // System DNS
-    try {
-      final list = await InternetAddress.lookup(host)
-          .timeout(const Duration(seconds: 2));
-      for (final addr in list) {
-        final ip = addr.address;
-        if (ip != '0.0.0.0' && ip != '::') {
-          ips.add(ip);
-        }
-      }
-    } catch (_) {}
+    // 1. If blocked domain, prioritize direct IP DoH (1.1.1.1 / 8.8.8.8) to bypass ISP DNS sinkholes
+    if (isBlockedDomain) {
+      await _queryDoH(cleanHost, ips);
+    }
 
-    // Cloudflare DoH
+    // 2. System DNS lookup (if not already resolved via DoH)
     if (ips.isEmpty) {
       try {
-        final uri =
-            Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
-        final client = HttpClient();
-        client.badCertificateCallback = (cert, h, p) => true;
-        final req = await client.getUrl(uri);
-        req.headers.set('Accept', 'application/dns-json');
-        final resp = await req.close().timeout(const Duration(seconds: 4));
-        if (resp.statusCode == 200) {
-          final body = await resp.transform(utf8.decoder).join();
-          final data = jsonDecode(body);
-          final answers = data['Answer'] as List?;
-          if (answers != null) {
-            for (final ans in answers) {
-              if (ans['type'] == 1 && ans['data'] != null) {
-                ips.add(ans['data'].toString());
-              }
-            }
+        final list = await InternetAddress.lookup(cleanHost)
+            .timeout(const Duration(seconds: 2));
+        for (final addr in list) {
+          final ip = addr.address;
+          if (ip != '0.0.0.0' &&
+              ip != '::' &&
+              ip != '127.0.0.1' &&
+              !ip.startsWith('192.168.') &&
+              !ip.startsWith('10.')) {
+            ips.add(ip);
           }
         }
-        client.close();
       } catch (_) {}
     }
 
-    // Google DoH
+    // 3. Fallback DoH if system DNS was empty
     if (ips.isEmpty) {
-      try {
-        final uri = Uri.parse('https://dns.google/resolve?name=$host&type=A');
-        final client = HttpClient();
-        client.badCertificateCallback = (cert, h, p) => true;
-        final req = await client.getUrl(uri);
-        final resp = await req.close().timeout(const Duration(seconds: 4));
-        if (resp.statusCode == 200) {
-          final body = await resp.transform(utf8.decoder).join();
-          final data = jsonDecode(body);
-          final answers = data['Answer'] as List?;
-          if (answers != null) {
-            for (final ans in answers) {
-              if (ans['type'] == 1 && ans['data'] != null) {
-                ips.add(ans['data'].toString());
-              }
-            }
-          }
-        }
-        client.close();
-      } catch (_) {}
+      await _queryDoH(cleanHost, ips);
     }
 
     if (ips.isNotEmpty) {
-      debugPrint('CustomDnsProxy resolved $host -> $ips');
+      _dnsCache[cleanHost] = ips;
+      debugPrint('CustomDnsProxy resolved $cleanHost -> $ips');
       return ips;
     }
     throw Exception('Failed to resolve host $host');
+  }
+
+  Future<void> _queryDoH(String cleanHost, List<String> ips) async {
+    // Cloudflare Direct-IP DoH (1.1.1.1 / 1.0.0.1 - requires no pre-lookup!)
+    for (final dohIp in ['1.1.1.1', '1.0.0.1', '8.8.8.8']) {
+      try {
+        final String url = dohIp == '8.8.8.8'
+            ? 'https://8.8.8.8/resolve?name=$cleanHost&type=A'
+            : 'https://$dohIp/dns-query?name=$cleanHost&type=A';
+        final uri = Uri.parse(url);
+        final client = HttpClient()..badCertificateCallback = (cert, h, p) => true;
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 3));
+        req.headers.set('Accept', 'application/dns-json');
+        final resp = await req.close().timeout(const Duration(seconds: 3));
+        if (resp.statusCode == 200) {
+          final body = await utf8.decodeStream(resp);
+          final data = jsonDecode(body);
+          final answers = data['Answer'] as List?;
+          if (answers != null) {
+            for (final ans in answers) {
+              if (ans['data'] != null && !ans['data'].toString().contains(':')) {
+                ips.add(ans['data'].toString());
+              }
+            }
+          }
+        }
+        client.close();
+        if (ips.isNotEmpty) return;
+      } catch (_) {}
+    }
   }
 
   Future<Socket> _connectToHost(String host, int port) async {
@@ -187,17 +233,22 @@ class CustomDnsProxy {
   }
 
   Future<void> _handleConnect(HttpRequest request) async {
-    var authority = request.uri.authority.isNotEmpty
+    var rawAuth = request.uri.authority.isNotEmpty
         ? request.uri.authority
-        : (request.headers.value('host') ?? '');
-    if (authority.isEmpty) {
+        : (request.headers.value('host') ?? request.uri.toString());
+    
+    while (rawAuth.startsWith('/')) {
+      rawAuth = rawAuth.substring(1);
+    }
+
+    if (rawAuth.isEmpty) {
       request.response.statusCode = 400;
       await request.response.close();
       return;
     }
-    final parts = authority.split(':');
-    final host = parts[0];
-    final portVal = parts.length > 1 ? int.parse(parts[1]) : 443;
+    final parts = rawAuth.split(':');
+    final host = parts[0].replaceAll('/', '').trim();
+    final portVal = parts.length > 1 ? (int.tryParse(parts[1]) ?? 443) : 443;
 
     Socket? targetSocket;
     Socket? clientSocket;
@@ -247,9 +298,7 @@ class CustomDnsProxy {
   }
 
   Future<void> _handleHttp(HttpRequest request) async {
-    // Media forwarder for DNS-poisoned hosts (eporner). The native video player
-    // cannot use Dart's DoH connectionFactory, so we give it a localhost URL
-    // and stream the media here through the DoH-enabled client.
+    // Universal Media forwarder for DNS-poisoned & Referer-protected media streams.
     if (request.method == 'GET' && request.uri.path == '/ep') {
       await _handleMediaForward(request);
       return;
@@ -321,11 +370,8 @@ class CustomDnsProxy {
     } catch (_) {}
   }
 
-  // Stream a media URL through the DoH-enabled client so native players can
-  // play DNS-poisoned hosts (eporner). Range requests are passed through so
-  // seeking works. Media bytes still flow device<->CDN (localhost only hops).
   static const String _mediaUa =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
   Future<void> _handleMediaForward(HttpRequest request) async {
     final client = _getHttpClient();
@@ -337,8 +383,7 @@ class CustomDnsProxy {
         await request.response.close();
         return;
       }
-      final referer = request.uri.queryParameters['r'] ??
-          'https://www.eporner.com/';
+      final referer = request.uri.queryParameters['r'] ?? 'https://dropmms.co/';
 
       final req = await client.getUrl(Uri.parse(target));
       req.followRedirects = true;
@@ -355,9 +400,7 @@ class CustomDnsProxy {
       final resp = await req.close();
 
       request.response.statusCode = resp.statusCode;
-      if (resp.contentLength != -1) {
-        request.response.contentLength = resp.contentLength;
-      }
+
       resp.headers.forEach((name, values) {
         final nameLower = name.toLowerCase();
         if (nameLower != 'connection' &&
@@ -371,6 +414,74 @@ class CustomDnsProxy {
           }
         }
       });
+
+      // Handle HLS m3u8 playlist rewriting so all sub-playlists and TS segments route through DoH
+      final contentType = resp.headers.contentType?.value ?? '';
+      final isM3u8 = target.contains('.m3u8') ||
+          contentType.contains('mpegurl') ||
+          contentType.contains('application/x-mpegurl');
+
+      if (!isM3u8 && resp.contentLength != -1) {
+        request.response.contentLength = resp.contentLength;
+      }
+
+      if (isM3u8 && resp.statusCode == 200) {
+        // Collect bytes safely - tnmr.org might return gzip despite identity request
+        final rawBytes = <int>[];
+        await for (final chunk in resp) {
+          rawBytes.addAll(chunk);
+        }
+        late String body;
+        try {
+          body = utf8.decode(rawBytes);
+        } catch (_) {
+          try {
+            // Try gzip decode as fallback
+            final decompressed = GZipCodec().decode(rawBytes);
+            body = utf8.decode(decompressed);
+          } catch (_) {
+            body = String.fromCharCodes(rawBytes);
+          }
+        }
+        final lines = body.split('\n');
+        final rewritten = StringBuffer();
+        final base = target.substring(0, target.lastIndexOf('/') + 1);
+
+        for (final l in lines) {
+          var line = l.trim();
+          if (line.isNotEmpty) {
+            if (!line.startsWith('#')) {
+              String fullSegmentUrl = line.startsWith('http') ? line : base + line;
+              final proxiedSegment =
+                  'http://127.0.0.1:$port/ep?u=${Uri.encodeComponent(fullSegmentUrl)}&r=${Uri.encodeComponent(referer)}';
+              rewritten.writeln(proxiedSegment);
+            } else {
+              // Rewrite any URI="..." inside tags (like #EXT-X-I-FRAME-STREAM-INF or #EXT-X-KEY)
+              if (line.contains('URI="')) {
+                line = line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (m) {
+                  final uriVal = m.group(1)!;
+                  final fullUri = uriVal.startsWith('http') ? uriVal : base + uriVal;
+                  final proxiedUri =
+                      'http://127.0.0.1:$port/ep?u=${Uri.encodeComponent(fullUri)}&r=${Uri.encodeComponent(referer)}';
+                  return 'URI="$proxiedUri"';
+                });
+              }
+              rewritten.writeln(line);
+            }
+          } else {
+            rewritten.writeln(l);
+          }
+        }
+        final bytes = utf8.encode(rewritten.toString());
+        request.response.headers.contentType =
+            ContentType('application', 'vnd.apple.mpegurl', charset: 'utf-8');
+        request.response.contentLength = bytes.length;
+        request.response.add(bytes);
+        await request.response.flush();
+        await request.response.close();
+        return;
+      }
+
       await request.response.addStream(resp);
       await request.response.close();
     } catch (e) {
@@ -383,15 +494,55 @@ class CustomDnsProxy {
   }
 }
 
-/// If [url] points at a DNS-poisoned host the native player cannot resolve,
+/// If [url] points at a DNS-poisoned host or requires custom headers the native player cannot resolve,
 /// returns a localhost URL that streams the media through the app's DoH
-/// connection. Returns null for everything else (existing behavior untouched).
+/// connection with proper headers. Returns null for direct accessible streams.
 String? mediaForwardUrlIfNeeded(String url) {
   if (url.contains('/ep?u=')) return null; // already proxied
-  if (!url.toLowerCase().contains('eporner')) return null;
+  final lower = url.toLowerCase();
+
+  final isProtectedHost = lower.contains('eporner') ||
+      lower.contains('tnaflix') ||
+      lower.contains('fourhoi') ||
+      lower.contains('surrit') ||
+      lower.contains('tnmr.org') ||
+      lower.contains('cdn-tnmr.org') ||
+      lower.contains('luluvdo') ||
+      lower.contains('lulustream') ||
+      lower.contains('lulucdn') ||
+      lower.contains('merivo') ||
+      lower.contains('vidara') ||
+      lower.contains('playmate') ||
+      lower.contains('vibevdo') ||
+      lower.contains('vidsonic') ||
+      lower.contains('streamtape') ||
+      lower.contains('tapecontent') ||
+      lower.contains('strcloud') ||
+      lower.contains('stape') ||
+      lower.contains('dropmms') ||
+      lower.contains('imagetwist');
+
+  if (!isProtectedHost) return null;
+
   final p = CustomDnsProxy().port;
   if (p == null) return null;
-  return 'http://127.0.0.1:$p/ep?u=${Uri.encodeComponent(url)}&r=${Uri.encodeComponent('https://www.eporner.com/')}';
+
+  String referer = 'https://dropmms.co/';
+  if (lower.contains('eporner')) {
+    referer = 'https://www.eporner.com/';
+  } else if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('tnmr.org') || lower.contains('cdn-tnmr.org') || lower.contains('lulucdn')) {
+    referer = 'https://luluvdo.com/';
+  } else if (lower.contains('streamtape') || lower.contains('tapecontent') || lower.contains('strcloud') || lower.contains('stape')) {
+    referer = 'https://streamtape.com/';
+  } else if (lower.contains('merivo') || lower.contains('vidara')) {
+    referer = 'https://merivo.fit/';
+  } else if (lower.contains('vibevdo')) {
+    referer = 'https://vibevdo.xyz/';
+  } else if (lower.contains('vidsonic')) {
+    referer = 'https://vidsonic.net/';
+  }
+
+  return 'http://127.0.0.1:$p/ep?u=${Uri.encodeComponent(url)}&r=${Uri.encodeComponent(referer)}';
 }
 
 // ---------------------------------------------------------------------------
@@ -442,27 +593,20 @@ class MyHttpOverrides extends HttpOverrides {
     'surrit',
     'dropmms',
     'imagetwist',
+    'luluvdo',
+    'lulustream',
+    'lulucdn',
+    'tnmr.org',
+    'vidara',
+    'merivo',
+    'playmate',
+    'vibevdo',
+    'vidsonic',
   ];
 
   @override
   String findProxyFromEnvironment(Uri uri, Map<String, String>? environment) {
     final host = uri.host.toLowerCase();
-    final path = uri.path.toLowerCase();
-    final isEporner = host.contains('eporner');
-    final isTnaflix = host.contains('tnaflix');
-    final isSurrit = host.contains('surrit');
-    final isFourhoi = host.contains('fourhoi');
-
-    // Direct video content streams MUST ALWAYS be DIRECT (0 proxy socket overhead).
-    // Exception: eporner/tnaflix hosts are DNS-poisoned in some regions, so their
-    // media keeps the proxy route so it is resolved via DoH instead of the ISP DNS.
-    if (!isEporner && !isTnaflix && !isSurrit && !isFourhoi &&
-        (path.contains('get_video') ||
-            host.contains('tapecontent') ||
-            uri.path.endsWith('.mp4') ||
-            uri.path.endsWith('.mkv'))) {
-      return 'DIRECT';
-    }
 
     for (final pattern in blocklist) {
       if (host.contains(pattern)) {

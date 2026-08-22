@@ -1,7 +1,6 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import '../../models/movie_model.dart';
 import '../../services/app_image_cache.dart';
 import '../../screens/all_movies_series_screen.dart';
 import '../../screens/download_helper.dart';
@@ -673,9 +672,7 @@ class _AuroraGlassLayoutState extends State<AuroraGlassLayout> {
                 Container(
                   width: 22,
                   height: 22,
-                  decoration: BorderRadius.circular(4) != null
-                      ? BoxDecoration(borderRadius: BorderRadius.circular(4))
-                      : null,
+                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(4)),
                   clipBehavior: Clip.antiAlias,
                   child: Image.network(
                     logoUrl,

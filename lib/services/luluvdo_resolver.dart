@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 class LuluvdoResolver {
   static final Map<String, String> _cache = {};
+  static final Map<String, DateTime> _cacheTime = {};
+  static const _cacheTtl = Duration(hours: 6); // tnmr.org tokens expire in 8h; be safe with 6h
+
 
   static String _baseNConvert(int num, int b) {
     const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -21,31 +25,69 @@ class LuluvdoResolver {
     return p;
   }
 
+  static HttpClient _createDohClient() {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..badCertificateCallback = (cert, host, port) => true;
+    client.findProxy = (uri) => 'DIRECT';
+    client.connectionFactory = (uri, host, port) async {
+      final ips = [
+        '104.26.6.79',
+        '172.67.68.215',
+        '104.26.7.79',
+        '104.20.19.112',
+        '172.66.167.168'
+      ];
+      for (final ip in ips) {
+        try {
+          final s = await Socket.connect(ip, uri.port, timeout: const Duration(seconds: 4));
+          if (uri.scheme == 'https') {
+            final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
+            return ConnectionTask.fromSocket(Future.value(sec), () {});
+          }
+          return ConnectionTask.fromSocket(Future.value(s), () {});
+        } catch (_) {}
+      }
+      throw Exception("Could not connect to ${uri.host}");
+    };
+    return client;
+  }
+
   /// Extracts the direct phone-authenticated tokenized M3U8 stream URL on-device
   static Future<String?> resolveOnDevice(String rawUrl, {bool forceRefresh = false}) async {
     if (rawUrl.isEmpty) return null;
 
     if (!forceRefresh && _cache.containsKey(rawUrl)) {
-      debugPrint("Luluvdo stream served from cache: ${_cache[rawUrl]}");
-      return _cache[rawUrl];
+      final cachedAt = _cacheTime[rawUrl];
+      if (cachedAt != null && DateTime.now().difference(cachedAt) < _cacheTtl) {
+        debugPrint("Luluvdo stream served from cache: ${_cache[rawUrl]}");
+        return _cache[rawUrl];
+      } else {
+        // Cache expired - remove stale entry
+        _cache.remove(rawUrl);
+        _cacheTime.remove(rawUrl);
+      }
     }
 
     final fileCode = rawUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
     if (fileCode.isEmpty) return null;
 
     final urlsToTry = [
+      'https://luluvdo.com/e/$fileCode',
+      'https://luluvdo.com/$fileCode',
+      'https://lulustream.com/e/$fileCode',
+      'https://lulustream.com/$fileCode',
       'https://lulucdn.com/e/$fileCode',
       'https://lulucdn.com/$fileCode',
-      'https://luluvdo.com/e/$fileCode',
-      'https://lulustream.com/e/$fileCode',
     ];
 
     final headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://lulucdn.com/',
+      'Referer': 'https://luluvdo.com/',
     };
 
-    final client = http.Client();
+    final ioClient = _createDohClient();
+    final client = IOClient(ioClient);
     try {
       for (final targetUrl in urlsToTry) {
         try {
@@ -70,6 +112,7 @@ class LuluvdoResolver {
               final streamUrl = m3u8Match.group(0)!;
               debugPrint("Luluvdo native stream resolved on device: $streamUrl");
               _cache[rawUrl] = streamUrl;
+              _cacheTime[rawUrl] = DateTime.now();
               return streamUrl;
             }
           }
@@ -79,6 +122,7 @@ class LuluvdoResolver {
             final streamUrl = m3u8Match.group(0)!;
             debugPrint("Luluvdo native stream resolved on device: $streamUrl");
             _cache[rawUrl] = streamUrl;
+            _cacheTime[rawUrl] = DateTime.now();
             return streamUrl;
           }
         } catch (e) {

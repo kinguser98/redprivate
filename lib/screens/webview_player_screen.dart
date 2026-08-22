@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,7 +42,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cleanEmbedUrl = widget.embedUrl.replaceAll('/v/', '/e/');
+    final cleanEmbedUrl = widget.embedUrl
+        .replaceAll('/v/', '/e/')
+        .replaceAll('/watch/', '/embed/');
 
     return Scaffold(
       backgroundColor: Colors.black,

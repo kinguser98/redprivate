@@ -20,6 +20,20 @@ import 'navigation_helper.dart';
 import 'downloads_screen.dart';
 import 'fly_mode_screen.dart';
 
+class OttSectionModel {
+  final int networkId;
+  final String title;
+  final String logo;
+  final List<MovieModel> items;
+
+  OttSectionModel({
+    required this.networkId,
+    required this.title,
+    required this.logo,
+    required this.items,
+  });
+}
+
 class HomeScreen extends StatefulWidget {
   final UserModel user;
   const HomeScreen({Key? key, required this.user}) : super(key: key);
@@ -39,6 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<MovieModel> _weeklyTrending = [];
   List<MovieModel> _webSeriesOnlyForYou = [];
   List<MovieModel> _moviesOnlyForYou = [];
+  List<OttSectionModel> _ottSections = [];
   List<dynamic> _ottData = [];
   List<dynamic> _allOttData = [];
   String _telegramLink = 'https://t.me/+_g20_redapp';
@@ -104,6 +119,22 @@ class _HomeScreenState extends State<HomeScreen> {
             .toList();
       }
 
+      final rawOttSecs = data['ott_sections'] as List? ?? [];
+      final parsedOttSections = rawOttSecs
+          .whereType<Map<String, dynamic>>()
+          .map((sec) {
+            final items = ApiService.filterParked(safeList(sec['items']));
+            if (items.isEmpty) return null;
+            return OttSectionModel(
+              networkId: int.tryParse(sec['network_id']?.toString() ?? '0') ?? 0,
+              title: (sec['title'] ?? 'OTT Hits').toString().toUpperCase(),
+              logo: (sec['logo'] ?? '').toString(),
+              items: items,
+            );
+          })
+          .whereType<OttSectionModel>()
+          .toList();
+
       setState(() {
         _heroSlider = ApiService.filterParked(safeList(data['hero_slider']));
         _castData = data['ott_networks'] as List? ?? [];
@@ -115,11 +146,17 @@ class _HomeScreenState extends State<HomeScreen> {
         _weeklyTrending = ApiService.filterParked(safeList(data['weekly_trending'] ?? data['popular_movies']));
         _webSeriesOnlyForYou = ApiService.filterParked(safeList(data['popular_series'] ?? data['trending_series']));
         _moviesOnlyForYou = ApiService.filterParked(safeList(data['popular_movies'] ?? data['random_row']));
+        _ottSections = parsedOttSections;
         if (data['telegram_link'] != null) {
           _telegramLink = data['telegram_link'].toString();
         }
         _errorMessage = null;
       });
+
+      // If backend ott_sections is empty, asynchronously populate for visible OTT genres
+      if (_ottSections.isEmpty && _ottData.isNotEmpty) {
+        unawaited(_loadClientOttSections());
+      }
 
       // Check and show 1-time Push Campaign or Announcement Modal
       _checkAndShowPushCampaignOrAnnouncement(data);
@@ -130,6 +167,44 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
     setState(() => _isLoading = false);
+  }
+
+  Future<void> _loadClientOttSections() async {
+    try {
+      final List<OttSectionModel> sections = [];
+      // Take visible OTT genres (status = 1)
+      final visibleOtts = _ottData.take(12).toList();
+      for (final ott in visibleOtts) {
+        final name = (ott['name'] ?? '').toString().trim();
+        final netId = int.tryParse(ott['id']?.toString() ?? '0') ?? 0;
+        final icon = (ott['icon'] ?? '').toString();
+        if (name.isEmpty) continue;
+
+        // Fetch mixed content for this OTT
+        final res = await ApiService.fetchContent(
+          genre: name,
+          networkId: netId,
+          type: 'all',
+        );
+        if (res.isNotEmpty) {
+          final shuffled = List<MovieModel>.from(ApiService.filterParked(res))..shuffle();
+          if (shuffled.isNotEmpty) {
+            sections.add(OttSectionModel(
+              networkId: netId,
+              title: name.toUpperCase(),
+              logo: icon,
+              items: shuffled.take(15).toList(),
+            ));
+          }
+        }
+      }
+
+      if (mounted && sections.isNotEmpty) {
+        setState(() {
+          _ottSections = sections;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkAndShowPushCampaignOrAnnouncement(Map<String, dynamic> data) async {
@@ -422,15 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     borderRadius: BorderRadius.circular(12),
                                     onTap: () {
                                       Navigator.pop(ctx);
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => DetailsScreen(
-                                            contentId: itemId,
-                                            itemType: itemType,
-                                          ),
-                                        ),
-                                      );
+                                      navigateToContent(context, itemId, itemType);
                                     },
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -952,8 +1019,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (_moviesOnlyForYou.isNotEmpty) ...[
                           _buildSectionHeader("Movies Only For You"),
                           _buildMovieHorizontalList(_moviesOnlyForYou),
-                          const SizedBox(height: 90),
+                          const SizedBox(height: 24),
                         ],
+
+                        // Dynamic OTT-Based Rows (visible OTTs, one by one with mixed & random content)
+                        for (final sec in _ottSections) ...[
+                          _buildOttSectionRow(sec),
+                          const SizedBox(height: 24),
+                        ],
+
+                        const SizedBox(height: 90),
                       ],
                     ),
                   ),
@@ -1670,6 +1745,67 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildOttSectionRow(OttSectionModel sec) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE50914),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    sec.title,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AllMoviesSeriesScreen(
+                        initialGenre: sec.title,
+                        initialNetworkId: sec.networkId,
+                        title: sec.title,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text(
+                  "See All",
+                  style: TextStyle(
+                    color: Color(0xFFE50914),
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        _buildMovieHorizontalList(sec.items),
+      ],
     );
   }
 

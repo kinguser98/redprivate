@@ -5,9 +5,6 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../models/series_model.dart';
 import '../services/api_service.dart';
-import '../services/streamtape_service.dart';
-import '../services/embed_resolver.dart';
-import 'video_player_screen.dart';
 import 'video_launcher.dart';
 
 class WebSeriesScreen extends StatefulWidget {

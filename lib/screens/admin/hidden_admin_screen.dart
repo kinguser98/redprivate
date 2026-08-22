@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -9,12 +10,21 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/api_config.dart';
 import '../../services/aagmaal_resolver.dart';
 import '../../services/streamtape_service.dart';
 import '../../services/dropmms_service.dart';
+import '../../services/skymovies_scraper.dart';
+import '../../services/uffmaal_scraper.dart';
+import '../../services/telegram_collage_helper.dart';
+import '../dropmms_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
 import '../video_player_screen.dart';
+import '../webview_player_screen.dart';
 import 'fly_mode_manager_screen.dart';
 
 class HiddenAdminScreen extends StatefulWidget {
@@ -51,6 +61,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'Aagmaal Auto Importer',
     'Fly Mode Manager',
     '⚡ Extractor Cinema (Ad-Free Player)',
+    '✈️ Telegram Channel Studio',
   ];
 
   final List<IconData> _navIcons = [
@@ -67,7 +78,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.health_and_safety_rounded,
     Icons.swap_horiz_rounded,
     Icons.settings_suggest_rounded,
-    Icons.send_rounded,
+    Icons.campaign_rounded,
     Icons.report_rounded,
     Icons.dns_rounded,
     Icons.analytics_rounded,
@@ -76,6 +87,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.local_fire_department_rounded,
     Icons.flight_takeoff_rounded,
     Icons.bolt_rounded,
+    Icons.send_rounded,
   ];
 
   // Data lists
@@ -596,6 +608,236 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       }
       return null;
     }
+  }
+
+  // ── Universal Admin Image Downloader (Downloads to device Downloads folder) ──
+  Future<void> _downloadImageToPublicDownloads(BuildContext context, String imageUrl, {String? title}) async {
+    final url = imageUrl.trim();
+    if (url.isEmpty || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Invalid image URL"), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+              SizedBox(width: 12),
+              Text("Downloading image to Downloads folder..."),
+            ],
+          ),
+          duration: Duration(seconds: 4),
+          backgroundColor: Color(0xFF1E2436),
+        ),
+      );
+
+      try {
+        if (Platform.isAndroid) {
+          await Permission.storage.request();
+          await Permission.photos.request();
+        }
+      } catch (_) {}
+
+      final res = await http.get(Uri.parse(url), headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+      }).timeout(const Duration(seconds: 20));
+
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
+        throw Exception("Server returned HTTP ${res.statusCode}");
+      }
+
+      Directory downloadDir = Directory('/storage/emulated/0/Download');
+      if (!await downloadDir.exists()) {
+        try {
+          final extDirs = await getExternalStorageDirectories(type: StorageDirectory.downloads);
+          if (extDirs != null && extDirs.isNotEmpty) {
+            downloadDir = extDirs.first;
+          } else {
+            downloadDir = await getApplicationDocumentsDirectory();
+          }
+        } catch (_) {
+          downloadDir = await getApplicationDocumentsDirectory();
+        }
+      }
+
+      String ext = '.jpg';
+      final pathLower = Uri.parse(url).path.toLowerCase();
+      if (pathLower.endsWith('.png')) ext = '.png';
+      if (pathLower.endsWith('.webp')) ext = '.webp';
+      if (pathLower.endsWith('.jpeg')) ext = '.jpeg';
+
+      final cleanTitle = (title != null && title.trim().isNotEmpty)
+          ? title.trim().replaceAll(RegExp(r'[^\w\s\-]'), '').replaceAll(RegExp(r'\s+'), '_')
+          : 'image';
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = '${cleanTitle}_$timestamp$ext';
+      final targetFile = File('${downloadDir.path}/$fileName');
+
+      await targetFile.writeAsBytes(res.bodyBytes);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Saved to Downloads: $fileName",
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF1B2333),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: "OPEN",
+              textColor: Colors.amberAccent,
+              onPressed: () {
+                OpenFilex.open(targetFile.path);
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to download image: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _showImageActionSheet(
+    BuildContext context,
+    String imageUrl, {
+    String? title,
+    int? contentId,
+    String? itemType,
+    String? ottName,
+    String? quality,
+    List<dynamic>? episodes,
+  }) {
+    final url = imageUrl.trim();
+    if (url.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF131826),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (bctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: CachedNetworkImage(
+                        imageUrl: url,
+                        width: 48,
+                        height: 64,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.white38),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title ?? "Image Options",
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            url,
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const Icon(Icons.send_rounded, color: Color(0xFF229ED9)),
+                  title: const Text("Broadcast to Telegram Channel", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                  subtitle: const Text("Auto-stitch 4-screenshot collage and publish with watch link", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  contentPadding: EdgeInsets.zero,
+                  onTap: () {
+                    Navigator.pop(bctx);
+                    _showTelegramBroadcastDialog(
+                      contentId: contentId ?? 0,
+                      title: title ?? '',
+                      itemType: itemType ?? 'series',
+                      posterUrl: url,
+                      ottName: ottName,
+                      quality: quality ?? '720p HD',
+                      episodes: episodes,
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.download_rounded, color: Colors.greenAccent),
+                  title: const Text("Download to Downloads Folder", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  subtitle: const Text("Save locally to /Download (visible in File Manager)", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  contentPadding: EdgeInsets.zero,
+                  onTap: () {
+                    Navigator.pop(bctx);
+                    _downloadImageToPublicDownloads(context, url, title: title);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.copy_rounded, color: Colors.amberAccent),
+                  title: const Text("Copy Image URL", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  contentPadding: EdgeInsets.zero,
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: url));
+                    Navigator.pop(bctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Image URL copied to clipboard!"), backgroundColor: Colors.blueAccent, duration: Duration(seconds: 2)),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.open_in_browser_rounded, color: Colors.cyanAccent),
+                  title: const Text("Open in Browser", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  contentPadding: EdgeInsets.zero,
+                  onTap: () {
+                    Navigator.pop(bctx);
+                    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   // Save Content Action (Adds/Updates DB + Instantly updates catalog UI)
@@ -1359,13 +1601,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                         }
                                       ];
 
+                                      // Auto-upload episode image to server if external
+                                      String finalEpImage = epImageCtrl.text.trim();
+                                      if (finalEpImage.isNotEmpty && !finalEpImage.contains('goprivate.fun/api/uploads')) {
+                                        final uploaded = await _uploadImageUrlToServer(finalEpImage, customTitle: '${seriesTitle}_$selectedEpName', showNotification: true);
+                                        if (uploaded != null && uploaded.isNotEmpty) {
+                                          finalEpImage = uploaded;
+                                          epImageCtrl.text = uploaded;
+                                        }
+                                      }
+
                                       Map<String, dynamic> res;
                                       if (isEdit) {
                                         res = await _adminPhpApi('update_episode', {
                                           'id': existing['id'],
                                           'season_id': currentSeason?['id'],
                                           'Episoade_Name': selectedEpName.trim(),
-                                          'episoade_image': epImageCtrl.text.trim(),
+                                          'episoade_image': finalEpImage,
                                           'url': epUrlCtrl.text.trim(),
                                           'stream_type': epStreamType,
                                           'quality': selectedQuality,
@@ -1380,7 +1632,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                           'name': selectedEpName.trim(),
                                           'url': epUrlCtrl.text.trim(),
                                           'stream_type': epStreamType,
-                                          'episode_image': epImageCtrl.text.trim(),
+                                          'episode_image': finalEpImage,
                                           'quality': selectedQuality,
                                           'order': epOrder,
                                           'play_links': epPlayLinksPayload,
@@ -1647,14 +1899,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                         child: Row(
                                           children: [
                                             if (epImage.isNotEmpty)
-                                              ClipRRect(
-                                                borderRadius: BorderRadius.circular(10),
-                                                child: CachedNetworkImage(
-                                                  imageUrl: epImage, width: 46, height: 46, fit: BoxFit.cover,
-                                                  errorWidget: (c, u, e) => Container(
-                                                    width: 46, height: 46,
-                                                    color: const Color(0xFF2A3145),
-                                                    child: const Icon(Icons.movie, color: Colors.white24),
+                                              GestureDetector(
+                                                onLongPress: () => _showImageActionSheet(ctx, epImage, title: ep['Episoade_Name']?.toString() ?? 'Episode'),
+                                                child: ClipRRect(
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  child: CachedNetworkImage(
+                                                    imageUrl: epImage, width: 46, height: 46, fit: BoxFit.cover,
+                                                    errorWidget: (c, u, e) => Container(
+                                                      width: 46, height: 46,
+                                                      color: const Color(0xFF2A3145),
+                                                      child: const Icon(Icons.movie, color: Colors.white24),
+                                                    ),
                                                   ),
                                                 ),
                                               )
@@ -1748,21 +2003,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: Ink(
           decoration: BoxDecoration(
             gradient: gradient,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [BoxShadow(color: gradient.colors.last.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 6))],
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [BoxShadow(color: gradient.colors.last.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
           ),
-          padding: const EdgeInsets.symmetric(vertical: 14),
+          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 0.4)),
+              Icon(icon, color: Colors.white, size: 16),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.3),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
         ),
@@ -2091,6 +2354,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return const FlyModeManagerScreen();
       case 21:
         return _buildExtractorCinemaView();
+      case 22:
+        return _buildTelegramStudioView();
       default:
         return _buildDashboardView();
     }
@@ -2751,18 +3016,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             ),
           ),
           const SizedBox(width: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: SizedBox(
-              width: 38,
-              height: 52,
-              child: poster.isNotEmpty
-                  ? CachedNetworkImage(
-                      imageUrl: poster,
-                      fit: BoxFit.cover,
-                      errorWidget: (c, u, e) => Container(color: Colors.white10),
-                    )
-                  : Container(color: Colors.white10),
+          GestureDetector(
+            onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: name) : null,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 38,
+                height: 52,
+                child: poster.isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: poster,
+                        fit: BoxFit.cover,
+                        errorWidget: (c, u, e) => Container(color: Colors.white10),
+                      )
+                    : Container(color: Colors.white10),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -3159,20 +3427,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 ),
                 if (posterUrl.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  const Text("Live Poster Preview:", style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      const Text("Live Poster Preview (Portrait):", style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 6),
+                      const Text("(Hold image to download)", style: TextStyle(color: Colors.white38, fontSize: 10)),
+                    ],
+                  ),
                   const SizedBox(height: 6),
-                  Container(
-                    height: 160,
-                    width: 110,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.cyanAccent.withOpacity(0.5)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: CachedNetworkImage(
-                      imageUrl: posterUrl,
-                      fit: BoxFit.cover,
-                      errorWidget: (c, u, e) => const Center(child: Icon(Icons.broken_image, color: Colors.redAccent)),
+                  GestureDetector(
+                    onLongPress: () => _showImageActionSheet(context, posterUrl, title: _addTitleCtrl.text.isNotEmpty ? _addTitleCtrl.text : 'Poster'),
+                    child: Container(
+                      height: 160,
+                      width: 110,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.cyanAccent.withOpacity(0.5)),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: CachedNetworkImage(
+                        imageUrl: posterUrl,
+                        fit: BoxFit.cover,
+                        errorWidget: (c, u, e) => const Center(child: Icon(Icons.broken_image, color: Colors.redAccent)),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -3182,20 +3459,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 _buildInputField("Thumbnail / Banner URL (2048x1152)", _addThumbUrlCtrl, hint: "https://..."),
                 if (thumbUrl.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  const Text("Live Banner Preview:", style: TextStyle(color: Colors.purpleAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      const Text("Live Banner Preview (Landscape):", style: TextStyle(color: Colors.purpleAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 6),
+                      const Text("(Hold image to download)", style: TextStyle(color: Colors.white38, fontSize: 10)),
+                    ],
+                  ),
                   const SizedBox(height: 6),
-                  Container(
-                    height: 120,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: CachedNetworkImage(
-                      imageUrl: thumbUrl,
-                      fit: BoxFit.cover,
-                      errorWidget: (c, u, e) => const Center(child: Icon(Icons.broken_image, color: Colors.redAccent)),
+                  GestureDetector(
+                    onLongPress: () => _showImageActionSheet(context, thumbUrl, title: "${_addTitleCtrl.text.isNotEmpty ? _addTitleCtrl.text : 'Content'}_banner"),
+                    child: Container(
+                      height: 120,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: CachedNetworkImage(
+                        imageUrl: thumbUrl,
+                        fit: BoxFit.cover,
+                        errorWidget: (c, u, e) => const Center(child: Icon(Icons.broken_image, color: Colors.redAccent)),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -3447,6 +3733,34 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     onPressed: _submitAddContent,
                     style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                     child: Text("${_editingItem != null ? 'UPDATE' : 'CREATE'} ${_addType.toUpperCase()}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      final title = _addTitleCtrl.text.trim();
+                      if (title.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter a title first!")));
+                        return;
+                      }
+                      _showTelegramBroadcastDialog(
+                        contentId: _editingItem?['id'] ?? 0,
+                        title: title,
+                        itemType: _addType,
+                        posterUrl: _addPosterUrlCtrl.text.trim(),
+                        ottName: _selectedOttGenreIds.isNotEmpty ? _ottGenres.firstWhere((g) => g['id'] == _selectedOttGenreIds.first, orElse: () => {'name': 'OTT'})['name'] : 'OTT',
+                        quality: '720p HD',
+                      );
+                    },
+                    icon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 18),
+                    label: const Text("✈️ BROADCAST TO TELEGRAM CHANNEL", style: TextStyle(color: Color(0xFF229ED9), fontWeight: FontWeight.bold, fontSize: 12.5)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFF229ED9), width: 1.2),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
                 ),
               ],
@@ -3760,6 +4074,19 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _actionButton(ctx, "🚀 Broadcast to Telegram", Icons.send_rounded, const Color(0xFF229ED9), () {
+              Navigator.pop(ctx);
+              _showTelegramBroadcastDialog(
+                contentId: item['id'] is int ? item['id'] : int.tryParse('${item['id']}') ?? 0,
+                title: item['name'] ?? '',
+                itemType: type,
+                posterUrl: item['poster'] ?? '',
+                ottName: _getOttOrGenreName(item),
+                quality: item['quality'] ?? '720p HD',
+                episodes: item['seasons'] != null && (item['seasons'] as List).isNotEmpty ? item['seasons'][0]['episodes'] : null,
+              );
+            }),
+            const SizedBox(height: 8),
             _actionButton(ctx, "View Details", Icons.info_outline, Colors.cyanAccent, () {
               Navigator.pop(ctx);
               _showDetailsDialog(item, type);
@@ -6742,6 +7069,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _telegramLinkCtrl = TextEditingController();
   final _adminPinCtrl = TextEditingController();
   
+  // Telegram Bot Broadcaster Settings
+  final _tgBotTokenCtrl = TextEditingController();
+  final _tgChannelIdCtrl = TextEditingController();
+  final _tgCaptionTemplateCtrl = TextEditingController(
+    text: "{title} ({ott}) Reuploaded on App ✅🥵\n\n🎬 Quality: {quality}\n🍿 Watch Online: {link}",
+  );
+  
   bool _updateSkippable = false;
   final _latestVersionCtrl = TextEditingController();
   final _v7aApkCtrl = TextEditingController();
@@ -7053,6 +7387,75 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                   ),
                   
+                  // Telegram Channel Auto-Publisher Bot Settings
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          "Telegram Channel Auto-Publisher Settings",
+                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _tgBotTokenCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Telegram Bot Token (from @BotFather)",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.smart_toy_rounded, color: Color(0xFF229ED9)),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _tgChannelIdCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Telegram Channel ID or Username",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "@YourChannelName or -100xxxxxxxxxx",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
+                        prefixIcon: const Icon(Icons.tag_rounded, color: Colors.amberAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
+                      controller: _tgCaptionTemplateCtrl,
+                      maxLines: 3,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: InputDecoration(
+                        labelText: "Default Broadcast Caption Template",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "{title} ({ott}) Reuploaded on App ✅🥵\n\n🎬 Quality: {quality}\n🍿 Watch Online: {link}",
+                        hintStyle: const TextStyle(color: Colors.grey, fontSize: 11),
+                        prefixIcon: const Icon(Icons.edit_note_rounded, color: Colors.cyanAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  
                   Padding(
                     padding: const EdgeInsets.all(12),
                     child: SizedBox(
@@ -7076,6 +7479,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   Future<void> _loadAppSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    _tgBotTokenCtrl.text = prefs.getString('tg_bot_token') ?? '';
+    _tgChannelIdCtrl.text = prefs.getString('tg_channel_id') ?? '';
+    _tgCaptionTemplateCtrl.text = prefs.getString('tg_caption_template') ?? "{title} ({ott}) Reuploaded on App ✅🥵\n\n🎬 Quality: {quality}\n🍿 Watch Online: {link}";
+
     final res = await _adminPhpApi('get_app_settings', {});
     if (!mounted) return;
     if (res['status'] == 'success' && res['data']?['settings'] != null) {
@@ -7096,6 +7504,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         _aagmaalDomainCtrl.text = settings['aagmaal_domain']?.toString() ?? 'https://aagmaal.mba';
         _uffmaalDomainCtrl.text = settings['uffmaal_domain']?.toString() ?? 'https://uffmaal.com';
 
+        if (_tgBotTokenCtrl.text.isEmpty && settings['tg_bot_token'] != null) {
+          _tgBotTokenCtrl.text = settings['tg_bot_token'].toString();
+        }
+        if (_tgChannelIdCtrl.text.isEmpty && settings['tg_channel_id'] != null) {
+          _tgChannelIdCtrl.text = settings['tg_channel_id'].toString();
+        }
+
         _settingsLoaded = true;
       });
     } else {
@@ -7113,6 +7528,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       );
       return;
     }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('tg_bot_token', _tgBotTokenCtrl.text.trim());
+    await prefs.setString('tg_channel_id', _tgChannelIdCtrl.text.trim());
+    await prefs.setString('tg_caption_template', _tgCaptionTemplateCtrl.text.trim());
+
     final res = await _adminPhpApi('save_app_settings', {
       'settings': {
         'login_mandatory': _loginMandatory ? '1' : '0',
@@ -7129,12 +7550,24 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'hdmove99_domain': _hdmove99DomainCtrl.text.trim(),
         'aagmaal_domain': _aagmaalDomainCtrl.text.trim(),
         'uffmaal_domain': _uffmaalDomainCtrl.text.trim(),
+        'tg_bot_token': _tgBotTokenCtrl.text.trim(),
+        'tg_channel_id': _tgChannelIdCtrl.text.trim(),
+        'tg_caption_template': _tgCaptionTemplateCtrl.text.trim(),
       },
     });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('skymovies_domain', _skymoviesDomainCtrl.text.trim());
+      await prefs.setString('hdmaal_domain', _hdmaalDomainCtrl.text.trim());
+      await prefs.setString('uncutmasti_domain', _uncutmastiDomainCtrl.text.trim());
+      await prefs.setString('uffmaal_domain', _uffmaalDomainCtrl.text.trim());
+    } catch (_) {}
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(res['status'] == 'success' ? "App settings saved" : "Failed: ${res['message'] ?? 'Unknown error'}"),
+        content: Text(res['status'] == 'success' ? "App settings & Scraper domains saved" : "Failed: ${res['message'] ?? 'Unknown error'}"),
         backgroundColor: res['status'] == 'success' ? Colors.green : Colors.red,
       ),
     );
@@ -8605,6 +9038,34 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+  int? _parseEpisodeNumber(String title, String url) {
+    // 1. Try from title: Episode 1, Ep 02, Part 3, E4, etc.
+    final epMatch = RegExp(r'(?:episode|ep|part|pt|e)\s*[-_.:#]?\s*0*(\d+)', caseSensitive: false).firstMatch(title);
+    if (epMatch != null) {
+      final n = int.tryParse(epMatch.group(1)!);
+      if (n != null && n > 0 && n < 1000) return n;
+    }
+    // 2. Try 1st Episode, 2nd Part
+    final ordMatch = RegExp(r'\b0*(\d+)\s*(?:st|nd|rd|th)?\s*(?:episode|part)\b', caseSensitive: false).firstMatch(title);
+    if (ordMatch != null) {
+      final n = int.tryParse(ordMatch.group(1)!);
+      if (n != null && n > 0 && n < 1000) return n;
+    }
+    // 3. Try from URL: episode-2, ep-02, part-1, -02.html, /2/
+    final urlMatch = RegExp(r'(?:episode|ep|part|e)[-_]0*(\d+)', caseSensitive: false).firstMatch(url);
+    if (urlMatch != null) {
+      final n = int.tryParse(urlMatch.group(1)!);
+      if (n != null && n > 0 && n < 1000) return n;
+    }
+    // 4. Trailing number in URL path
+    final pathNum = RegExp(r'[-_/]0*(\d{1,3})(?:[-_/.]|$)', caseSensitive: false).firstMatch(url);
+    if (pathNum != null) {
+      final n = int.tryParse(pathNum.group(1)!);
+      if (n != null && n > 0 && n < 1000) return n;
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>?> _scrapeHdmaalDetails(String pageUrl) async {
     try {
       final res = await http.get(Uri.parse(pageUrl), headers: {
@@ -8615,27 +9076,32 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       final html = res.body;
 
       var title = '';
-      final titleMatch = RegExp(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
+      final titleMatch = RegExp(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>|<h1[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
       if (titleMatch != null) {
-        title = titleMatch.group(1)!.trim();
+        title = (titleMatch.group(1) ?? titleMatch.group(2) ?? '').trim();
       }
 
       var poster = '';
-      final ogMatch = RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html);
+      final ogMatch = RegExp(r'<meta property="og:image" content=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
       if (ogMatch != null) {
         poster = ogMatch.group(1)!.trim();
       }
 
       var streamUrl = '';
-      final iframeMatch = RegExp(r'<iframe[^>]+src="([^"]+)"', caseSensitive: false).firstMatch(html);
-      if (iframeMatch != null) {
-        streamUrl = iframeMatch.group(1)!.trim();
+      final srcMatch = RegExp(r'''<source[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+      if (srcMatch != null) {
+        streamUrl = srcMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
       }
-
       if (streamUrl.isEmpty) {
-        final videoMatch = RegExp(r'''https?://[^\s<>"']+\.(?:mp4|m3u8)''', caseSensitive: false).firstMatch(html);
+        final iframeMatch = RegExp(r'''<iframe[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+        if (iframeMatch != null) {
+          streamUrl = iframeMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        }
+      }
+      if (streamUrl.isEmpty) {
+        final videoMatch = RegExp(r'''https?://[^\s<>"']+\.(?:mp4|m3u8)(?:\?[^\s<>"']*)?''', caseSensitive: false).firstMatch(html);
         if (videoMatch != null) {
-          streamUrl = videoMatch.group(0)!;
+          streamUrl = videoMatch.group(0)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
         }
       }
 
@@ -8670,7 +9136,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
       // Match post-card articles
       final articleReg = RegExp(
-        r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)="([^"]+)"[\s\S]*?<h2>([^<]+)</h2>',
+        r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<h2>([^<]+)</h2>',
         caseSensitive: false,
       );
       for (final m in articleReg.allMatches(html)) {
@@ -8712,37 +9178,49 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       }
 
       var poster = '';
-      final vPoster = RegExp(r'<video[^>]+poster="([^"]+)"', caseSensitive: false).firstMatch(html);
+      final vPoster = RegExp(r'<video[^>]+poster=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
       if (vPoster != null) {
         poster = vPoster.group(1)!.trim();
       }
       if (poster.isEmpty) {
-        final og = RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html);
+        final og = RegExp(r'<meta property="og:image" content=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
         if (og != null) poster = og.group(1)!.trim();
       }
 
       var streamUrl = '';
-      final srcMatch = RegExp(r'<source[^>]+src="([^"]+)"', caseSensitive: false).firstMatch(html);
+      final srcMatch = RegExp(r'''<source[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
       if (srcMatch != null) {
         streamUrl = srcMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
       }
       if (streamUrl.isEmpty) {
-        final dlMatch = RegExp(r'<a[^>]+href="([^"]+\.mp4[^"]*)"[^>]*class="[^"]*mlink[^"]*"', caseSensitive: false).firstMatch(html);
+        final dlMatch = RegExp(r'''<a[^>]+href=['"]([^'"]+\.(?:mp4|m3u8|mkv)[^'"]*)['"]''', caseSensitive: false).firstMatch(html);
         if (dlMatch != null) {
           streamUrl = dlMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
         }
       }
       if (streamUrl.isEmpty) {
-        final videoTag = RegExp(r'''<video[^>]+src="([^"]+)"''', caseSensitive: false).firstMatch(html);
+        final videoTag = RegExp(r'''<video[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
         if (videoTag != null) {
           streamUrl = videoTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        }
+      }
+      if (streamUrl.isEmpty) {
+        final iframeTag = RegExp(r'''<iframe[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+        if (iframeTag != null) {
+          streamUrl = iframeTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        }
+      }
+      if (streamUrl.isEmpty) {
+        final rawMediaMatch = RegExp(r'''https?://[^\s<>"']+\.(?:mp4|m3u8)(?:\?[^\s<>"']*)?''', caseSensitive: false).firstMatch(html);
+        if (rawMediaMatch != null) {
+          streamUrl = rawMediaMatch.group(0)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
         }
       }
 
       // Check if this is a series page with multiple episodes
       final episodes = <Map<String, dynamic>>[];
       final epMatches = RegExp(
-        r'<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)="([^"]+)"[\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>',
+        r'<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>',
         caseSensitive: false,
       ).allMatches(html);
 
@@ -9548,6 +10026,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                           ),
                                         ),
                                         actions: [
+                                          if (posterUrl.isNotEmpty)
+                                            TextButton.icon(
+                                              onPressed: () => _downloadImageToPublicDownloads(context, posterUrl, title: fullTitle),
+                                              icon: const Icon(Icons.download_rounded, color: Colors.greenAccent, size: 16),
+                                              label: const Text("DOWNLOAD POSTER", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                                            ),
                                           TextButton(
                                             onPressed: () => Navigator.pop(c),
                                             child: const Text("CLOSE", style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
@@ -9599,6 +10083,32 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (dialogCtx, dialogSetState) {
+            void sortEpisodesAscending() {
+              dialogSetState(() {
+                episodeItems.sort((a, b) => ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0));
+              });
+            }
+
+            void sortEpisodesDescending() {
+              dialogSetState(() {
+                episodeItems.sort((a, b) => ((b['ep_num'] as int?) ?? 0).compareTo((a['ep_num'] as int?) ?? 0));
+              });
+            }
+
+            void invertEpisodeOrder() {
+              dialogSetState(() {
+                episodeItems = episodeItems.reversed.toList();
+              });
+            }
+
+            void renumberSequentially() {
+              dialogSetState(() {
+                for (int idx = 0; idx < episodeItems.length; idx++) {
+                  episodeItems[idx]['ep_num'] = idx + 1;
+                }
+              });
+            }
+
             Future<void> performSearch() async {
               final q = searchCtrl.text.trim();
               if (q.isEmpty) return;
@@ -9616,23 +10126,43 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     if (details != null) {
                       final eps = (details['episodes'] as List<dynamic>? ?? []);
                       if (eps.isNotEmpty) {
-                        episodeItems = eps.map((e) => {
-                          'title': e['title'] ?? 'Episode ${e['episode_number']}',
-                          'url': e['episode_url'] ?? '',
-                          'poster': e['poster'] ?? details['poster'] ?? '',
-                          'ep_num': e['episode_number'] ?? '',
-                          'selected': true,
+                        episodeItems = eps.map((e) {
+                          final titleStr = (e['title'] ?? '').toString();
+                          final urlStr = (e['episode_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? int.tryParse((e['episode_number'] ?? '').toString()) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (e['poster'] ?? details['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
                         }).toList();
                       } else if ((details['stream_url'] ?? '').toString().isNotEmpty) {
                         episodeItems = [{
+                          'raw_title': details['title'] ?? 'Episode 1',
                           'title': details['title'] ?? 'Episode 1',
                           'url': q,
                           'stream_url': details['stream_url'],
-                          'poster': details['poster'] ?? '',
-                          'ep_num': '1',
+                          'poster': (details['poster'] ?? '').toString(),
+                          'ep_num': 1,
                           'selected': true,
                         }];
                       }
+                    }
+                  } else if (q.contains('hdmaal') || tab == 1) {
+                    final details = await _scrapeHdmaalDetails(q);
+                    if (details != null && (details['stream_url'] ?? '').toString().isNotEmpty) {
+                      episodeItems = [{
+                        'raw_title': details['title'] ?? 'Episode 1',
+                        'title': details['title'] ?? 'Episode 1',
+                        'url': q,
+                        'stream_url': details['stream_url'],
+                        'poster': (details['poster'] ?? '').toString(),
+                        'ep_num': _parseEpisodeNumber(details['title'] ?? '', q) ?? 1,
+                        'selected': true,
+                      }];
                     }
                   }
                 } else {
@@ -9641,55 +10171,90 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     // UFFMaal catalog search
                     final results = await _scrapeUffmaalCatalog(query: q);
                     if (results.isNotEmpty) {
-                      // Find first series or list all results
                       final seriesItem = results.firstWhere((r) => r['is_episode'] != true, orElse: () => results.first);
                       final details = await _scrapeUffmaalDetails(seriesItem['page_url'] ?? '');
                       if (details != null && (details['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
                         final eps = details['episodes'] as List<dynamic>;
-                        episodeItems = eps.map((e) => {
-                          'title': e['title'] ?? 'Episode ${e['episode_number']}',
-                          'url': e['episode_url'] ?? '',
-                          'poster': e['poster'] ?? details['poster'] ?? '',
-                          'ep_num': e['episode_number'] ?? '',
-                          'selected': true,
+                        episodeItems = eps.map((e) {
+                          final titleStr = (e['title'] ?? '').toString();
+                          final urlStr = (e['episode_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? int.tryParse((e['episode_number'] ?? '').toString()) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (e['poster'] ?? details['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
                         }).toList();
                       } else {
                         // All results as episodes
-                        episodeItems = results.map((r) => {
-                          'title': r['title'] ?? 'Episode',
-                          'url': r['page_url'] ?? '',
-                          'poster': r['poster'] ?? '',
-                          'ep_num': '',
-                          'selected': true,
+                        episodeItems = results.map((r) {
+                          final titleStr = (r['title'] ?? 'Episode').toString();
+                          final urlStr = (r['page_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (r['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
                         }).toList();
                       }
                     }
                   } else if (tab == 1) {
                     // HDMaal
                     final results = await _scrapeHdmaalSearch(q);
-                    episodeItems = results.map((r) => {
-                      'title': r['title'] ?? 'Episode',
-                      'url': r['page_url'] ?? '',
-                      'poster': r['poster'] ?? '',
-                      'ep_num': '',
-                      'selected': true,
+                    episodeItems = results.map((r) {
+                      final titleStr = (r['title'] ?? 'Episode').toString();
+                      final urlStr = (r['page_url'] ?? '').toString();
+                      final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                      return {
+                        'raw_title': titleStr,
+                        'title': titleStr,
+                        'url': urlStr,
+                        'poster': (r['poster'] ?? '').toString(),
+                        'ep_num': parsedNum,
+                        'selected': true,
+                      };
                     }).toList();
                   } else {
                     // Uncut
                     final res = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
                     if (res['status'] == 'success' && res['data']?['items'] != null) {
                       final items = res['data']['items'] as List<dynamic>;
-                      episodeItems = items.map((r) => {
-                        'title': r['title'] ?? 'Episode',
-                        'url': r['page_url'] ?? '',
-                        'poster': r['poster'] ?? '',
-                        'ep_num': '',
-                        'selected': true,
+                      episodeItems = items.map((r) {
+                        final titleStr = (r['title'] ?? 'Episode').toString();
+                        final urlStr = (r['page_url'] ?? '').toString();
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': (r['poster'] ?? '').toString(),
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
                       }).toList();
                     }
                   }
                 }
-                if (episodeItems.isEmpty) {
+
+                // If episode numbers found or missing, auto-sort ascending
+                if (episodeItems.isNotEmpty) {
+                  // If all ep_nums are equal or 1, assign sequential order
+                  final allSame = episodeItems.every((e) => e['ep_num'] == episodeItems.first['ep_num']);
+                  if (!allSame) {
+                    episodeItems.sort((a, b) => ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0));
+                  } else {
+                    for (int idx = 0; idx < episodeItems.length; idx++) {
+                      episodeItems[idx]['ep_num'] = idx + 1;
+                    }
+                  }
+                } else {
                   errorText = "No episodes found for '$q'. Try another title or paste series URL.";
                 }
               } catch (e) {
@@ -9709,6 +10274,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 return;
               }
 
+              // Sort selected items by assigned episode number
+              selectedList.sort((a, b) => ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0));
+
               dialogSetState(() {
                 isImporting = true;
                 importProgress = 0.0;
@@ -9720,45 +10288,87 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
               for (int i = 0; i < selectedList.length; i++) {
                 final item = selectedList[i];
-                final epIndex = i + 1;
+                final epNum = (item['ep_num'] as int?) ?? (i + 1);
                 final epOrder = startOrder + i;
+
+                String epName = "Episode $epNum";
+                if (namingMode == 'part') {
+                  epName = "Part $epNum";
+                } else if (namingMode == 'original') {
+                  epName = (item['raw_title'] ?? item['title'] ?? "Episode $epNum").toString();
+                }
+
                 dialogSetState(() {
-                  importStatus = "Resolving stream $epIndex of ${selectedList.length}...";
+                  importStatus = "Extracting $epName (${i + 1} of ${selectedList.length})...";
                   importProgress = (i) / selectedList.length;
                 });
 
-                String streamUrl = (item['stream_url'] ?? '').toString();
-                String poster = (item['poster'] ?? '').toString();
+                String streamUrl = (item['stream_url'] ?? '').toString().trim();
+                String poster = (item['poster'] ?? '').toString().trim();
 
                 if (streamUrl.isEmpty) {
                   final pageUrl = (item['url'] ?? '').toString();
-                  if (pageUrl.contains('uffmaal')) {
+                  if (pageUrl.contains('uffmaal') || tab == 0) {
+                    // 1. Try client scraper
                     final d = await _scrapeUffmaalDetails(pageUrl);
                     if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
-                      streamUrl = d['stream_url'].toString();
-                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString();
+                      streamUrl = d['stream_url'].toString().trim();
+                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
                     }
-                  } else if (pageUrl.contains('hdmaal')) {
+                    // 2. Fallback to server scraper if client returned empty
+                    if (streamUrl.isEmpty) {
+                      final sRes = await _adminPhpApi('extract_uffmaal_details', {'page_url': pageUrl});
+                      if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
+                        streamUrl = sRes['data']['stream_url'].toString().trim();
+                        if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
+                      }
+                    }
+                  } else if (pageUrl.contains('hdmaal') || tab == 1) {
+                    // 1. Try client scraper
                     final d = await _scrapeHdmaalDetails(pageUrl);
                     if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
-                      streamUrl = d['stream_url'].toString();
-                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString();
+                      streamUrl = d['stream_url'].toString().trim();
+                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
+                    }
+                    // 2. Fallback to server scraper
+                    if (streamUrl.isEmpty) {
+                      final sRes = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
+                      if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
+                        streamUrl = sRes['data']['stream_url'].toString().trim();
+                        if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
+                      }
                     }
                   } else {
                     final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
                     if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                      streamUrl = res['data']['stream_url'].toString();
-                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString();
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
                     }
                   }
                 }
 
+                // Small delay between requests to avoid rate limits
+                await Future.delayed(const Duration(milliseconds: 300));
+
                 if (streamUrl.isNotEmpty) {
-                  String epName = "Episode $epIndex";
-                  if (namingMode == 'part') {
-                    epName = "Part $epIndex";
-                  } else if (namingMode == 'original') {
-                    epName = (item['title'] ?? "Episode $epIndex").toString();
+                  // Clean URL spaces
+                  if (streamUrl.contains(' ')) {
+                    streamUrl = streamUrl.replaceAll(' ', '%20');
+                  }
+
+                  // Auto-upload episode poster to our server if external
+                  if (poster.isNotEmpty && !poster.contains('goprivate.fun/api/uploads')) {
+                    dialogSetState(() {
+                      importStatus = "Uploading poster for $epName to server...";
+                    });
+                    final uploadedPoster = await _uploadImageUrlToServer(
+                      poster,
+                      customTitle: '${seriesTitle}_$epName',
+                      showNotification: false,
+                    );
+                    if (uploadedPoster != null && uploadedPoster.isNotEmpty) {
+                      poster = uploadedPoster;
+                    }
                   }
 
                   episodesPayload.add({
@@ -9783,14 +10393,14 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               if (episodesPayload.isEmpty) {
                 dialogSetState(() {
                   isImporting = false;
-                  errorText = "Could not extract playable streams for any selected episode.";
+                  errorText = "Could not extract playable streams for any selected episode. Please check links or try again.";
                 });
                 return;
               }
 
               dialogSetState(() {
                 importStatus = "Saving ${episodesPayload.length} episodes to database...";
-                importProgress = 0.9;
+                importProgress = 0.95;
               });
 
               final seasonName = (currentSeason?['Session_Name'] ?? 'Season 1').toString().trim();
@@ -9848,15 +10458,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             final selectedCount = episodeItems.where((e) => e['selected'] == true).length;
 
             return Dialog(
-              backgroundColor: const Color(0xFF0F131D),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24), side: BorderSide(color: Colors.white.withOpacity(0.1))),
-              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              backgroundColor: const Color(0xFF0F121C),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
               child: Container(
                 width: MediaQuery.of(context).size.width * 0.95,
-                constraints: const BoxConstraints(maxWidth: 540, maxHeight: 680),
-                padding: const EdgeInsets.all(20),
+                height: MediaQuery.of(context).size.height * 0.88,
+                padding: const EdgeInsets.all(16),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Header
@@ -9864,24 +10472,20 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       children: [
                         Container(
                           padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFFFF8008), Color(0xFFFFC837)]),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Icon(Icons.bolt_rounded, color: Colors.black, size: 20),
+                          decoration: BoxDecoration(color: Colors.amberAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                          child: const Icon(Icons.flash_on_rounded, color: Colors.amberAccent, size: 20),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text(
-                                "⚡ Batch Import Multi Episodes",
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                              ),
+                              const Text("⚡ Batch Import Multi Episodes", style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
                               Text(
-                                "Target Season: ${(currentSeason?['Session_Name'] ?? 'Season').toString().trim()}",
-                                style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                                "Target: $seriesTitle (${currentSeason?['Session_Name'] ?? 'Season 1'})",
+                                style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -9893,7 +10497,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           ),
                       ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
 
                     // Source Tabs
                     Container(
@@ -10004,9 +10608,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
 
-                    // Naming Format & Quality Controls
+                    // Naming Format, Ordering & Quality Controls
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
@@ -10017,23 +10621,103 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("Title Naming Format:", style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 6),
                           Row(
                             children: [
-                              _buildFormatChip("Episode 1, 2...", namingMode == 'episode', () {
-                                dialogSetState(() => namingMode = 'episode');
-                              }),
-                              const SizedBox(width: 6),
-                              _buildFormatChip("Part 1, 2...", namingMode == 'part', () {
-                                dialogSetState(() => namingMode = 'part');
-                              }),
-                              const SizedBox(width: 6),
-                              _buildFormatChip("Original Titles", namingMode == 'original', () {
-                                dialogSetState(() => namingMode = 'original');
-                              }),
+                              const Text("Naming:", style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.bold)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    children: [
+                                      _buildFormatChip("Episode 1, 2...", namingMode == 'episode', () {
+                                        dialogSetState(() => namingMode = 'episode');
+                                      }),
+                                      const SizedBox(width: 6),
+                                      _buildFormatChip("Part 1, 2...", namingMode == 'part', () {
+                                        dialogSetState(() => namingMode = 'part');
+                                      }),
+                                      const SizedBox(width: 6),
+                                      _buildFormatChip("Original Titles", namingMode == 'original', () {
+                                        dialogSetState(() => namingMode = 'original');
+                                      }),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
+                          if (episodeItems.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  const Text("Order:", style: TextStyle(color: Colors.white60, fontSize: 10)),
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: isImporting ? null : sortEpisodesAscending,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.arrow_upward_rounded, color: Colors.cyanAccent, size: 12),
+                                          SizedBox(width: 2),
+                                          Text("1→N", style: TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: isImporting ? null : sortEpisodesDescending,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(color: Colors.pinkAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.arrow_downward_rounded, color: Colors.pinkAccent, size: 12),
+                                          SizedBox(width: 2),
+                                          Text("N→1", style: TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: isImporting ? null : invertEpisodeOrder,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(color: Colors.orangeAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.swap_vert_rounded, color: Colors.orangeAccent, size: 12),
+                                          SizedBox(width: 2),
+                                          Text("Invert", style: TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  GestureDetector(
+                                    onTap: isImporting ? null : renumberSequentially,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                      decoration: BoxDecoration(color: Colors.greenAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      child: const Row(
+                                        children: [
+                                          Icon(Icons.format_list_numbered_rounded, color: Colors.greenAccent, size: 12),
+                                          SizedBox(width: 2),
+                                          Text("Renumber", style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 8),
                           Row(
                             children: [
@@ -10073,19 +10757,54 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // Episodes List / Loading Status
+                    // Progress Banner when importing
                     if (isImporting) ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF181F30),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
+                        ),
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            LinearProgressIndicator(value: importProgress > 0 ? importProgress : null, backgroundColor: Colors.white12, color: Colors.amberAccent),
-                            const SizedBox(height: 12),
-                            Text(importStatus, style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
+                            Row(
+                              children: [
+                                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent)),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    importStatus,
+                                    style: const TextStyle(color: Colors.amberAccent, fontSize: 11.5, fontWeight: FontWeight.bold),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Text(
+                                  "${(importProgress * 100).toInt()}%",
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: LinearProgressIndicator(
+                                value: importProgress > 0 ? importProgress : null,
+                                backgroundColor: Colors.white12,
+                                color: Colors.amberAccent,
+                                minHeight: 5,
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                    ] else if (isSearching) ...[
+                    ],
+
+                    // Episodes List / Searching / Error Status
+                    if (isSearching) ...[
                       const Center(
                         child: Padding(
                           padding: EdgeInsets.all(24.0),
@@ -10107,38 +10826,107 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           ),
                           child: ListView.separated(
                             shrinkWrap: true,
-                            padding: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(6),
                             itemCount: episodeItems.length,
                             separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
                             itemBuilder: (c, i) {
                               final ep = episodeItems[i];
                               final isChecked = ep['selected'] == true;
                               final poster = (ep['poster'] ?? '').toString();
-                              String displayName = namingMode == 'part' ? "Part ${i + 1}" : (namingMode == 'episode' ? "Episode ${i + 1}" : ep['title']);
+                              final epNum = (ep['ep_num'] as int?) ?? (i + 1);
+                              String displayName = namingMode == 'part'
+                                  ? "Part $epNum"
+                                  : (namingMode == 'episode' ? "Episode $epNum" : (ep['raw_title'] ?? ep['title'] ?? "Episode $epNum"));
 
-                              return CheckboxListTile(
-                                value: isChecked,
-                                activeColor: Colors.amberAccent,
-                                checkColor: Colors.black,
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                                secondary: poster.isNotEmpty
-                                    ? ClipRRect(
+                              return Container(
+                                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                                child: Row(
+                                  children: [
+                                    // Checkbox
+                                    Checkbox(
+                                      value: isChecked,
+                                      activeColor: Colors.amberAccent,
+                                      checkColor: Colors.black,
+                                      visualDensity: VisualDensity.compact,
+                                      onChanged: isImporting ? null : (val) {
+                                        dialogSetState(() => ep['selected'] = val == true);
+                                      },
+                                    ),
+
+                                    // Thumbnail with long-press to download
+                                    GestureDetector(
+                                      onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: displayName) : null,
+                                      child: ClipRRect(
                                         borderRadius: BorderRadius.circular(6),
-                                        child: CachedNetworkImage(
-                                          imageUrl: poster,
-                                          width: 48,
-                                          height: 32,
-                                          fit: BoxFit.cover,
-                                          errorWidget: (cx, u, e) => const Icon(Icons.tv, color: Colors.white24, size: 20),
+                                        child: poster.isNotEmpty
+                                            ? CachedNetworkImage(
+                                                imageUrl: poster,
+                                                width: 48,
+                                                height: 34,
+                                                fit: BoxFit.cover,
+                                                errorWidget: (cx, u, e) => Container(
+                                                  width: 48,
+                                                  height: 34,
+                                                  color: Colors.white10,
+                                                  child: const Icon(Icons.tv, color: Colors.white24, size: 18),
+                                                ),
+                                              )
+                                            : Container(
+                                                width: 48,
+                                                height: 34,
+                                                color: Colors.white10,
+                                                child: const Icon(Icons.tv, color: Colors.white24, size: 18),
+                                              ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+
+                                    // Title & raw title
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          const SizedBox(height: 2),
+                                          Text(ep['raw_title'] ?? ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 9.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+
+                                    // Interactive Dropdown to assign Episode Number
+                                    Container(
+                                      height: 28,
+                                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1F2436),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.amberAccent.withOpacity(0.4), width: 0.8),
+                                      ),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<int>(
+                                          value: epNum,
+                                          dropdownColor: const Color(0xFF141722),
+                                          icon: const Icon(Icons.arrow_drop_down, color: Colors.amberAccent, size: 16),
+                                          style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                          items: List.generate(50, (index) => index + 1).map((n) {
+                                            return DropdownMenuItem<int>(
+                                              value: n,
+                                              child: Text("Ep $n", style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                            );
+                                          }).toList(),
+                                          onChanged: isImporting ? null : (val) {
+                                            if (val != null) {
+                                              dialogSetState(() {
+                                                ep['ep_num'] = val;
+                                              });
+                                            }
+                                          },
                                         ),
-                                      )
-                                    : const Icon(Icons.tv, color: Colors.white24, size: 20),
-                                title: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                                subtitle: Text(ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                onChanged: (val) {
-                                  dialogSetState(() => ep['selected'] = val == true);
-                                },
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               );
                             },
                           ),
@@ -12046,7 +12834,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   Future<void> _playDirectStream(String rawUrl, String videoTitle, {List<Map<String, dynamic>>? playlist, int episodeIndex = 0}) async {
     String finalUrl = rawUrl;
 
-    if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
+    // 1. Check Dropmms multi-host stream resolver (Streamtape, Vidara, LuluStream, VidSonic, VibeVdo)
+    final dropmmsResolved = await DropmmsService.resolveDirectStream(finalUrl);
+    if (dropmmsResolved != null && dropmmsResolved.isNotEmpty) {
+      finalUrl = dropmmsResolved;
+    } else if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
       final stRes = await StreamtapeService.getDirectStreamUrl(finalUrl);
       if (stRes != null && stRes.isNotEmpty) {
         finalUrl = stRes;
@@ -12060,17 +12852,38 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
     if (!mounted) return;
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => VideoPlayerScreen(
-          videoUrl: finalUrl,
-          videoTitle: videoTitle,
-          playlist: playlist,
-          initialEpisodeIndex: episodeIndex,
+    final isDirectMedia = finalUrl.contains('.m3u8') ||
+        finalUrl.contains('.mp4') ||
+        finalUrl.contains('tapecontent') ||
+        finalUrl.contains('/hls/') ||
+        finalUrl.contains('/hls2/') ||
+        finalUrl.contains('storage') ||
+        finalUrl.contains('blob:');
+
+    if (isDirectMedia) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VideoPlayerScreen(
+            videoUrl: finalUrl,
+            videoTitle: videoTitle,
+            playlist: playlist,
+            initialEpisodeIndex: episodeIndex,
+          ),
         ),
-      ),
-    );
+      );
+    } else {
+      // Launch in dedicated full-screen zero-ad InAppWebView player
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => WebViewPlayerScreen(
+            embedUrl: finalUrl,
+            videoTitle: videoTitle,
+          ),
+        ),
+      );
+    }
   }
 
   void _showSeriesEpisodesSheet(Map<String, dynamic> details, String fallbackTitle, String fallbackPoster) {
@@ -12272,327 +13085,461 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   void _showDropmmsPostSheet(DropmmsTopicDetails details) {
+    final selectedImages = <String>{};
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (bctx) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.88,
-          maxChildSize: 0.95,
-          minChildSize: 0.5,
-          builder: (_, scrollController) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFF121622),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(top: BorderSide(color: Color(0xFFFFB300), width: 1.5)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(top: 10, bottom: 12),
-                      width: 44,
-                      height: 5,
-                      decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
-                    ),
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return DraggableScrollableSheet(
+              initialChildSize: 0.88,
+              maxChildSize: 0.95,
+              minChildSize: 0.5,
+              builder: (_, scrollController) {
+                return Container(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF121622),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    border: Border(top: BorderSide(color: Color(0xFFFFB300), width: 1.5)),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 10, bottom: 12),
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFB300).withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: const Color(0xFFFFB300), width: 0.8),
-                              ),
-                              child: Text(
-                                details.categoryName.toUpperCase(),
-                                style: const TextStyle(color: Color(0xFFFFB300), fontSize: 10.5, fontWeight: FontWeight.bold),
-                              ),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFB300).withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: const Color(0xFFFFB300), width: 0.8),
+                                  ),
+                                  child: Text(
+                                    details.categoryName.toUpperCase(),
+                                    style: const TextStyle(color: Color(0xFFFFB300), fontSize: 10.5, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.greenAccent.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Text(
+                                    "ZERO ADS • IN-APP PLAY & DOWNLOAD",
+                                    style: TextStyle(color: Colors.greenAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                const Spacer(),
+                                IconButton(
+                                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                                  onPressed: () => Navigator.pop(bctx),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.greenAccent.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: const Text(
-                                "ZERO ADS • IN-APP PLAY & DOWNLOAD",
-                                style: TextStyle(color: Colors.greenAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
-                              ),
+                            const SizedBox(height: 8),
+                            Text(
+                              details.title,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16, height: 1.25),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
-                              onPressed: () => Navigator.pop(bctx),
+                            const SizedBox(height: 4),
+                            Text(
+                              "Posted: ${details.date} • ${details.images.length} Screenshots • ${details.videoLinks.length} Video Streams",
+                              style: const TextStyle(color: Colors.white38, fontSize: 11),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          details.title,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16, height: 1.25),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "Posted: ${details.date} • ${details.images.length} Screenshots • ${details.videoLinks.length} Video Streams",
-                          style: const TextStyle(color: Colors.white38, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Divider(color: Colors.white10, height: 1),
-                  Expanded(
-                    child: ListView(
-                      controller: scrollController,
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        // 1. Screenshots Gallery
-                        if (details.images.isNotEmpty) ...[
-                          Row(
-                            children: [
-                              const Icon(Icons.photo_library_rounded, color: Colors.cyanAccent, size: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                "PREVIEW SCREENSHOTS (${details.images.length})",
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                      ),
+                      const SizedBox(height: 12),
+                      const Divider(color: Colors.white10, height: 1),
+                      Expanded(
+                        child: ListView(
+                          controller: scrollController,
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            // 1. Screenshots Gallery with Multi-Select & Save to Gallery
+                            if (details.images.isNotEmpty) ...[
+                              Row(
+                                children: [
+                                  const Icon(Icons.photo_library_rounded, color: Colors.cyanAccent, size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    "SCREENSHOTS (${details.images.length})",
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                                  ),
+                                  const Spacer(),
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setSheetState(() {
+                                        if (selectedImages.length == details.images.length) {
+                                          selectedImages.clear();
+                                        } else {
+                                          selectedImages.addAll(details.images);
+                                        }
+                                      });
+                                    },
+                                    icon: Icon(
+                                      selectedImages.length == details.images.length ? Icons.deselect_rounded : Icons.select_all_rounded,
+                                      color: Colors.cyanAccent,
+                                      size: 15,
+                                    ),
+                                    label: Text(
+                                      selectedImages.length == details.images.length ? "Deselect All" : "Select All",
+                                      style: const TextStyle(color: Colors.cyanAccent, fontSize: 11.5, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const Spacer(),
-                              const Text("Tap image to zoom", style: TextStyle(color: Colors.white38, fontSize: 11)),
+                              const SizedBox(height: 8),
+
+                              // Multi-Select Action Bar if selected
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: selectedImages.isEmpty
+                                          ? null
+                                          : () {
+                                              DropmmsService.downloadMultipleImages(
+                                                context: context,
+                                                imageUrls: selectedImages.toList(),
+                                                postTitle: details.title,
+                                              );
+                                            },
+                                      icon: const Icon(Icons.download_for_offline_rounded, size: 16),
+                                      label: Text(
+                                        selectedImages.isEmpty ? "SELECT IMAGES TO SAVE" : "SAVE ${selectedImages.length} TO GALLERY",
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFF00E676),
+                                        foregroundColor: Colors.black,
+                                        disabledBackgroundColor: Colors.white10,
+                                        disabledForegroundColor: Colors.white30,
+                                        padding: const EdgeInsets.symmetric(vertical: 8),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton.icon(
+                                    onPressed: () {
+                                      DropmmsService.downloadMultipleImages(
+                                        context: context,
+                                        imageUrls: details.images,
+                                        postTitle: details.title,
+                                      );
+                                    },
+                                    icon: const Icon(Icons.photo_album_rounded, size: 16),
+                                    label: Text(
+                                      "SAVE ALL (${details.images.length})",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1E2638),
+                                      foregroundColor: Colors.cyanAccent,
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                        side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+
+                              // Horizontal Image Carousel with Multi-Select Toggles
+                              SizedBox(
+                                height: 145,
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: details.images.length,
+                                  itemBuilder: (context, imgIdx) {
+                                    final imgUrl = details.images[imgIdx];
+                                    final isSelected = selectedImages.contains(imgUrl);
+
+                                    return Container(
+                                      width: 115,
+                                      margin: const EdgeInsets.only(right: 10),
+                                      child: InkWell(
+                                        onTap: () => _showFullscreenImageGallery(details.images, imgIdx),
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              CachedNetworkImage(
+                                                imageUrl: imgUrl,
+                                                fit: BoxFit.cover,
+                                                errorWidget: (_, __, ___) => Container(
+                                                  color: const Color(0xFF1E2433),
+                                                  child: const Icon(Icons.broken_image_rounded, color: Colors.white24),
+                                                ),
+                                              ),
+                                              // Selection indicator border
+                                              if (isSelected)
+                                                Container(
+                                                  decoration: BoxDecoration(
+                                                    border: Border.all(color: const Color(0xFF00E676), width: 3),
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    color: const Color(0xFF00E676).withValues(alpha: 0.2),
+                                                  ),
+                                                ),
+                                              // Multi-select checkbox at top-right
+                                              Positioned(
+                                                top: 4,
+                                                right: 4,
+                                                child: GestureDetector(
+                                                  onTap: () {
+                                                    setSheetState(() {
+                                                      if (isSelected) {
+                                                        selectedImages.remove(imgUrl);
+                                                      } else {
+                                                        selectedImages.add(imgUrl);
+                                                      }
+                                                    });
+                                                  },
+                                                  child: Container(
+                                                    padding: const EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      color: isSelected ? const Color(0xFF00E676) : Colors.black54,
+                                                      border: Border.all(color: Colors.white, width: 1),
+                                                    ),
+                                                    child: Icon(
+                                                      isSelected ? Icons.check : Icons.circle_outlined,
+                                                      size: 14,
+                                                      color: isSelected ? Colors.black : Colors.white70,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              // Zoom hint at bottom-right
+                                              Positioned(
+                                                bottom: 4,
+                                                right: 4,
+                                                child: Container(
+                                                  padding: const EdgeInsets.all(3),
+                                                  decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(4)),
+                                                  child: const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 20),
                             ],
-                          ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            height: 140,
-                            child: ListView.builder(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: details.images.length,
-                              itemBuilder: (context, imgIdx) {
-                                final imgUrl = details.images[imgIdx];
+
+                            // 2. Video Streams (Zero Ads)
+                            Row(
+                              children: [
+                                const Icon(Icons.play_circle_filled_rounded, color: Color(0xFF00E676), size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "IN-APP VIDEO STREAMS (${details.videoLinks.length})",
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            if (details.videoLinks.isEmpty)
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(color: const Color(0xFF161B26), borderRadius: BorderRadius.circular(12)),
+                                child: const Text("No video streams found for this post. Check download mirrors below.", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                              )
+                            else
+                              ...details.videoLinks.map((vLink) {
                                 return Container(
-                                  width: 110,
-                                  margin: const EdgeInsets.only(right: 10),
-                                  child: InkWell(
-                                    onTap: () => _showFullscreenImageGallery(details.images, imgIdx),
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Stack(
-                                        fit: StackFit.expand,
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF161B26),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: Colors.white12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
                                         children: [
-                                          CachedNetworkImage(
-                                            imageUrl: imgUrl,
-                                            fit: BoxFit.cover,
-                                            errorWidget: (_, __, ___) => Container(
-                                              color: const Color(0xFF1E2433),
-                                              child: const Icon(Icons.broken_image_rounded, color: Colors.white24),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: (vLink.type == 'streamtape' || vLink.type == 'vidara' || vLink.type == 'luluvdo')
+                                                  ? const Color(0xFF00E676).withValues(alpha: 0.18)
+                                                  : Colors.cyanAccent.withValues(alpha: 0.18),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Text(
+                                              vLink.host.toUpperCase(),
+                                              style: TextStyle(
+                                                color: (vLink.type == 'streamtape' || vLink.type == 'vidara' || vLink.type == 'luluvdo')
+                                                    ? const Color(0xFF00E676)
+                                                    : Colors.cyanAccent,
+                                                fontSize: 10.5,
+                                                fontWeight: FontWeight.bold,
+                                              ),
                                             ),
                                           ),
-                                          Positioned(
-                                            bottom: 4,
-                                            right: 4,
-                                            child: Container(
-                                              padding: const EdgeInsets.all(3),
-                                              decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(4)),
-                                              child: const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              vLink.name,
+                                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
                                         ],
                                       ),
-                                    ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed: () {
+                                                Navigator.pop(bctx);
+                                                _playDirectStream(vLink.url, details.title);
+                                              },
+                                              icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                                              label: const Text("PLAY IN-APP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFF00E676),
+                                                foregroundColor: Colors.black,
+                                                padding: const EdgeInsets.symmetric(vertical: 9),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: ElevatedButton.icon(
+                                              onPressed: () {
+                                                DropmmsService.downloadInApp(
+                                                  context: context,
+                                                  rawUrl: vLink.url,
+                                                  defaultFileName: "${details.title}_${vLink.host}.mp4",
+                                                );
+                                              },
+                                              icon: const Icon(Icons.download_rounded, size: 16),
+                                              label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFF1E2638),
+                                                foregroundColor: Colors.cyanAccent,
+                                                padding: const EdgeInsets.symmetric(vertical: 9),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                 );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                        ],
+                              }),
 
-                        // 2. Video Streams (Zero Ads)
-                        Row(
-                          children: [
-                            const Icon(Icons.play_circle_filled_rounded, color: Color(0xFF00E676), size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              "IN-APP VIDEO STREAMS (${details.videoLinks.length})",
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        if (details.videoLinks.isEmpty)
-                          Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(color: const Color(0xFF161B26), borderRadius: BorderRadius.circular(12)),
-                            child: const Text("No video streams found for this post. Check download mirrors below.", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                          )
-                        else
-                          ...details.videoLinks.map((vLink) {
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B26),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: Colors.white12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            const SizedBox(height: 16),
+
+                            // 3. Download Mirrors
+                            if (details.downloadLinks.isNotEmpty) ...[
+                              Row(
                                 children: [
-                                  Row(
+                                  const Icon(Icons.cloud_download_rounded, color: Colors.amberAccent, size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    "DOWNLOAD MIRRORS (${details.downloadLinks.length})",
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              ...details.downloadLinks.map((dl) {
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF161B26),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: Row(
                                     children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: vLink.type == 'streamtape' ? const Color(0xFF00E676).withValues(alpha: 0.18) : Colors.cyanAccent.withValues(alpha: 0.18),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Text(
-                                          vLink.host.toUpperCase(),
-                                          style: TextStyle(
-                                            color: vLink.type == 'streamtape' ? const Color(0xFF00E676) : Colors.cyanAccent,
-                                            fontSize: 10.5,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
+                                      const Icon(Icons.insert_drive_file_outlined, color: Colors.amberAccent, size: 16),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          vLink.name,
-                                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                          dl.name,
+                                          style: const TextStyle(color: Colors.white70, fontSize: 12),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: ElevatedButton.icon(
-                                          onPressed: () {
-                                            Navigator.pop(bctx);
-                                            _playDirectStream(vLink.url, details.title);
-                                          },
-                                          icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                                          label: const Text("PLAY IN-APP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(0xFF00E676),
-                                            foregroundColor: Colors.black,
-                                            padding: const EdgeInsets.symmetric(vertical: 9),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                          ),
-                                        ),
+                                      TextButton.icon(
+                                        onPressed: () {
+                                          DropmmsService.downloadInApp(
+                                            context: context,
+                                            rawUrl: dl.url,
+                                            defaultFileName: "${details.title}_${dl.host}.mp4",
+                                          );
+                                        },
+                                        icon: const Icon(Icons.download_rounded, size: 14),
+                                        label: const Text("Download", style: TextStyle(fontSize: 11)),
+                                        style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
                                       ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: ElevatedButton.icon(
-                                          onPressed: () {
-                                            DropmmsService.downloadInApp(
-                                              context: context,
-                                              rawUrl: vLink.url,
-                                              defaultFileName: "${details.title}_${vLink.host}.mp4",
-                                            );
-                                          },
-                                          icon: const Icon(Icons.download_rounded, size: 16),
-                                          label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor: const Color(0xFF1E2638),
-                                            foregroundColor: Colors.cyanAccent,
-                                            padding: const EdgeInsets.symmetric(vertical: 9),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
-                                          ),
-                                        ),
+                                      IconButton(
+                                        icon: const Icon(Icons.copy_rounded, color: Colors.white38, size: 16),
+                                        tooltip: "Copy Link",
+                                        onPressed: () {
+                                          Clipboard.setData(ClipboardData(text: dl.url));
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Download link copied to clipboard")),
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
-                                ],
-                              ),
-                            );
-                          }),
-
-                        const SizedBox(height: 16),
-
-                        // 3. Download Mirrors
-                        if (details.downloadLinks.isNotEmpty) ...[
-                          Row(
-                            children: [
-                              const Icon(Icons.cloud_download_rounded, color: Colors.amberAccent, size: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                "DOWNLOAD MIRRORS (${details.downloadLinks.length})",
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
-                              ),
+                                );
+                              }),
                             ],
-                          ),
-                          const SizedBox(height: 10),
-                          ...details.downloadLinks.map((dl) {
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF161B26),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.white10),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.insert_drive_file_outlined, color: Colors.amberAccent, size: 16),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      dl.name,
-                                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: () {
-                                      DropmmsService.downloadInApp(
-                                        context: context,
-                                        rawUrl: dl.url,
-                                        defaultFileName: "${details.title}_${dl.host}.mp4",
-                                      );
-                                    },
-                                    icon: const Icon(Icons.download_rounded, size: 14),
-                                    label: const Text("Download", style: TextStyle(fontSize: 11)),
-                                    style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.copy_rounded, color: Colors.white38, size: 16),
-                                    tooltip: "Copy Link",
-                                    onPressed: () {
-                                      Clipboard.setData(ClipboardData(text: dl.url));
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text("Download link copied to clipboard")),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            );
-                          }),
-                        ],
-                      ],
-                    ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             );
           },
         );
@@ -12659,13 +13606,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           const Spacer(),
                           IconButton(
                             icon: const Icon(Icons.download_rounded, color: Colors.cyanAccent, size: 24),
-                            tooltip: "Save Image",
+                            tooltip: "Save to Gallery",
                             onPressed: () {
                               final imgUrl = images[currentIdx];
-                              DropmmsService.downloadInApp(
+                              DropmmsService.downloadMultipleImages(
                                 context: context,
-                                rawUrl: imgUrl,
-                                defaultFileName: "dropmms_image_${currentIdx + 1}.jpg",
+                                imageUrls: [imgUrl],
+                                postTitle: "DropMMS_Image_${currentIdx + 1}",
                               );
                             },
                           ),
@@ -12721,33 +13668,43 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 6,
+                          runSpacing: 2,
                           children: [
-                            const Text("⚡ EXTRACTOR CINEMA", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.8)),
-                            const SizedBox(width: 8),
+                            const Text("⚡ EXTRACTOR CINEMA", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13.5, letterSpacing: 0.5)),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                               decoration: BoxDecoration(color: Colors.greenAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(4)),
-                              child: const Text("ZERO ADS", style: TextStyle(color: Colors.greenAccent, fontSize: 9.5, fontWeight: FontWeight.bold)),
+                              child: const Text("ZERO ADS", style: TextStyle(color: Colors.greenAccent, fontSize: 8.5, fontWeight: FontWeight.bold)),
                             ),
                           ],
                         ),
+                        const SizedBox(height: 2),
                         Text(
                           "Direct live browser • ${activeSource['name']} (${activeSource['domain']})",
-                          style: const TextStyle(color: Colors.white60, fontSize: 11),
+                          style: const TextStyle(color: Colors.white60, fontSize: 10.5),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
                   // Layout Toggle (Landscape 16:9 vs Portrait)
                   IconButton(
-                    icon: Icon(_cinemaLandscape ? Icons.view_agenda_rounded : Icons.grid_view_rounded, color: Colors.cyanAccent),
+                    icon: Icon(_cinemaLandscape ? Icons.view_agenda_rounded : Icons.grid_view_rounded, color: Colors.cyanAccent, size: 20),
                     tooltip: _cinemaLandscape ? "Switch to Portrait Grid" : "Switch to Landscape Cards",
+                    padding: const EdgeInsets.all(6),
+                    constraints: const BoxConstraints(),
                     onPressed: () => setState(() => _cinemaLandscape = !_cinemaLandscape),
                   ),
+                  const SizedBox(width: 4),
                   IconButton(
-                    icon: const Icon(Icons.refresh_rounded, color: Colors.amberAccent),
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.amberAccent, size: 20),
                     tooltip: "Reload Catalog",
+                    padding: const EdgeInsets.all(6),
+                    constraints: const BoxConstraints(),
                     onPressed: () => _loadCinemaCatalog(resetPage: true),
                   ),
                 ],
@@ -12815,6 +13772,35 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
               // DropMMS Subcategory Chips (when DropMMS is selected)
               if (_cinemaSource == 6) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const DropmmsBrowserScreen(initialUrl: 'https://dropmms.co/'),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.public_rounded, size: 18, color: Colors.black),
+                        label: const Text(
+                          "⚡ OPEN AD-FREE FORUM BROWSER (FAST EXTRACTOR)",
+                          style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11.5),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00E676),
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          elevation: 4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -13214,6 +14200,558 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           ),
         );
       },
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 🚀 TELEGRAM CHANNEL BROADCAST STUDIO (AUTO POSTER + MERGED COLLAGE + DEEP LINK)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> _sendTelegramBroadcast({
+    required Uint8List posterBytes,
+    Uint8List? collageBytes,
+    required String caption,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final botToken = _tgBotTokenCtrl.text.trim().isNotEmpty
+        ? _tgBotTokenCtrl.text.trim()
+        : (prefs.getString('tg_bot_token') ?? '');
+    final channelId = _tgChannelIdCtrl.text.trim().isNotEmpty
+        ? _tgChannelIdCtrl.text.trim()
+        : (prefs.getString('tg_channel_id') ?? '');
+
+    if (botToken.isEmpty || channelId.isEmpty) {
+      return {
+        'success': false,
+        'message': 'Please configure Telegram Bot Token and Channel ID in Settings or Broadcast dialog first.'
+      };
+    }
+
+    try {
+      if (collageBytes != null && collageBytes.isNotEmpty) {
+        final uri = Uri.parse("https://api.telegram.org/bot$botToken/sendMediaGroup");
+        final request = http.MultipartRequest('POST', uri);
+        request.fields['chat_id'] = channelId;
+
+        final mediaPayload = [
+          {
+            'type': 'photo',
+            'media': 'attach://poster.png',
+            'caption': caption,
+            'parse_mode': 'HTML',
+          },
+          {
+            'type': 'photo',
+            'media': 'attach://collage.png',
+          },
+        ];
+
+        request.fields['media'] = jsonEncode(mediaPayload);
+        request.files.add(http.MultipartFile.fromBytes('poster.png', posterBytes, filename: 'poster.png'));
+        request.files.add(http.MultipartFile.fromBytes('collage.png', collageBytes, filename: 'collage.png'));
+
+        final streamed = await request.send().timeout(const Duration(seconds: 35));
+        final response = await http.Response.fromStream(streamed);
+
+        if (response.statusCode == 200) {
+          final resJson = jsonDecode(response.body);
+          if (resJson['ok'] == true) {
+            return {'success': true, 'data': resJson};
+          }
+        }
+        return {'success': false, 'message': 'Telegram API error: ${response.body}'};
+      } else {
+        final uri = Uri.parse("https://api.telegram.org/bot$botToken/sendPhoto");
+        final request = http.MultipartRequest('POST', uri);
+        request.fields['chat_id'] = channelId;
+        request.fields['caption'] = caption;
+        request.fields['parse_mode'] = 'HTML';
+        request.files.add(http.MultipartFile.fromBytes('photo', posterBytes, filename: 'poster.png'));
+
+        final streamed = await request.send().timeout(const Duration(seconds: 35));
+        final response = await http.Response.fromStream(streamed);
+
+        if (response.statusCode == 200) {
+          final resJson = jsonDecode(response.body);
+          if (resJson['ok'] == true) {
+            return {'success': true, 'data': resJson};
+          }
+        }
+        return {'success': false, 'message': 'Telegram API error: ${response.body}'};
+      }
+    } catch (e) {
+      return {'success': false, 'message': 'Broadcast error: $e'};
+    }
+  }
+
+  void _showTelegramBroadcastDialog({
+    required int contentId,
+    required String title,
+    required String itemType,
+    required String posterUrl,
+    String? ottName,
+    String? quality,
+    List<dynamic>? episodes,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return _TelegramBroadcastModal(
+          contentId: contentId,
+          title: title,
+          itemType: itemType,
+          posterUrl: posterUrl,
+          ottName: ottName,
+          quality: quality ?? '720p HD',
+          episodes: episodes,
+          defaultTemplate: _tgCaptionTemplateCtrl.text,
+          botTokenCtrl: _tgBotTokenCtrl,
+          channelIdCtrl: _tgChannelIdCtrl,
+          onBroadcast: (posterB, collageB, caption) => _sendTelegramBroadcast(
+            posterBytes: posterB,
+            collageBytes: collageB,
+            caption: caption,
+          ),
+        );
+      },
+    );
+  }
+
+  String _getOttOrGenreName(Map<String, dynamic> item) {
+    String rawName = '';
+    if (item['network_name'] != null && item['network_name'].toString().trim().isNotEmpty) {
+      rawName = item['network_name'].toString().trim();
+    } else if (item['genre_name'] != null && item['genre_name'].toString().trim().isNotEmpty) {
+      rawName = item['genre_name'].toString().trim();
+    } else if (item['ott_name'] != null && item['ott_name'].toString().trim().isNotEmpty) {
+      rawName = item['ott_name'].toString().trim();
+    } else if (item['network'] != null && item['network'].toString().trim().isNotEmpty) {
+      rawName = item['network'].toString().trim();
+    } else if (item['genres'] != null) {
+      if (item['genres'] is List && (item['genres'] as List).isNotEmpty) {
+        final first = (item['genres'] as List).first;
+        if (first is Map && first['name'] != null) {
+          rawName = first['name'].toString().trim();
+        } else {
+          final idStr = first.toString();
+          for (final g in _genres) {
+            if (g['id']?.toString() == idStr && g['name'] != null) {
+              rawName = g['name'].toString().trim();
+              break;
+            }
+          }
+          if (rawName.isEmpty) {
+            for (final g in _ottGenres) {
+              if (g['id']?.toString() == idStr && g['name'] != null) {
+                rawName = g['name'].toString().trim();
+                break;
+              }
+            }
+          }
+        }
+      } else if (item['genres'] is String && (item['genres'] as String).trim().isNotEmpty) {
+        final gStr = (item['genres'] as String).trim();
+        final parts = gStr.split(',');
+        for (final p in parts) {
+          final trimmed = p.trim();
+          for (final g in _genres) {
+            if (g['id']?.toString() == trimmed && g['name'] != null) {
+              rawName = g['name'].toString().trim();
+              break;
+            }
+          }
+          if (rawName.isNotEmpty) break;
+        }
+        if (rawName.isEmpty) rawName = gStr;
+      }
+    }
+
+    if (rawName.isEmpty && item['network_id'] != null) {
+      final netId = item['network_id'].toString();
+      for (final c in _cast) {
+        if (c['id']?.toString() == netId && c['name'] != null) {
+          rawName = c['name'].toString().trim();
+          break;
+        }
+      }
+      if (rawName.isEmpty) {
+        for (final c in _castNetworks) {
+          if (c['id']?.toString() == netId && c['name'] != null) {
+            rawName = c['name'].toString().trim();
+            break;
+          }
+        }
+      }
+    }
+
+    return rawName.toUpperCase();
+  }
+
+  // 22. Telegram Channel Studio View
+  final _tgStudioSearchCtrl = TextEditingController();
+  String _tgStudioFilter = 'all';
+  String _tgStudioOttFilter = 'all';
+
+  Widget _buildTelegramStudioView() {
+    final allItems = <Map<String, dynamic>>[];
+    final ottNamesSet = <String>{};
+
+    for (final s in _series) {
+      final ott = _getOttOrGenreName(s);
+      if (ott.isNotEmpty) ottNamesSet.add(ott);
+      allItems.add({
+        'id': s['id'],
+        'name': s['name'] ?? '',
+        'poster': s['poster'] ?? '',
+        'type': 'series',
+        'ott_name': ott,
+        'quality': s['quality'] ?? '720p HD',
+        'episodes': s['seasons'] != null && (s['seasons'] as List).isNotEmpty ? s['seasons'][0]['episodes'] : null,
+      });
+    }
+
+    for (final m in _movies) {
+      final ott = _getOttOrGenreName(m);
+      if (ott.isNotEmpty) ottNamesSet.add(ott);
+      allItems.add({
+        'id': m['id'],
+        'name': m['name'] ?? '',
+        'poster': m['poster'] ?? '',
+        'type': 'movie',
+        'ott_name': ott,
+        'quality': m['quality'] ?? '1080p FHD',
+        'episodes': null,
+      });
+    }
+
+    // Also add any known OTT platforms from taxonomy
+    for (final g in _genres) {
+      if (g['name'] != null && g['name'].toString().trim().isNotEmpty) {
+        ottNamesSet.add(g['name'].toString().trim());
+      }
+    }
+
+    final query = _tgStudioSearchCtrl.text.trim().toLowerCase();
+    final filtered = allItems.where((item) {
+      if (_tgStudioFilter == 'movie' && item['type'] != 'movie') return false;
+      if (_tgStudioFilter == 'series' && item['type'] != 'series') return false;
+      if (_tgStudioOttFilter != 'all' && item['ott_name'] != _tgStudioOttFilter) return false;
+      if (query.isNotEmpty) {
+        final name = (item['name'] ?? '').toString().toLowerCase();
+        final ott = (item['ott_name'] ?? '').toString().toLowerCase();
+        if (!name.contains(query) && !ott.contains(query)) return false;
+      }
+      return true;
+    }).toList();
+
+    final sortedOttList = ottNamesSet.toList()..sort();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Banner
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF1E2638), Color(0xFF10141F)]),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF229ED9).withOpacity(0.35)),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF229ED9).withOpacity(0.12), blurRadius: 16, offset: const Offset(0, 4)),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF229ED9).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "✈️ Telegram Channel Studio",
+                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _tgChannelIdCtrl.text.isNotEmpty
+                            ? "Channel: ${_tgChannelIdCtrl.text} • Fast Auto-Poster & Deep Link"
+                            : "Configure your Bot Token & Channel in Settings to auto-publish",
+                        style: const TextStyle(color: Colors.white60, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.settings_suggest_rounded, color: Colors.cyanAccent),
+                  tooltip: "Bot Settings",
+                  onPressed: () => setState(() => _selectedIndex = 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Search & Filter Bar
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141722),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: TextField(
+                    controller: _tgStudioSearchCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: const InputDecoration(
+                      hintText: "Search title or OTT...",
+                      hintStyle: TextStyle(color: Colors.white38, fontSize: 11),
+                      prefixIcon: Icon(Icons.search_rounded, color: Color(0xFF229ED9), size: 18),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Type Filter
+              Container(
+                height: 42,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141722),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: DropdownButton<String>(
+                  value: _tgStudioFilter,
+                  dropdownColor: const Color(0xFF141722),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Color(0xFF229ED9), fontSize: 11, fontWeight: FontWeight.bold),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text("All Type")),
+                    DropdownMenuItem(value: 'series', child: Text("Series")),
+                    DropdownMenuItem(value: 'movie', child: Text("Movies")),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _tgStudioFilter = v);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              // OTT Platform Filter
+              Container(
+                height: 42,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141722),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: DropdownButton<String>(
+                  value: _tgStudioOttFilter,
+                  dropdownColor: const Color(0xFF141722),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                  items: [
+                    const DropdownMenuItem(value: 'all', child: Text("All OTT")),
+                    ...sortedOttList.map((ott) => DropdownMenuItem(
+                          value: ott,
+                          child: Text(ott, overflow: TextOverflow.ellipsis),
+                        )),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _tgStudioOttFilter = v);
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Total Items Counter
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Found ${filtered.length} items",
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                if (query.isNotEmpty || _tgStudioFilter != 'all' || _tgStudioOttFilter != 'all')
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _tgStudioSearchCtrl.clear();
+                        _tgStudioFilter = 'all';
+                        _tgStudioOttFilter = 'all';
+                      });
+                    },
+                    child: const Text("Clear Filters", style: TextStyle(color: Color(0xFF229ED9), fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Content List with Lazy ListView.builder (0ms rendering lag)
+          Expanded(
+            child: filtered.isEmpty
+                ? _emptyBox("No matching content found. Search another title or select 'All OTT'.")
+                : ListView.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) {
+                      final item = filtered[i];
+                      final id = item['id'] as int? ?? 0;
+                      final name = item['name'].toString();
+                      final poster = item['poster'].toString();
+                      final type = item['type'].toString();
+                      final ott = item['ott_name']?.toString() ?? '';
+                      final quality = item['quality']?.toString() ?? '720p HD';
+
+                      return Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF161B28),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.06)),
+                        ),
+                        child: Row(
+                          children: [
+                            // Poster with Long Press Download
+                            GestureDetector(
+                              onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: name) : null,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: poster.isNotEmpty
+                                    ? CachedNetworkImage(
+                                        imageUrl: poster,
+                                        width: 48,
+                                        height: 68,
+                                        fit: BoxFit.cover,
+                                        errorWidget: (_, __, ___) => Container(
+                                          width: 48,
+                                          height: 68,
+                                          color: Colors.white10,
+                                          child: const Icon(Icons.broken_image, color: Colors.white24, size: 18),
+                                        ),
+                                      )
+                                    : Container(
+                                        width: 48,
+                                        height: 68,
+                                        color: Colors.white10,
+                                        child: const Icon(Icons.movie, color: Colors.white24, size: 18),
+                                      ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    name,
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: type == 'movie' ? Colors.cyanAccent.withOpacity(0.15) : Colors.amberAccent.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          type.toUpperCase(),
+                                          style: TextStyle(
+                                            color: type == 'movie' ? Colors.cyanAccent : Colors.amberAccent,
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      if (ott.isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: Colors.purpleAccent.withOpacity(0.15),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            ott,
+                                            style: const TextStyle(
+                                              color: Colors.purpleAccent,
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    "redapp://watch?type=$type&id=$id",
+                                    style: const TextStyle(color: Colors.white30, fontSize: 9.5, fontFamily: 'monospace'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                _showTelegramBroadcastDialog(
+                                  contentId: id,
+                                  title: name,
+                                  itemType: type,
+                                  posterUrl: poster,
+                                  ottName: ott,
+                                  quality: quality,
+                                  episodes: item['episodes'],
+                                );
+                              },
+                              icon: const Icon(Icons.send_rounded, size: 13, color: Colors.white),
+                              label: const Text("POST", style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF229ED9),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                elevation: 2,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -14105,6 +15643,1237 @@ class _MovieRepairDialogState extends State<_MovieRepairDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📱 TELEGRAM BROADCAST INTERACTIVE STUDIO MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TelegramBroadcastModal extends StatefulWidget {
+  final int contentId;
+  final String title;
+  final String itemType;
+  final String posterUrl;
+  final String? ottName;
+  final String quality;
+  final List<dynamic>? episodes;
+  final String defaultTemplate;
+  final TextEditingController botTokenCtrl;
+  final TextEditingController channelIdCtrl;
+  final Future<Map<String, dynamic>> Function(Uint8List posterBytes, Uint8List? collageBytes, String caption) onBroadcast;
+
+  const _TelegramBroadcastModal({
+    Key? key,
+    required this.contentId,
+    required this.title,
+    required this.itemType,
+    required this.posterUrl,
+    this.ottName,
+    required this.quality,
+    this.episodes,
+    required this.defaultTemplate,
+    required this.botTokenCtrl,
+    required this.channelIdCtrl,
+    required this.onBroadcast,
+  }) : super(key: key);
+
+  @override
+  State<_TelegramBroadcastModal> createState() => _TelegramBroadcastModalState();
+}
+
+class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
+  int _tab = 0; // 0 = Episodes, 1 = SkymoviesHD, 2 = UffMaal / HDMaal / Uncut, 3 = Web Grabber
+  late TextEditingController _captionCtrl;
+  final _skymoviesSearchCtrl = TextEditingController();
+  final _uncutSearchCtrl = TextEditingController();
+
+  Uint8List? _posterBytes;
+  Uint8List? _collageBytes;
+  bool _loadingPoster = true;
+  bool _generatingCollage = false;
+
+  // Skymovies search state
+  bool _searchingSkymovies = false;
+  List<SkymoviesEntry> _skymoviesEntries = [];
+  SkymoviesEntry? _selectedSkymoviesEntry;
+
+  // UffMaal / HDMaal / Uncut search state
+  int _uncutSource = 0; // 0=UffMaal 1=HDMaal 2=Uncut
+  bool _searchingUncut = false;
+  List<UffmaalItem> _uncutEntries = [];
+  UffmaalItem? _selectedUncutEntry;
+
+  // Screenshot Pool & Selection
+  List<String> _availableScreenshots = [];
+  bool _loadingScreenshots = false;
+  final Set<String> _selectedScreenshotUrls = {};
+
+  bool _isBroadcasting = false;
+  String? _broadcastError;
+
+  static const String _cfWorkerUrl = 'https://redwatch.infinityredchillies.workers.dev';
+
+  @override
+  void initState() {
+    super.initState();
+    _skymoviesSearchCtrl.text = widget.title;
+    _uncutSearchCtrl.text = widget.title;
+
+    if (widget.episodes != null && widget.episodes!.isNotEmpty) {
+      _tab = 0; // Default to Episodes
+    } else {
+      _tab = 1; // Default to SkymoviesHD
+    }
+
+    _captionCtrl = TextEditingController(text: _generateCaptionText());
+
+    _initMedia();
+  }
+
+  String _getWatchLink() {
+    return "$_cfWorkerUrl/watch?type=${widget.itemType}&id=${widget.contentId}";
+  }
+
+  String _generateCaptionText() {
+    final watchLink = _getWatchLink();
+    final ottRaw = (widget.ottName != null && widget.ottName!.trim().isNotEmpty && widget.ottName != 'OTT' && widget.ottName != 'Movie' && widget.ottName != 'Web Series')
+        ? widget.ottName!.trim()
+        : '';
+    final ottText = ottRaw.toUpperCase();
+    final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
+    final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
+
+    var defaultTemplate = widget.defaultTemplate.trim();
+    if (defaultTemplate.isEmpty || !defaultTemplate.contains('<b>')) {
+      defaultTemplate = "🎬 <b>{title}</b>{ott_bracket} Reuploaded on App ✅\n{ott_line}\n⚡ <b>Quality:</b> {quality}\n\n🍿 <b><a href=\"{link}\">Watch Online on App</a></b>";
+    } else {
+      // Remove any duplicate plain link
+      defaultTemplate = defaultTemplate.replaceAll(RegExp(r'\n*👉\s*\{link\}'), '');
+    }
+
+    return defaultTemplate
+        .replaceAll('{title}', widget.title)
+        .replaceAll('{ott_bracket}', ottHeader)
+        .replaceAll('{ott_line}', ottLine)
+        .replaceAll('{ott}', ottText.isNotEmpty ? ottText : 'OTT')
+        .replaceAll('{quality}', widget.quality)
+        .replaceAll('{link}', watchLink)
+        .replaceAll('{id}', widget.contentId.toString());
+  }
+
+  Future<void> _initMedia() async {
+    // 1. Fetch poster bytes in memory
+    if (widget.posterUrl.isNotEmpty) {
+      final b = await TelegramCollageHelper.fetchImageBytes(widget.posterUrl);
+      if (mounted) setState(() { _posterBytes = b; _loadingPoster = false; });
+    } else {
+      if (mounted) setState(() => _loadingPoster = false);
+    }
+
+    // 2. Load Episode screenshots pool if available
+    if (widget.episodes != null && widget.episodes!.isNotEmpty) {
+      final epList = <String>[];
+      for (final ep in widget.episodes!) {
+        final img = (ep['episoade_image'] ?? ep['poster'] ?? '').toString().trim();
+        if (img.isNotEmpty) {
+          epList.add(img);
+        }
+      }
+      _availableScreenshots = epList;
+      _selectedScreenshotUrls.clear();
+      _selectedScreenshotUrls.addAll(epList.take(4));
+      if (_selectedScreenshotUrls.isNotEmpty) {
+        _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+      }
+    }
+    // Do NOT auto-search — user will press the Find button manually
+  }
+
+  Future<void> _searchSkymovies() async {
+    final q = _skymoviesSearchCtrl.text.trim();
+    if (q.isEmpty) return;
+    setState(() {
+      _searchingSkymovies = true;
+      _skymoviesEntries = [];
+    });
+    try {
+      final res = await SkymoviesScraper.search(q);
+      if (mounted) {
+        setState(() {
+          _skymoviesEntries = res;
+          _searchingSkymovies = false;
+          // Do NOT auto-select — user picks from poster grid
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _searchingSkymovies = false);
+    }
+  }
+
+  Future<void> _selectSkymoviesEntry(SkymoviesEntry entry) async {
+    setState(() {
+      _selectedSkymoviesEntry = entry;
+      _loadingScreenshots = true;
+    });
+
+    final shots = await SkymoviesScraper.fetchScreenshots(entry.pageUrl);
+    if (!mounted) return;
+
+    setState(() {
+      _loadingScreenshots = false;
+      _availableScreenshots = shots;
+      _selectedScreenshotUrls.clear();
+      // Let user pick manually — no auto-selection
+    });
+  }
+
+  Future<void> _searchUncut() async {
+    final q = _uncutSearchCtrl.text.trim();
+    if (q.isEmpty) return;
+    setState(() {
+      _searchingUncut = true;
+      _uncutEntries = [];
+      _selectedUncutEntry = null;
+      _availableScreenshots = [];
+      _selectedScreenshotUrls.clear();
+    });
+    try {
+      final sourceKey = ['uffmaal', 'hdmaal', 'uncut'][_uncutSource.clamp(0, 2)];
+      final res = await UffmaalScraper.search(q, sourceKey);
+      if (mounted) {
+        setState(() {
+          _uncutEntries = res;
+          _searchingUncut = false;
+          // Do NOT auto-select — user picks from poster grid
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _searchingUncut = false);
+    }
+  }
+
+  Future<void> _selectUncutEntry(UffmaalItem item) async {
+    setState(() {
+      _selectedUncutEntry = item;
+      _loadingScreenshots = true;
+      _availableScreenshots = [];
+      _selectedScreenshotUrls.clear();
+    });
+
+    final imgList = await UffmaalScraper.fetchPageImages(item.pageUrl);
+    if (!mounted) return;
+
+    final finalList = imgList.isNotEmpty
+        ? imgList
+        : (item.poster.isNotEmpty ? [item.poster] : <String>[]);
+
+    setState(() {
+      _loadingScreenshots = false;
+      _availableScreenshots = finalList;
+      _selectedScreenshotUrls.clear();
+      // Let user pick manually — no auto-selection
+    });
+  }
+
+  void _toggleScreenshotSelection(String url) {
+    setState(() {
+      if (_selectedScreenshotUrls.contains(url)) {
+        _selectedScreenshotUrls.remove(url);
+      } else {
+        if (_selectedScreenshotUrls.length >= 4) {
+          _selectedScreenshotUrls.remove(_selectedScreenshotUrls.first);
+        }
+        _selectedScreenshotUrls.add(url);
+      }
+    });
+    _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+  }
+
+  Future<void> _generateCollageFromUrls(List<String> urls) async {
+    if (urls.isEmpty) {
+      if (mounted) setState(() { _collageBytes = null; _generatingCollage = false; });
+      return;
+    }
+    setState(() => _generatingCollage = true);
+
+    final byteList = <Uint8List>[];
+    for (final u in urls) {
+      final b = await TelegramCollageHelper.fetchImageBytes(u);
+      if (b != null) byteList.add(b);
+    }
+
+    if (byteList.isNotEmpty) {
+      final composite = await TelegramCollageHelper.createCollage(imagesBytes: byteList);
+      if (mounted) {
+        setState(() {
+          _collageBytes = composite;
+          _generatingCollage = false;
+        });
+      }
+    } else {
+      if (mounted) setState(() => _generatingCollage = false);
+    }
+  }
+
+  void _openWebImageGrabber() {
+    final searchTerms = "${widget.title} ${widget.ottName ?? ''} screenshots scene";
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF10141F),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.85,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF141722),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.travel_explore_rounded, color: Colors.cyanAccent, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text("Web Screenshot Grabber", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _GoogleImagesWebView(
+                  query: searchTerms,
+                  onImageSelected: (url) async {
+                    Navigator.pop(ctx);
+                    if (url.isNotEmpty) {
+                      setState(() {
+                        if (!_availableScreenshots.contains(url)) {
+                          _availableScreenshots.insert(0, url);
+                        }
+                        if (_selectedScreenshotUrls.length >= 4) {
+                          _selectedScreenshotUrls.remove(_selectedScreenshotUrls.first);
+                        }
+                        _selectedScreenshotUrls.add(url);
+                      });
+                      await _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleBroadcast() async {
+    if (_posterBytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Poster is still loading or missing!"), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() {
+      _isBroadcasting = true;
+      _broadcastError = null;
+    });
+
+    final res = await widget.onBroadcast(
+      _posterBytes!,
+      _collageBytes,
+      _captionCtrl.text.trim(),
+    );
+
+    if (!mounted) return;
+
+    if (res['success'] == true) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: Colors.greenAccent),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "🚀 Successfully published to Telegram Channel!",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Color(0xFF101B2E),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    } else {
+      setState(() {
+        _isBroadcasting = false;
+        _broadcastError = res['message'] ?? 'Unknown error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final watchLink = "https://red.goprivate.fun/watch?type=${widget.itemType}&id=${widget.contentId}";
+    final ottText = (widget.ottName != null && widget.ottName!.trim().isNotEmpty && widget.ottName != 'OTT' && widget.ottName != 'Movie' && widget.ottName != 'Web Series')
+        ? widget.ottName!.trim()
+        : '';
+    final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
+    final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
+
+    return Dialog(
+      backgroundColor: const Color(0xFF10141F),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: const Color(0xFF229ED9).withOpacity(0.3))),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.94,
+          maxWidth: 600,
+        ),
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          children: [
+            // Header Bar
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(color: const Color(0xFF229ED9).withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 18),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("🚀 Telegram Studio Broadcaster", style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      Text(
+                        "${widget.title} (${widget.itemType.toUpperCase()})",
+                        style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                  onPressed: _isBroadcasting ? null : () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const Divider(color: Colors.white12, height: 14),
+
+            // Main Content Area (Scrollable)
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 1. Live Visual Telegram Simulator Card (UNZOOMED 4-QUADRANT VIEW)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161B28),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.visibility_rounded, color: Color(0xFF229ED9), size: 14),
+                              SizedBox(width: 6),
+                              Expanded(
+                                child: Text("Live Album Preview (Photo 1 Poster + Photo 2 Full 4-Scene Collage)",
+                                  style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.bold),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Image Previews (Side by Side: Poster + Full 4-Scene Merged Collage)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Photo 1: Portrait Poster
+                              Expanded(
+                                flex: 4,
+                                child: AspectRatio(
+                                  aspectRatio: 2 / 3,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0F121C),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: Colors.cyanAccent.withOpacity(0.4)),
+                                    ),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: _loadingPoster
+                                        ? const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent))
+                                        : _posterBytes != null
+                                            ? Image.memory(_posterBytes!, fit: BoxFit.cover)
+                                            : const Center(child: Icon(Icons.broken_image, color: Colors.white24)),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+
+                              // Photo 2: Full 4-Scene Merged Collage (100% visible, uncropped)
+                              Expanded(
+                                flex: 6,
+                                child: AspectRatio(
+                                  aspectRatio: 16 / 10,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0A0D14),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+                                    ),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: _generatingCollage
+                                        ? const Center(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                                                SizedBox(height: 6),
+                                                Text("Stitching 4 Scenes in RAM…", style: TextStyle(color: Colors.amberAccent, fontSize: 10)),
+                                              ],
+                                            ),
+                                          )
+                                        : _collageBytes != null
+                                            ? Image.memory(_collageBytes!, fit: BoxFit.contain)
+                                            : Center(
+                                                child: Padding(
+                                                  padding: const EdgeInsets.all(6.0),
+                                                  child: Column(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      const Icon(Icons.grid_view_rounded, color: Colors.white24, size: 22),
+                                                      const SizedBox(height: 4),
+                                                      const Text("Select 4 scenes below", style: TextStyle(color: Colors.white38, fontSize: 9.5)),
+                                                      const SizedBox(height: 4),
+                                                      ElevatedButton(
+                                                        onPressed: _openWebImageGrabber,
+                                                        style: ElevatedButton.styleFrom(
+                                                          backgroundColor: const Color(0xFF229ED9),
+                                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                                          minimumSize: Size.zero,
+                                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                        ),
+                                                        child: const Text("Web Grabber", style: TextStyle(fontSize: 9.5)),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Deep Link Badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.greenAccent.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.link_rounded, color: Colors.greenAccent, size: 13),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    "Deep Link: $watchLink",
+                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 9.5, fontFamily: 'monospace'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // 2. Source Selector Tabs (Episodes, SkymoviesHD, UffMaal/HDMaal, Web Grabber)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          if (widget.episodes != null && widget.episodes!.isNotEmpty) ...[
+                            _tabBtn(0, "🎬 Episodes (${widget.episodes!.length})", Colors.purpleAccent),
+                            const SizedBox(width: 6),
+                          ],
+                          _tabBtn(1, "🎥 SkymoviesHD", const Color(0xFF229ED9)),
+                          const SizedBox(width: 6),
+                          _tabBtn(2, "🔥 UffMaal / HDMaal / Uncut", Colors.deepOrangeAccent),
+                          const SizedBox(width: 6),
+                          _tabBtn(3, "🌐 Web Grabber", Colors.cyanAccent),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Tab Body
+                    if (_tab == 0) ...[
+                      // Episodes Source
+                      const Text("Select 2 to 4 Episode Screenshots for Collage:", style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      _buildScreenshotGrid(),
+                    ] else if (_tab == 1) ...[
+                      // SkymoviesHD Search & Part Results
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              height: 38,
+                              decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white12)),
+                              child: TextField(
+                                controller: _skymoviesSearchCtrl,
+                                style: const TextStyle(color: Colors.white, fontSize: 11),
+                                decoration: const InputDecoration(
+                                  hintText: "Search title on SkymoviesHD...",
+                                  hintStyle: TextStyle(color: Colors.white30, fontSize: 10.5),
+                                  prefixIcon: Icon(Icons.search_rounded, color: Color(0xFF229ED9), size: 16),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                ),
+                                onSubmitted: (_) => _searchSkymovies(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ElevatedButton(
+                            onPressed: _searchingSkymovies ? null : _searchSkymovies,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF229ED9),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _searchingSkymovies
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Text("Find", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      if (_skymoviesEntries.isNotEmpty) ...[
+                        Text("${_skymoviesEntries.length} Results — Tap a Card to Load Screenshots:",
+                            style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        // Landscape Card Grid
+                        SizedBox(
+                          height: 100,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _skymoviesEntries.length,
+                            itemBuilder: (ctx, i) {
+                              final e = _skymoviesEntries[i];
+                              final isSel = _selectedSkymoviesEntry?.pageUrl == e.pageUrl;
+                              return GestureDetector(
+                                onTap: () => _selectSkymoviesEntry(e),
+                                child: Container(
+                                  width: 150,
+                                  margin: const EdgeInsets.only(right: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF141722),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSel ? const Color(0xFF229ED9) : Colors.white12,
+                                      width: isSel ? 2 : 1,
+                                    ),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Stack(
+                                    children: [
+                                      // Thumbnail
+                                      Positioned.fill(
+                                        child: e.poster.isNotEmpty
+                                            ? Image.network(
+                                                e.poster,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, __, ___) => Container(
+                                                  color: const Color(0xFF0F121C),
+                                                  child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 28),
+                                                ),
+                                              )
+                                            : Container(
+                                                color: const Color(0xFF0F121C),
+                                                child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 28),
+                                              ),
+                                      ),
+                                      // Title overlay at bottom
+                                      Positioned(
+                                        left: 0, right: 0, bottom: 0,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                                            ),
+                                          ),
+                                          child: Text(
+                                            e.title,
+                                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w600),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ),
+                                      // Selected badge
+                                      if (isSel)
+                                        Positioned(
+                                          top: 4, right: 4,
+                                          child: Container(
+                                            padding: const EdgeInsets.all(2),
+                                            decoration: const BoxDecoration(color: Color(0xFF229ED9), shape: BoxShape.circle),
+                                            child: const Icon(Icons.check_rounded, color: Colors.white, size: 10),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ] else if (!_searchingSkymovies && _skymoviesSearchCtrl.text.trim().isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search_off_rounded, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Text("No results found. Try a shorter title.", style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+
+                      if (_loadingScreenshots)
+                        const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: Center(child: CircularProgressIndicator(color: Color(0xFF229ED9), strokeWidth: 2)),
+                        )
+                      else if (_availableScreenshots.isNotEmpty) ...[
+                        Text("Tap to Select 4 Screenshots (${_selectedScreenshotUrls.length}/4 selected):",
+                            style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        _buildScreenshotGrid(),
+                      ] else if (_selectedSkymoviesEntry != null && !_loadingScreenshots) ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.broken_image_outlined, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Expanded(child: Text("No screenshots found on this page. Try another result.", style: TextStyle(color: Colors.white38, fontSize: 10))),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ] else if (_tab == 2) ...[
+
+                      // Source sub-tabs: UffMaal / HDMaal / Uncut
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _sourceSubBtn(0, 'UffMaal', Colors.deepOrangeAccent),
+                            const SizedBox(width: 6),
+                            _sourceSubBtn(1, 'HDMaal', Colors.purpleAccent),
+                            const SizedBox(width: 6),
+                            _sourceSubBtn(2, 'Uncut', Colors.pinkAccent),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Search bar + button
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF141722),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: TextField(
+                                controller: _uncutSearchCtrl,
+                                style: const TextStyle(color: Colors.white, fontSize: 11),
+                                decoration: const InputDecoration(
+                                  hintText: "Search title...",
+                                  hintStyle: TextStyle(color: Colors.white30, fontSize: 10.5),
+                                  prefixIcon: Icon(Icons.search_rounded, color: Colors.deepOrangeAccent, size: 16),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                ),
+                                onSubmitted: (_) => _searchUncut(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ElevatedButton(
+                            onPressed: _searchingUncut ? null : _searchUncut,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.deepOrangeAccent,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _searchingUncut
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Text("Find", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      if (_uncutEntries.isNotEmpty) ...[
+                        Text("${_uncutEntries.length} Results — Tap a Card to Load Screenshots:",
+                            style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        // Landscape Card Grid
+                        SizedBox(
+                          height: 100,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _uncutEntries.length,
+                            itemBuilder: (ctx, i) {
+                              final e = _uncutEntries[i];
+                              final isSel = _selectedUncutEntry?.pageUrl == e.pageUrl;
+                              final accentCol = [Colors.deepOrangeAccent, Colors.purpleAccent, Colors.pinkAccent][_uncutSource.clamp(0, 2)];
+                              return GestureDetector(
+                                onTap: () => _selectUncutEntry(e),
+                                child: Container(
+                                  width: 150,
+                                  margin: const EdgeInsets.only(right: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF141722),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSel ? accentCol : Colors.white12,
+                                      width: isSel ? 2 : 1,
+                                    ),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Stack(
+                                    children: [
+                                      Positioned.fill(
+                                        child: e.poster.isNotEmpty
+                                            ? Image.network(
+                                                e.poster,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (_, __, ___) => Container(
+                                                  color: const Color(0xFF0F121C),
+                                                  child: const Icon(Icons.local_fire_department_rounded, color: Colors.white24, size: 28),
+                                                ),
+                                              )
+                                            : Container(
+                                                color: const Color(0xFF0F121C),
+                                                child: const Icon(Icons.local_fire_department_rounded, color: Colors.white24, size: 28),
+                                              ),
+                                      ),
+                                      Positioned(
+                                        left: 0, right: 0, bottom: 0,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                                            ),
+                                          ),
+                                          child: Text(
+                                            e.title,
+                                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w600),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isSel)
+                                        Positioned(
+                                          top: 4, right: 4,
+                                          child: Container(
+                                            padding: const EdgeInsets.all(2),
+                                            decoration: BoxDecoration(color: accentCol, shape: BoxShape.circle),
+                                            child: const Icon(Icons.check_rounded, color: Colors.white, size: 10),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ] else if (!_searchingUncut && _uncutSearchCtrl.text.trim().isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search_off_rounded, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Text("No results found. Try a shorter title.", style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+
+                      if (_loadingScreenshots)
+                        const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: Center(child: CircularProgressIndicator(color: Colors.deepOrangeAccent, strokeWidth: 2)),
+                        )
+                      else if (_availableScreenshots.isNotEmpty) ...[
+                        Text("Tap to Select 4 Screenshots (${_selectedScreenshotUrls.length}/4 selected):",
+                            style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        _buildScreenshotGrid(),
+                      ] else if (_selectedUncutEntry != null && !_loadingScreenshots) ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.broken_image_outlined, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Expanded(child: Text("No screenshots found. Try another result or use Web Grabber.", style: TextStyle(color: Colors.white38, fontSize: 10))),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                    ] else ...[
+                      // Web Grabber Tab
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.cyanAccent.withOpacity(0.3))),
+                        child: Column(
+                          children: [
+                            const Icon(Icons.travel_explore_rounded, color: Colors.cyanAccent, size: 32),
+                            const SizedBox(height: 8),
+                            const Text("Browse & Grab Any Web Screenshot", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                            const SizedBox(height: 4),
+                            const Text("Search Google Images / web pages in real-time and tap any scene to add it to your 4-photo collage.",
+                                textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 10.5)),
+                            const SizedBox(height: 10),
+                            ElevatedButton.icon(
+                              onPressed: _openWebImageGrabber,
+                              icon: const Icon(Icons.travel_explore_rounded, size: 16),
+                              label: const Text("Open Web Image Grabber", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 14),
+
+                    // 3. Caption Template
+                    const Text("Post Caption Editor (HTML Supported):", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141722),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: TextField(
+                        controller: _captionCtrl,
+                        maxLines: 5,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.all(10),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+
+                    // Quick Action Tag Chips
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _quickTag("🎬 Bold Reupload Template", () {
+                            final wLink = _getWatchLink();
+                            final ottText = (widget.ottName != null && widget.ottName!.trim().isNotEmpty && widget.ottName != 'OTT' && widget.ottName != 'Movie' && widget.ottName != 'Web Series') ? widget.ottName!.trim() : '';
+                            final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
+                            final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
+                            _captionCtrl.text = "🎬 <b>${widget.title}</b>$ottHeader Reuploaded on App ✅$ottLine\n⚡ <b>Quality:</b> ${widget.quality}\n\n🍿 <b><a href=\"$wLink\">Watch Online on App</a></b>\n👉 $wLink";
+                            setState(() {});
+                          }),
+                          const SizedBox(width: 6),
+                          _quickTag("🔥 Newly Added Today", () {
+                            final wLink = _getWatchLink();
+                            final ottText = (widget.ottName != null && widget.ottName!.trim().isNotEmpty && widget.ottName != 'OTT' && widget.ottName != 'Movie' && widget.ottName != 'Web Series') ? widget.ottName!.trim() : '';
+                            final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
+                            final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
+                            _captionCtrl.text = "🔥 <b>Newly Added Today:</b> <b>${widget.title}</b>$ottHeader$ottLine\n⚡ <b>Quality:</b> ${widget.quality}\n\n🍿 <b><a href=\"$wLink\">Watch Online on App</a></b>\n👉 $wLink";
+                            setState(() {});
+                          }),
+                          const SizedBox(width: 6),
+                          _quickTag("🔞 Uncut Edition", () {
+                            final wLink = _getWatchLink();
+                            final ottText = (widget.ottName != null && widget.ottName!.trim().isNotEmpty && widget.ottName != 'OTT' && widget.ottName != 'Movie' && widget.ottName != 'Web Series') ? widget.ottName!.trim() : '';
+                            final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
+                            final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
+                            _captionCtrl.text = "🔞 <b>Uncut Edition:</b> <b>${widget.title}</b>$ottHeader [Full HD]$ottLine\n⚡ <b>Quality:</b> ${widget.quality}\n\n🍿 <b><a href=\"$wLink\">Watch Online on App</a></b>\n👉 $wLink";
+                            setState(() {});
+                          }),
+                        ],
+                      ),
+                    ),
+
+                    if (_broadcastError != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _broadcastError!,
+                        style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const Divider(color: Colors.white12, height: 16),
+
+            // Bottom Broadcast Button
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _isBroadcasting ? null : () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white24),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text("Cancel", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _isBroadcasting ? null : _handleBroadcast,
+                    icon: _isBroadcasting
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.send_rounded, size: 16, color: Colors.white),
+                    label: Text(
+                      _isBroadcasting ? "Publishing to Channel..." : "POST TO TELEGRAM",
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF229ED9),
+                      elevation: 4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildScreenshotGrid() {
+    if (_availableScreenshots.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(8.0),
+        child: Text("No screenshots available.", style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+      );
+    }
+
+    return SizedBox(
+      height: 95,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _availableScreenshots.length,
+        itemBuilder: (ctx, i) {
+          final url = _availableScreenshots[i];
+          final isSel = _selectedScreenshotUrls.contains(url);
+          return GestureDetector(
+            onTap: () => _toggleScreenshotSelection(url),
+            child: Container(
+              width: 160,
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isSel ? Colors.amberAccent : Colors.white12,
+                  width: isSel ? 2.5 : 1,
+                ),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: CachedNetworkImage(
+                      imageUrl: url,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => Container(color: const Color(0xFF141722), child: const Icon(Icons.broken_image, color: Colors.white24, size: 16)),
+                    ),
+                  ),
+                  if (isSel)
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.35),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: isSel ? Colors.amberAccent : Colors.black54,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isSel ? Icons.check : Icons.add,
+                        size: 14,
+                        color: isSel ? Colors.black : Colors.white70,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _tabBtn(int index, String title, Color color) {
+    final isSel = _tab == index;
+    return GestureDetector(
+      onTap: () {
+        setState(() => _tab = index);
+        if (index == 0 && widget.episodes != null && widget.episodes!.isNotEmpty) {
+          _availableScreenshots = widget.episodes!.map((e) => (e['episoade_image'] ?? e['poster'] ?? '').toString()).where((s) => s.isNotEmpty).toList();
+          _selectedScreenshotUrls.clear();
+          _selectedScreenshotUrls.addAll(_availableScreenshots.take(4));
+          _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSel ? color.withOpacity(0.2) : const Color(0xFF161B28),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSel ? color : Colors.white12),
+        ),
+        child: Text(
+          title,
+          style: TextStyle(
+            color: isSel ? color : Colors.white54,
+            fontSize: 11,
+            fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Sub-source selector chip for the UffMaal / HDMaal / Uncut tab.
+  Widget _sourceSubBtn(int index, String label, Color color) {
+    final isSel = _uncutSource == index;
+    return GestureDetector(
+      onTap: () {
+        if (_uncutSource != index) {
+          setState(() {
+            _uncutSource = index;
+            // Clear results when switching source
+            _uncutEntries = [];
+            _selectedUncutEntry = null;
+            _availableScreenshots = [];
+            _selectedScreenshotUrls.clear();
+            _collageBytes = null;
+          });
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSel ? color.withOpacity(0.22) : const Color(0xFF141722),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSel ? color : Colors.white12, width: isSel ? 1.5 : 1),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSel ? color : Colors.white38,
+            fontSize: 10.5,
+            fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _quickTag(String text, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 10)),
       ),
     );
   }

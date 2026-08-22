@@ -7,6 +7,7 @@ import 'models/user_model.dart';
 import 'services/api_service.dart';
 import 'services/dns_proxy.dart';
 import 'services/streamtape_service.dart';
+import 'services/deep_link_service.dart';
 import 'themes/theme_manager.dart';
 import 'screens/auth/login_register_screen.dart';
 import 'screens/splash_screen.dart';
@@ -49,13 +50,16 @@ void main() async {
   Timer.periodic(const Duration(seconds: 45), (timer) {
     try {
       final user = AppSession.user;
-      if (user != null && user.id != null && user.id! > 0) {
-        ApiService.sendHeartbeat(user.id!, 'browsing');
+      if (user != null && user.id > 0) {
+        ApiService.sendHeartbeat(user.id, 'browsing');
       }
     } catch (_) {}
   });
 
   final themeManager = DetailsThemeManager();
+
+  // Initialize Deep Link Service for redapp:// custom scheme
+  DeepLinkService.init(navigatorKey);
 
   runApp(
     ChangeNotifierProvider<DetailsThemeManager>.value(

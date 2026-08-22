@@ -26,40 +26,6 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Red App uses the local network to stream video content inside the app.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Red App needs access to your photo library to save downloaded videos.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Red App needs permission to save downloaded videos to your photo library.</string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneClassName</key>
-					<string>UIWindowScene</string>
-					<key>UISceneConfigurationName</key>
-					<string>flutter</string>
-					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
-				</dict>
-			</array>
-		</dict>
-	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -78,6 +44,66 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<key>io.flutter.embedded_views_preview</key>
+	<true/>
+
+	<!-- Network & Media Security for Stream playback and backend mirrors -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
+
+	<!-- Privacy Permissions for Profile & Media Downloads -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Red App requires access to your photo library to select profile pictures and save media.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Red App needs permission to save downloaded videos to your Photos gallery.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Red App needs camera access to take profile photos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Red App does not record audio; this is required by underlying media playback frameworks.</string>
+
+	<!-- Document and File Access (Files App visibility for downloads) -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!-- Background Modes for audio & streaming playback -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>fetch</string>
+	</array>
+
+	<!-- External Link & Telegram Scheme Support -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tg</string>
+		<string>telegram</string>
+		<string>https</string>
+		<string>http</string>
+	</array>
+
+	<!-- URL Types for redapp:// Custom Scheme -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.redapp.ott.redApp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>redapp</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
