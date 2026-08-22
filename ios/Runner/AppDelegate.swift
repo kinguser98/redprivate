@@ -3,7 +3,7 @@ import UIKit
 import AVFoundation
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate {
   private let DEEPLINK_CHANNEL = "com.red.app/deeplink"
   private var initialDeepLink: String? = nil
   private var deepLinkChannel: FlutterMethodChannel? = nil
@@ -12,6 +12,8 @@ import AVFoundation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    GeneratedPluginRegistrant.register(with: self)
+
     // Configure background audio session for video player and PiP
     do {
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
@@ -25,27 +27,24 @@ import AVFoundation
       initialDeepLink = url.absoluteString
     }
 
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
-
-  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    
-    // Register Deep Link Channel
-    deepLinkChannel = FlutterMethodChannel(
-      name: DEEPLINK_CHANNEL,
-      binaryMessenger: engineBridge.pluginRegistry.registrar(forPlugin: "DeepLinkPlugin").messenger()
-    )
-    
-    deepLinkChannel?.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
-      if call.method == "getInitialLink" {
-        let link = self?.initialDeepLink
-        self?.initialDeepLink = nil
-        result(link)
-      } else {
-        result(FlutterMethodNotImplemented)
+    if let controller = window?.rootViewController as? FlutterViewController {
+      deepLinkChannel = FlutterMethodChannel(
+        name: DEEPLINK_CHANNEL,
+        binaryMessenger: controller.binaryMessenger
+      )
+      
+      deepLinkChannel?.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+        if call.method == "getInitialLink" {
+          let link = self?.initialDeepLink
+          self?.initialDeepLink = nil
+          result(link)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
       }
     }
+
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   // Handle Custom Scheme URLs (redapp://watch?id=...)
@@ -60,7 +59,7 @@ import AVFoundation
     } else {
       initialDeepLink = urlString
     }
-    return true
+    return super.application(app, open: url, options: options)
   }
 
   // Handle Universal Links (https://redwatch.infinityredchillies.workers.dev/...)
@@ -78,6 +77,6 @@ import AVFoundation
       }
       return true
     }
-    return false
+    return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
   }
 }
