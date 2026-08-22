@@ -497,15 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     borderRadius: BorderRadius.circular(12),
                                     onTap: () {
                                       Navigator.pop(ctx);
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => DetailsScreen(
-                                            contentId: itemId,
-                                            itemType: itemType,
-                                          ),
-                                        ),
-                                      );
+                                      navigateToContent(context, itemId, itemType);
                                     },
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

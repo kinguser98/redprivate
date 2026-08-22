@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../screens/navigation_helper.dart';
 import '../screens/details_screen.dart';
+import '../screens/web_series_detail_screen.dart';
 
 class DeepLinkService {
   static const MethodChannel _channel = MethodChannel('com.red.app/deeplink');
@@ -80,11 +82,19 @@ class DeepLinkService {
       final int id = parsedData['id'];
       final String type = parsedData['type'];
 
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => DetailsScreen(contentId: id, itemType: type),
-        ),
-      );
+      if (type == 'series' || type == '2') {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => WebSeriesDetailScreen(contentId: id),
+          ),
+        );
+      } else {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DetailsScreen(contentId: id, itemType: type),
+          ),
+        );
+      }
     } catch (e) {
       print("DeepLink navigate error: $e");
     }
