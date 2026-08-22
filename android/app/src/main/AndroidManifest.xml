@@ -32,19 +32,42 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Custom Scheme Deep Linking for Telegram & Direct Sharing -->
+
+            <!-- Custom Scheme Deep Linking (redapp://watch?id=... or redapp://...) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="redapp" android:host="watch" />
+                <data android:scheme="redapp" />
             </intent-filter>
-            <!-- Web HTTPS Deep Linking for Telegram (renders as fully clickable blue link) -->
-            <intent-filter>
+
+            <!-- Cloudflare Worker Deep Links (e.g. redwatch.infinityredchillies.workers.dev) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="redwatch.infinityredchillies.workers.dev" />
+                <data android:scheme="http" android:host="redwatch.infinityredchillies.workers.dev" />
+            </intent-filter>
+
+            <!-- Web HTTPS Deep Linking for red.goprivate.fun -->
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="red.goprivate.fun" />
+                <data android:scheme="http" android:host="red.goprivate.fun" />
+            </intent-filter>
+
+            <!-- Web HTTPS Deep Linking for ott.redapp.space & redapp.space -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ott.redapp.space" />
+                <data android:scheme="http" android:host="ott.redapp.space" />
+                <data android:scheme="https" android:host="redapp.space" />
+                <data android:scheme="http" android:host="redapp.space" />
             </intent-filter>
         </activity>
         <meta-data

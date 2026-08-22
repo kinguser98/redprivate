@@ -90,5 +90,20 @@
 		<string>https</string>
 		<string>http</string>
 	</array>
+
+	<!-- URL Types for redapp:// Custom Scheme -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.redapp.ott.redApp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>redapp</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -5,6 +5,7 @@ import 'all_movies_series_screen.dart';
 import 'settings_screen.dart';
 import '../widgets/update_dialog.dart';
 import '../services/api_service.dart';
+import '../services/deep_link_service.dart';
 import '../config/api_config.dart';
 
 class MainLayoutScreen extends StatefulWidget {
@@ -23,6 +24,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdates();
+      DeepLinkService.onAppReady(context);
     });
   }
 

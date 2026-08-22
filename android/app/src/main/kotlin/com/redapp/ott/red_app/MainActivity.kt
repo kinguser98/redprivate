@@ -2,7 +2,9 @@ package com.redapp.ott.red_app
 
 import android.app.PictureInPictureParams
 import android.content.ContentValues
+import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Rational
@@ -15,9 +17,39 @@ import java.io.FileInputStream
 class MainActivity : FlutterActivity() {
     private val PIP_CHANNEL = "com.red.app/pip"
     private val SAVE_CHANNEL = "com.red.app/save"
+    private val DEEPLINK_CHANNEL = "com.red.app/deeplink"
+
+    private var initialDeepLink: String? = null
+    private var deepLinkChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        intent?.dataString?.let { link ->
+            initialDeepLink = link
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.dataString?.let { link ->
+            deepLinkChannel?.invokeMethod("onLink", link)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        deepLinkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEEPLINK_CHANNEL)
+        deepLinkChannel?.setMethodCallHandler { call, result ->
+            if (call.method == "getInitialLink") {
+                val link = initialDeepLink
+                initialDeepLink = null
+                result.success(link)
+            } else {
+                result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PIP_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "enterPip") {

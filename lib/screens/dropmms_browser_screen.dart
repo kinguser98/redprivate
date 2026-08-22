@@ -20,22 +20,29 @@ class DropmmsBrowserScreen extends StatefulWidget {
 class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
   InAppWebViewController? _webViewController;
   bool _isLoading = false;
-  String _currentUrl = '';
+  String _currentUrl = 'https://dropmms.co/';
+  String _currentTitle = 'DropMMS Forum';
+  bool _isTopicPage = false;
   DropmmsTopicDetails? _currentTopicDetails;
-  String _pageTitle = 'DropMMS';
-  String _filterQuery = '';
+
+  final List<String> _history = [];
+  int _historyIndex = -1;
+  final Set<String> _selectedImages = {};
 
   @override
   void initState() {
     super.initState();
     _currentUrl = widget.initialUrl;
+    _history.add(_currentUrl);
+    _historyIndex = 0;
   }
 
-  Future<void> _fetchAndParseHtml(String url) async {
+  Future<void> _loadUrlWithDoH(String url, {bool addToHistory = true}) async {
     if (!mounted) return;
     setState(() {
       _isLoading = true;
       _currentUrl = url;
+      _isTopicPage = url.contains('/topic/');
     });
 
     try {

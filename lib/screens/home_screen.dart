@@ -47,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _errorMessage;
   List<MovieModel> _heroSlider = [];
   List<dynamic> _castData = [];
+  List<MovieModel> _newlyAdded = [];
   List<dynamic> _continuePlaying = [];
   List<MovieModel> _top10Popular = [];
   List<MovieModel> _weeklyTrending = [];

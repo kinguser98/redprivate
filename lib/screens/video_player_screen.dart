@@ -55,6 +55,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _buffering = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  bool _isSeeking = false;
   double? _dragValue;
   int _lastSavedMs = 0;
   Timer? _statsTimer;

@@ -19,6 +19,7 @@ class WebViewPlayerScreen extends StatefulWidget {
 
 class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _isLoading = true;
+  InAppWebViewController? _webViewController;
 
   @override
   void initState() {
