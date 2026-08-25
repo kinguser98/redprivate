@@ -742,11 +742,30 @@ class DownloadManager {
 
     if (combined.contains('uncutmasti') || combined.contains('ixifile')) {
       request.headers['Referer'] = 'https://uncutmasti.com/';
-    } else if (combined.contains('hdmaal') || combined.contains('skymovies')) {
+      request.headers['Origin'] = 'https://uncutmasti.com';
+    } else if (combined.contains('maal') || combined.contains('uffmaal') || combined.contains('azmaal') || combined.contains('bmaal') || combined.contains('pmaal') || combined.contains('hmaal')) {
+      request.headers['Referer'] = 'https://uffmaal.com/';
+      request.headers['Origin'] = 'https://uffmaal.com';
+    } else if (combined.contains('hdmaal') || combined.contains('maalcdn')) {
       request.headers['Referer'] = 'https://hdmaal.gg/';
+      request.headers['Origin'] = 'https://hdmaal.gg';
+    } else if (combined.contains('skymovies')) {
+      request.headers['Referer'] = 'https://skymovieshd.ceo/';
     } else if (combined.contains('luluvdo') || combined.contains('lulustream') || combined.contains('tnmr') || combined.contains('lulucdn')) {
       request.headers['Referer'] = 'https://luluvdo.com/';
       request.headers['Origin'] = 'https://luluvdo.com';
+    } else if (combined.contains('merivo') || combined.contains('vidara')) {
+      request.headers['Referer'] = 'https://merivo.fit/';
+      request.headers['Origin'] = 'https://merivo.fit';
+    } else if (combined.contains('vibevdo')) {
+      request.headers['Referer'] = 'https://vibevdo.xyz/';
+      request.headers['Origin'] = 'https://vibevdo.xyz';
+    } else if (combined.contains('vidsonic')) {
+      request.headers['Referer'] = 'https://vidsonic.net/';
+      request.headers['Origin'] = 'https://vidsonic.net';
+    } else if (combined.contains('dropmms')) {
+      request.headers['Referer'] = 'https://dropmms.co/';
+      request.headers['Origin'] = 'https://dropmms.co';
     } else if (combined.contains('xhamster') || combined.contains('xhvid') || combined.contains('xh.video') || combined.contains('xhcdn') || combined.contains('xhpingcdn') || combined.contains('xhamster46')) {
       request.headers['Referer'] = 'https://xhamster.com/';
       request.headers['Origin'] = 'https://xhamster.com';

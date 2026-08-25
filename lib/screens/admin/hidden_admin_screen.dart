@@ -1,3 +1,4 @@
+import '../extractor_telegram_dialog.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1027,6 +1028,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         dynamic currentSeason;
         List<dynamic> currentEpisodes = [];
 
+        Set<int> selectedEpisodeIds = {};
+        bool isBulkDeletingEpisodes = false;
+
         return StatefulBuilder(
           builder: (ctx, setModalState) {
             Future<void> refresh() async {
@@ -1524,18 +1528,51 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     final url = epUrlCtrl.text.trim();
                                     if (url.isEmpty) return;
                                     setDlgState(() => checkingEpLink = true);
-                                    final res = await _adminPhpApi('check_link', {'url': url});
-                                    setDlgState(() => checkingEpLink = false);
-                                    if (res['status'] == 'success') {
-                                      final ok = res['data']?['ok'] == true;
-                                      final code = res['data']?['code'] ?? 0;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(ok ? "Link is LIVE (HTTP $code)" : "Link is DEAD / Failed (HTTP $code)"),
-                                          backgroundColor: ok ? Colors.green : Colors.red,
-                                        ),
-                                      );
+                                    bool isLive = false;
+                                    int statusCode = 0;
+                                    try {
+                                      // 1. Direct client probe with anti-hotlink headers
+                                      final lower = url.toLowerCase();
+                                      String referer = 'https://www.google.com/';
+                                      if (lower.contains('uffmaal') || lower.contains('azmaal') || lower.contains('bmaal') || lower.contains('pmaal')) {
+                                        referer = 'https://uffmaal.com/';
+                                      } else if (lower.contains('hdmaal') || lower.contains('maalcdn')) {
+                                        referer = 'https://hdmaal.gg/';
+                                      } else if (lower.contains('uncut') || lower.contains('ixifile')) {
+                                        referer = 'https://uncutmasti.com/';
+                                      } else if (lower.contains('skymovies')) {
+                                        referer = 'https://skymovieshd.ceo/';
+                                      } else if (lower.contains('aagmaal')) {
+                                        referer = 'https://aagmaal.mba/';
+                                      } else if (lower.contains('streamtape') || lower.contains('advtpe')) {
+                                        referer = 'https://streamtape.com/';
+                                      }
+                                      
+                                      final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
+                                      final req = await client.getUrl(Uri.parse(url)).timeout(const Duration(seconds: 8));
+                                      req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+                                      req.headers.set('Referer', referer);
+                                      req.headers.set('Origin', referer.replaceAll(RegExp(r'/$'), ''));
+                                      req.headers.set('Range', 'bytes=0-0');
+                                      final resp = await req.close();
+                                      statusCode = resp.statusCode;
+                                      isLive = (statusCode >= 200 && statusCode < 400) || statusCode == 416 || statusCode == 403;
+                                      client.close();
+                                    } catch (_) {
+                                      // Fallback to backend API
+                                      final res = await _adminPhpApi('check_link', {'url': url});
+                                      if (res['status'] == 'success') {
+                                        isLive = res['data']?['ok'] == true;
+                                        statusCode = res['data']?['code'] ?? 0;
+                                      }
                                     }
+                                    setDlgState(() => checkingEpLink = false);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(isLive ? "Link is LIVE (HTTP $statusCode)" : "Link is DEAD / Failed (HTTP $statusCode)"),
+                                        backgroundColor: isLive ? Colors.green : Colors.red,
+                                      ),
+                                    );
                                   },
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: Colors.cyanAccent,
@@ -1692,7 +1729,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 ),
               );
               if (ok == true) {
-                final res = await _adminPhpApi('delete_episode', {'id': ep['id']});
+                final res = await _adminPhpApi('delete_episode', {'id': ep['id'], 'episode_id': ep['id']});
                 if (res['status'] == 'success') {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text("Episode deleted!"), backgroundColor: Colors.green),
@@ -1703,6 +1740,48 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     SnackBar(content: Text("Failed: ${res['message'] ?? 'Unknown error'}"), backgroundColor: Colors.red),
                   );
                 }
+              }
+            }
+
+            // ── Bulk delete selected episodes ──
+            Future<void> confirmDeleteSelectedEpisodes() async {
+              if (selectedEpisodeIds.isEmpty) return;
+              final count = selectedEpisodeIds.length;
+              final ok = await showDialog<bool>(
+                context: ctx,
+                builder: (dctx) => AlertDialog(
+                  backgroundColor: const Color(0xFF1A2132),
+                  surfaceTintColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: Colors.white.withOpacity(0.08))),
+                  title: const Text("Delete Selected Episodes?", style: TextStyle(color: Colors.white)),
+                  content: Text(
+                    "Are you sure you want to delete $count selected episode${count > 1 ? 's' : ''}?",
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+                    TextButton(onPressed: () => Navigator.pop(dctx, true), child: const Text("Delete All", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold))),
+                  ],
+                ),
+              );
+
+              if (ok == true) {
+                setModalState(() => isBulkDeletingEpisodes = true);
+                int deleted = 0;
+                for (final epId in selectedEpisodeIds.toList()) {
+                  try {
+                    final res = await _adminPhpApi('delete_episode', {'id': epId, 'episode_id': epId});
+                    if (res['status'] == 'success') deleted++;
+                  } catch (_) {}
+                }
+                setModalState(() {
+                  selectedEpisodeIds.clear();
+                  isBulkDeletingEpisodes = false;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("$deleted of $count episodes deleted!"), backgroundColor: Colors.green),
+                );
+                await refresh();
               }
             }
 
@@ -7073,7 +7152,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final _tgBotTokenCtrl = TextEditingController();
   final _tgChannelIdCtrl = TextEditingController();
   final _tgCaptionTemplateCtrl = TextEditingController(
-    text: "{title} ({ott}) Reuploaded on App ✅🥵\n\n🎬 Quality: {quality}\n🍿 Watch Online: {link}",
+    text: "🎬 <b>{title}</b>{ott_bracket} Reuploaded on App ✅\n{ott_line}\n⚡ <b>Quality:</b> {quality}\n\n🍿 <b><a href=\"{link}\">Watch Online on App</a></b>",
   );
   
   bool _updateSkippable = false;
@@ -7510,6 +7589,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         if (_tgChannelIdCtrl.text.isEmpty && settings['tg_channel_id'] != null) {
           _tgChannelIdCtrl.text = settings['tg_channel_id'].toString();
         }
+        if (settings['tg_caption_template'] != null && settings['tg_caption_template'].toString().trim().isNotEmpty) {
+          _tgCaptionTemplateCtrl.text = settings['tg_caption_template'].toString();
+        }
 
         _settingsLoaded = true;
       });
@@ -7561,6 +7643,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       await prefs.setString('skymovies_domain', _skymoviesDomainCtrl.text.trim());
       await prefs.setString('hdmaal_domain', _hdmaalDomainCtrl.text.trim());
       await prefs.setString('uncutmasti_domain', _uncutmastiDomainCtrl.text.trim());
+      await prefs.setString('hdmove99_domain', _hdmove99DomainCtrl.text.trim());
+      await prefs.setString('aagmaal_domain', _aagmaalDomainCtrl.text.trim());
       await prefs.setString('uffmaal_domain', _uffmaalDomainCtrl.text.trim());
     } catch (_) {}
 
@@ -9118,130 +9202,86 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   // ── Client-side Scrapers for UFFMaal (Instant Fallback & Multi-Episode) ──
 
   Future<List<Map<String, dynamic>>> _scrapeUffmaalCatalog({String query = '', int page = 1}) async {
-    try {
-      final base = _uffmaalDomainCtrl.text.trim().isNotEmpty ? _uffmaalDomainCtrl.text.trim() : "https://uffmaal.com";
-      final q = query.trim();
-      final url = q.isNotEmpty
-          ? (page > 1 ? "$base/page/$page/?s=${Uri.encodeComponent(q)}" : "$base/?s=${Uri.encodeComponent(q)}")
-          : (page > 1 ? "$base/page/$page/" : "$base/");
-      final res = await http.get(Uri.parse(url), headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Referer': '$base/',
-      }).timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return [];
-      final html = res.body;
-      final results = <Map<String, dynamic>>[];
-      final seenUrls = <String>{};
+    final q = query.trim();
+    final results = <Map<String, dynamic>>[];
+    final seenUrls = <String>{};
 
-      // Match post-card articles
-      final articleReg = RegExp(
-        r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<h2>([^<]+)</h2>',
-        caseSensitive: false,
-      );
-      for (final m in articleReg.allMatches(html)) {
-        final pageUrl = m.group(1)!.trim();
-        final poster = m.group(2)!.trim();
-        final title = m.group(3)!.trim();
-        if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
-          seenUrls.add(pageUrl);
-          results.add({
-            'title': title,
-            'page_url': pageUrl,
-            'poster': poster,
-            'is_episode': pageUrl.contains('/episode/'),
-          });
+    final dynamicDomains = await UffmaalScraper.getDomainsFor('uffmaal');
+    final domainList = [
+      if (_uffmaalDomainCtrl.text.trim().isNotEmpty) _uffmaalDomainCtrl.text.trim(),
+      ...dynamicDomains,
+    ];
+
+    for (final base in domainList) {
+      try {
+        final url = q.isNotEmpty
+            ? (page > 1 ? "$base/page/$page/?s=${Uri.encodeComponent(q)}" : "$base/?s=${Uri.encodeComponent(q)}")
+            : (page > 1 ? "$base/page/$page/" : "$base/");
+        final res = await http.get(Uri.parse(url), headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Referer': '$base/',
+        }).timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) continue;
+        final html = res.body;
+
+        final articleReg = RegExp(
+          r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<h2>([^<]+)</h2>',
+          caseSensitive: false,
+        );
+        for (final m in articleReg.allMatches(html)) {
+          final pageUrl = m.group(1)!.trim();
+          final poster = m.group(2)!.trim();
+          final title = m.group(3)!.trim();
+          if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+            seenUrls.add(pageUrl);
+            results.add({
+              'title': title,
+              'page_url': pageUrl,
+              'poster': poster,
+              'is_episode': pageUrl.contains('/episode/'),
+            });
+          }
         }
-      }
 
-      return results;
-    } catch (_) {
-      return [];
+        if (results.isNotEmpty) return results;
+      } catch (_) {
+        continue;
+      }
     }
+
+    // Fallback: Backend PHP API
+    if (results.isEmpty) {
+      try {
+        final res = await _adminPhpApi('search_uffmaal_catalog', {'query': q, 'page': page});
+        if (res['status'] == 'success' && res['data']?['items'] != null) {
+          final items = res['data']['items'] as List<dynamic>;
+          for (final item in items) {
+            final pageUrl = (item['page_url'] ?? '').toString().trim();
+            final title = (item['title'] ?? '').toString().trim();
+            final poster = (item['poster'] ?? '').toString().trim();
+            if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+              seenUrls.add(pageUrl);
+              results.add({
+                'title': title,
+                'page_url': pageUrl,
+                'poster': poster,
+                'is_episode': (item['is_episode'] == true) || pageUrl.contains('/episode/'),
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    return results;
   }
 
   Future<Map<String, dynamic>?> _scrapeUffmaalDetails(String pageUrl) async {
     try {
-      final base = _uffmaalDomainCtrl.text.trim().isNotEmpty ? _uffmaalDomainCtrl.text.trim() : "https://uffmaal.com";
-      final res = await http.get(Uri.parse(pageUrl), headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Referer': '$base/',
-      }).timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return null;
-      final html = res.body;
-
-      var title = '';
-      final tMatch = RegExp(r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>|<h1[^>]*>([^<]+)</h1>', caseSensitive: false).firstMatch(html);
-      if (tMatch != null) {
-        title = (tMatch.group(1) ?? tMatch.group(2) ?? '').trim();
-      }
-
-      var poster = '';
-      final vPoster = RegExp(r'<video[^>]+poster=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
-      if (vPoster != null) {
-        poster = vPoster.group(1)!.trim();
-      }
-      if (poster.isEmpty) {
-        final og = RegExp(r'<meta property="og:image" content=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
-        if (og != null) poster = og.group(1)!.trim();
-      }
-
-      var streamUrl = '';
-      final srcMatch = RegExp(r'''<source[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
-      if (srcMatch != null) {
-        streamUrl = srcMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-      }
-      if (streamUrl.isEmpty) {
-        final dlMatch = RegExp(r'''<a[^>]+href=['"]([^'"]+\.(?:mp4|m3u8|mkv)[^'"]*)['"]''', caseSensitive: false).firstMatch(html);
-        if (dlMatch != null) {
-          streamUrl = dlMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-        }
-      }
-      if (streamUrl.isEmpty) {
-        final videoTag = RegExp(r'''<video[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
-        if (videoTag != null) {
-          streamUrl = videoTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-        }
-      }
-      if (streamUrl.isEmpty) {
-        final iframeTag = RegExp(r'''<iframe[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
-        if (iframeTag != null) {
-          streamUrl = iframeTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-        }
-      }
-      if (streamUrl.isEmpty) {
-        final rawMediaMatch = RegExp(r'''https?://[^\s<>"']+\.(?:mp4|m3u8)(?:\?[^\s<>"']*)?''', caseSensitive: false).firstMatch(html);
-        if (rawMediaMatch != null) {
-          streamUrl = rawMediaMatch.group(0)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-        }
-      }
-
-      // Check if this is a series page with multiple episodes
-      final episodes = <Map<String, dynamic>>[];
-      final epMatches = RegExp(
-        r'<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>',
-        caseSensitive: false,
-      ).allMatches(html);
-
-      for (final em in epMatches) {
-        final epUrl = em.group(1)!.trim();
-        final epPoster = em.group(2)!.trim();
-        final epNum = em.group(3)!.trim();
-        episodes.add({
-          'episode_url': epUrl,
-          'poster': epPoster,
-          'episode_number': epNum,
-          'title': title.isNotEmpty ? '$title Episode $epNum' : 'Episode $epNum',
-        });
-      }
-
-      return {
-        'title': title,
-        'poster': poster,
-        'stream_url': streamUrl,
-        'episodes': episodes,
-      };
+      final res = await UffmaalScraper.fetchUffmaalStreamAndPoster(pageUrl, customBase: _uffmaalDomainCtrl.text.trim());
+      if (res.isNotEmpty) return res;
+      return null;
     } catch (_) {
       return null;
     }
@@ -9250,14 +9290,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   Future<List<Map<String, dynamic>>> _scrapeAagmaalCatalog({String query = '', int page = 1}) async {
     try {
       final q = query.trim();
+      final base = _aagmaalDomainCtrl.text.trim().isNotEmpty ? _aagmaalDomainCtrl.text.trim() : 'https://aagmaal.mba';
       final url = q.isNotEmpty
-          ? (page > 1 ? "https://aagmaal.mba/page/$page/?s=${Uri.encodeComponent(q)}" : "https://aagmaal.mba/?s=${Uri.encodeComponent(q)}")
-          : (page > 1 ? "https://aagmaal.mba/page/$page/" : "https://aagmaal.mba/");
+          ? (page > 1 ? "$base/page/$page/?s=${Uri.encodeComponent(q)}" : "$base/?s=${Uri.encodeComponent(q)}")
+          : (page > 1 ? "$base/page/$page/" : "$base/");
       final res = await http.get(Uri.parse(url), headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://aagmaal.mba/',
+        'Referer': '$base/',
       }).timeout(const Duration(seconds: 15));
       if (res.statusCode != 200) return [];
       final html = res.body;
@@ -10168,42 +10209,22 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 } else {
                   // Search query
                   if (tab == 0) {
-                    // UFFMaal catalog search
-                    final results = await _scrapeUffmaalCatalog(query: q);
+                    // UFFMaal multi-domain search & automatic series episode expansion
+                    final results = await UffmaalScraper.search(q, 'uffmaal', customBase: _uffmaalDomainCtrl.text.trim());
                     if (results.isNotEmpty) {
-                      final seriesItem = results.firstWhere((r) => r['is_episode'] != true, orElse: () => results.first);
-                      final details = await _scrapeUffmaalDetails(seriesItem['page_url'] ?? '');
-                      if (details != null && (details['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
-                        final eps = details['episodes'] as List<dynamic>;
-                        episodeItems = eps.map((e) {
-                          final titleStr = (e['title'] ?? '').toString();
-                          final urlStr = (e['episode_url'] ?? '').toString();
-                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? int.tryParse((e['episode_number'] ?? '').toString()) ?? 1;
-                          return {
-                            'raw_title': titleStr,
-                            'title': titleStr,
-                            'url': urlStr,
-                            'poster': (e['poster'] ?? details['poster'] ?? '').toString(),
-                            'ep_num': parsedNum,
-                            'selected': true,
-                          };
-                        }).toList();
-                      } else {
-                        // All results as episodes
-                        episodeItems = results.map((r) {
-                          final titleStr = (r['title'] ?? 'Episode').toString();
-                          final urlStr = (r['page_url'] ?? '').toString();
-                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
-                          return {
-                            'raw_title': titleStr,
-                            'title': titleStr,
-                            'url': urlStr,
-                            'poster': (r['poster'] ?? '').toString(),
-                            'ep_num': parsedNum,
-                            'selected': true,
-                          };
-                        }).toList();
-                      }
+                      episodeItems = results.map((r) {
+                        final titleStr = r.title;
+                        final urlStr = r.pageUrl;
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': r.poster,
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
                     }
                   } else if (tab == 1) {
                     // HDMaal
@@ -10286,6 +10307,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               final episodesPayload = <Map<String, dynamic>>[];
               int successCount = 0;
 
+              // 1. Extract stream URLs and posters for all selected episodes
+              final extractedItems = <Map<String, dynamic>>[];
               for (int i = 0; i < selectedList.length; i++) {
                 final item = selectedList[i];
                 final epNum = (item['ep_num'] as int?) ?? (i + 1);
@@ -10300,7 +10323,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                 dialogSetState(() {
                   importStatus = "Extracting $epName (${i + 1} of ${selectedList.length})...";
-                  importProgress = (i) / selectedList.length;
+                  importProgress = ((i + 1) / selectedList.length) * 0.6;
                 });
 
                 String streamUrl = (item['stream_url'] ?? '').toString().trim();
@@ -10309,28 +10332,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (streamUrl.isEmpty) {
                   final pageUrl = (item['url'] ?? '').toString();
                   if (pageUrl.contains('uffmaal') || tab == 0) {
-                    // 1. Try client scraper
-                    final d = await _scrapeUffmaalDetails(pageUrl);
+                    var d = await _scrapeUffmaalDetails(pageUrl);
+                    if (d == null || (d['stream_url'] ?? '').toString().isEmpty) {
+                      // Immediate 1x retry for transient network hiccups
+                      await Future.delayed(const Duration(milliseconds: 500));
+                      d = await _scrapeUffmaalDetails(pageUrl);
+                    }
                     if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
-                      streamUrl = d['stream_url'].toString().trim();
+                      streamUrl = d['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
                       if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
                     }
-                    // 2. Fallback to server scraper if client returned empty
                     if (streamUrl.isEmpty) {
                       final sRes = await _adminPhpApi('extract_uffmaal_details', {'page_url': pageUrl});
                       if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
-                        streamUrl = sRes['data']['stream_url'].toString().trim();
+                        streamUrl = sRes['data']['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
                         if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
                       }
                     }
                   } else if (pageUrl.contains('hdmaal') || tab == 1) {
-                    // 1. Try client scraper
                     final d = await _scrapeHdmaalDetails(pageUrl);
                     if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
                       streamUrl = d['stream_url'].toString().trim();
                       if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
                     }
-                    // 2. Fallback to server scraper
                     if (streamUrl.isEmpty) {
                       final sRes = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
                       if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
@@ -10347,47 +10371,62 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   }
                 }
 
-                // Small delay between requests to avoid rate limits
-                await Future.delayed(const Duration(milliseconds: 300));
-
                 if (streamUrl.isNotEmpty) {
-                  // Clean URL spaces
-                  if (streamUrl.contains(' ')) {
-                    streamUrl = streamUrl.replaceAll(' ', '%20');
-                  }
+                  if (streamUrl.contains(' ')) streamUrl = streamUrl.replaceAll(' ', '%20');
+                  extractedItems.add({
+                    'epName': epName,
+                    'streamUrl': streamUrl,
+                    'poster': poster,
+                    'epOrder': epOrder,
+                  });
+                }
+              }
 
-                  // Auto-upload episode poster to our server if external
+              // 2. Parallel image upload in chunks of 3 for fast, non-blocking upload
+              dialogSetState(() {
+                importStatus = "Fast uploading posters to server (${extractedItems.length} episodes)...";
+                importProgress = 0.7;
+              });
+
+              final chunkSize = 3;
+              for (int c = 0; c < extractedItems.length; c += chunkSize) {
+                final chunk = extractedItems.sublist(c, (c + chunkSize > extractedItems.length) ? extractedItems.length : c + chunkSize);
+                await Future.wait(chunk.map((item) async {
+                  String poster = item['poster'] ?? '';
+                  final epName = item['epName'] ?? '';
                   if (poster.isNotEmpty && !poster.contains('goprivate.fun/api/uploads')) {
-                    dialogSetState(() {
-                      importStatus = "Uploading poster for $epName to server...";
-                    });
                     final uploadedPoster = await _uploadImageUrlToServer(
                       poster,
                       customTitle: '${seriesTitle}_$epName',
                       showNotification: false,
                     );
                     if (uploadedPoster != null && uploadedPoster.isNotEmpty) {
-                      poster = uploadedPoster;
+                      item['poster'] = uploadedPoster;
                     }
                   }
+                }));
+                dialogSetState(() {
+                  importProgress = 0.7 + (0.2 * ((c + chunk.length) / extractedItems.length));
+                });
+              }
 
-                  episodesPayload.add({
-                    'name': epName,
-                    'url': streamUrl,
-                    'episode_image': poster,
-                    'stream_type': 'MP4/MKV Direct Link',
-                    'quality': selectedQuality,
-                    'order': epOrder,
-                    'play_links': [
-                      {
-                        'name': 'Server 1',
-                        'type': 'MP4/MKV Direct Link',
-                        'quality': selectedQuality,
-                        'url': streamUrl,
-                      }
-                    ],
-                  });
-                }
+              for (final item in extractedItems) {
+                episodesPayload.add({
+                  'name': item['epName'],
+                  'url': item['streamUrl'],
+                  'episode_image': item['poster'],
+                  'stream_type': 'MP4/MKV Direct Link',
+                  'quality': selectedQuality,
+                  'order': item['epOrder'],
+                  'play_links': [
+                    {
+                      'name': 'Server 1',
+                      'type': 'MP4/MKV Direct Link',
+                      'quality': selectedQuality,
+                      'url': item['streamUrl'],
+                    }
+                  ],
+                });
               }
 
               if (episodesPayload.isEmpty) {
@@ -13428,13 +13467,14 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                       Row(
                                         children: [
                                           Expanded(
+                                            flex: 5,
                                             child: ElevatedButton.icon(
                                               onPressed: () {
                                                 Navigator.pop(bctx);
                                                 _playDirectStream(vLink.url, details.title);
                                               },
                                               icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                                              label: const Text("PLAY IN-APP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                              label: const Text("PLAY", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: const Color(0xFF00E676),
                                                 foregroundColor: Colors.black,
@@ -13443,23 +13483,51 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                               ),
                                             ),
                                           ),
-                                          const SizedBox(width: 8),
+                                          const SizedBox(width: 6),
                                           Expanded(
+                                            flex: 5,
                                             child: ElevatedButton.icon(
                                               onPressed: () {
                                                 DropmmsService.downloadInApp(
                                                   context: context,
                                                   rawUrl: vLink.url,
-                                                  defaultFileName: "${details.title}_${vLink.host}.mp4",
+                                                  defaultFileName: "${details.title}_${vLink.host}",
+                                                  poster: details.poster,
                                                 );
                                               },
                                               icon: const Icon(Icons.download_rounded, size: 16),
-                                              label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                              label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: const Color(0xFF1E2638),
                                                 foregroundColor: Colors.cyanAccent,
                                                 padding: const EdgeInsets.symmetric(vertical: 9),
                                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            flex: 4,
+                                            child: ElevatedButton.icon(
+                                              onPressed: () {
+                                                ExtractorTelegramDialog.show(
+                                                  context,
+                                                  title: details.title,
+                                                  category: details.categoryName,
+                                                  topicUrl: details.topicUrl,
+                                                  initialImages: details.images,
+                                                  videoLinks: details.videoLinks,
+                                                  downloadLinks: details.downloadLinks,
+                                                  defaultSelectedLink: vLink,
+                                                );
+                                              },
+                                              icon: const Icon(Icons.send_rounded, size: 13),
+                                              label: const Text("TG POST", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 10.5)),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(0xFF182838),
+                                                foregroundColor: const Color(0xFF229ED9),
+                                                padding: const EdgeInsets.symmetric(vertical: 9),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Color(0xFF229ED9), width: 0.8)),
                                               ),
                                             ),
                                           ),
@@ -13511,12 +13579,35 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                           DropmmsService.downloadInApp(
                                             context: context,
                                             rawUrl: dl.url,
-                                            defaultFileName: "${details.title}_${dl.host}.mp4",
+                                            defaultFileName: "${details.title}_${dl.host}",
+                                            poster: details.poster,
                                           );
                                         },
                                         icon: const Icon(Icons.download_rounded, size: 14),
                                         label: const Text("Download", style: TextStyle(fontSize: 11)),
                                         style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 16),
+                                        tooltip: "Post to Telegram",
+                                        onPressed: () {
+                                          ExtractorTelegramDialog.show(
+                                            context,
+                                            title: details.title,
+                                            category: details.categoryName,
+                                            topicUrl: details.topicUrl,
+                                            initialImages: details.images,
+                                            videoLinks: details.videoLinks,
+                                            downloadLinks: details.downloadLinks,
+                                            defaultSelectedLink: DropmmsMediaLink(
+                                              name: dl.name,
+                                              url: dl.url,
+                                              host: dl.host,
+                                              type: 'download',
+                                              isDirectStreamable: false,
+                                            ),
+                                          );
+                                        },
                                       ),
                                       IconButton(
                                         icon: const Icon(Icons.copy_rounded, color: Colors.white38, size: 16),
@@ -15746,15 +15837,12 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
     final ottHeader = ottText.isNotEmpty ? " ($ottText)" : "";
     final ottLine = ottText.isNotEmpty ? "\n📺 <b>Platform:</b> $ottText" : "";
 
-    var defaultTemplate = widget.defaultTemplate.trim();
-    if (defaultTemplate.isEmpty || !defaultTemplate.contains('<b>')) {
-      defaultTemplate = "🎬 <b>{title}</b>{ott_bracket} Reuploaded on App ✅\n{ott_line}\n⚡ <b>Quality:</b> {quality}\n\n🍿 <b><a href=\"{link}\">Watch Online on App</a></b>";
-    } else {
-      // Remove any duplicate plain link
-      defaultTemplate = defaultTemplate.replaceAll(RegExp(r'\n*👉\s*\{link\}'), '');
+    var template = widget.defaultTemplate.trim();
+    if (template.isEmpty) {
+      template = "🎬 <b>{title}</b>{ott_bracket} Reuploaded on App ✅\n{ott_line}\n⚡ <b>Quality:</b> {quality}\n\n🍿 <b><a href=\"{link}\">Watch Online on App</a></b>";
     }
 
-    return defaultTemplate
+    return template
         .replaceAll('{title}', widget.title)
         .replaceAll('{ott_bracket}', ottHeader)
         .replaceAll('{ott_line}', ottLine)
@@ -15825,8 +15913,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
     setState(() {
       _loadingScreenshots = false;
       _availableScreenshots = shots;
-      _selectedScreenshotUrls.clear();
-      // Let user pick manually — no auto-selection
+      // Retain accumulated multi-selection from other servers/tabs
     });
   }
 
@@ -15838,7 +15925,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
       _uncutEntries = [];
       _selectedUncutEntry = null;
       _availableScreenshots = [];
-      _selectedScreenshotUrls.clear();
+      // Retain accumulated multi-selection from other servers/tabs
     });
     try {
       final sourceKey = ['uffmaal', 'hdmaal', 'uncut'][_uncutSource.clamp(0, 2)];
@@ -15860,7 +15947,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
       _selectedUncutEntry = item;
       _loadingScreenshots = true;
       _availableScreenshots = [];
-      _selectedScreenshotUrls.clear();
+      // Retain accumulated multi-selection from other servers/tabs
     });
 
     final imgList = await UffmaalScraper.fetchPageImages(item.pageUrl);
@@ -15873,8 +15960,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
     setState(() {
       _loadingScreenshots = false;
       _availableScreenshots = finalList;
-      _selectedScreenshotUrls.clear();
-      // Let user pick manually — no auto-selection
+      // Retain accumulated multi-selection from other servers/tabs
     });
   }
 
@@ -16111,19 +16197,19 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                           ),
                           const SizedBox(height: 8),
 
-                          // Image Previews (Side by Side: Poster + Full 4-Scene Merged Collage)
+                          // Image Previews (Side by Side: Photo 1 Main Poster + Photo 2 Merged Scenes Collage, both 2:3 Portrait)
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              // Photo 1: Portrait Poster
+                              // Photo 1: Portrait Poster (2:3)
                               Expanded(
-                                flex: 4,
+                                flex: 1,
                                 child: AspectRatio(
                                   aspectRatio: 2 / 3,
                                   child: Container(
                                     decoration: BoxDecoration(
                                       color: const Color(0xFF0F121C),
-                                      borderRadius: BorderRadius.circular(10),
+                                      borderRadius: BorderRadius.circular(12),
                                       border: Border.all(color: Colors.cyanAccent.withOpacity(0.4)),
                                     ),
                                     clipBehavior: Clip.antiAlias,
@@ -16135,17 +16221,17 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 10),
 
-                              // Photo 2: Full 4-Scene Merged Collage (100% visible, uncropped)
+                              // Photo 2: Full 4-Scene Merged Collage (Matching 2:3 Portrait Poster Ratio)
                               Expanded(
-                                flex: 6,
+                                flex: 1,
                                 child: AspectRatio(
-                                  aspectRatio: 16 / 10,
+                                  aspectRatio: 2 / 3,
                                   child: Container(
                                     decoration: BoxDecoration(
                                       color: const Color(0xFF0A0D14),
-                                      borderRadius: BorderRadius.circular(10),
+                                      borderRadius: BorderRadius.circular(12),
                                       border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
                                     ),
                                     clipBehavior: Clip.antiAlias,
@@ -16156,12 +16242,12 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                               children: [
                                                 CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
                                                 SizedBox(height: 6),
-                                                Text("Stitching 4 Scenes in RAM…", style: TextStyle(color: Colors.amberAccent, fontSize: 10)),
+                                                Text("Merging Scenes…", style: TextStyle(color: Colors.amberAccent, fontSize: 10)),
                                               ],
                                             ),
                                           )
                                         : _collageBytes != null
-                                            ? Image.memory(_collageBytes!, fit: BoxFit.contain)
+                                            ? Image.memory(_collageBytes!, fit: BoxFit.cover)
                                             : Center(
                                                 child: Padding(
                                                   padding: const EdgeInsets.all(6.0),
@@ -16170,7 +16256,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                                     children: [
                                                       const Icon(Icons.grid_view_rounded, color: Colors.white24, size: 22),
                                                       const SizedBox(height: 4),
-                                                      const Text("Select 4 scenes below", style: TextStyle(color: Colors.white38, fontSize: 9.5)),
+                                                      const Text("Select up to 4 scenes", style: TextStyle(color: Colors.white38, fontSize: 9.5)),
                                                       const SizedBox(height: 4),
                                                       ElevatedButton(
                                                         onPressed: _openWebImageGrabber,
@@ -16191,6 +16277,93 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                               ),
                             ],
                           ),
+
+                          // Selected Scenes Bar with Individual Minus/Remove Buttons
+                          if (_selectedScreenshotUrls.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                const Icon(Icons.collections_rounded, color: Colors.amberAccent, size: 13),
+                                const SizedBox(width: 5),
+                                Text(
+                                  "Selected Scenes (${_selectedScreenshotUrls.length}/4) — Tap Minus to Remove:",
+                                  style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                                const Spacer(),
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() => _selectedScreenshotUrls.clear());
+                                    _generateCollageFromUrls([]);
+                                  },
+                                  child: const Text("Clear All", style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              height: 68,
+                              child: ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: _selectedScreenshotUrls.length,
+                                itemBuilder: (ctx, i) {
+                                  final url = _selectedScreenshotUrls.elementAt(i);
+                                  return Container(
+                                    width: 62,
+                                    height: 62,
+                                    margin: const EdgeInsets.only(right: 8, top: 4, bottom: 2),
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        Positioned.fill(
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: CachedNetworkImage(
+                                              imageUrl: url,
+                                              fit: BoxFit.cover,
+                                              errorWidget: (_, __, ___) => Container(color: Colors.white10),
+                                            ),
+                                          ),
+                                        ),
+                                        // Minus / Remove Button
+                                        Positioned(
+                                          top: -5,
+                                          right: -5,
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              setState(() => _selectedScreenshotUrls.remove(url));
+                                              _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.redAccent,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(color: const Color(0xFF161B28), width: 1.5),
+                                                boxShadow: [
+                                                  BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4),
+                                                ],
+                                              ),
+                                              child: const Icon(Icons.remove_rounded, color: Colors.white, size: 13),
+                                            ),
+                                          ),
+                                        ),
+                                        // Scene Order Badge
+                                        Positioned(
+                                          bottom: 2,
+                                          left: 2,
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                            decoration: BoxDecoration(color: Colors.black.withOpacity(0.75), borderRadius: BorderRadius.circular(4)),
+                                            child: Text("${i + 1}", style: const TextStyle(color: Colors.amberAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 8),
 
                           // Deep Link Badge

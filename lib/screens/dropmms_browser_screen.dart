@@ -1,3 +1,4 @@
+import 'extractor_telegram_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -35,6 +36,90 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
     _currentUrl = widget.initialUrl;
     _history.add(_currentUrl);
     _historyIndex = 0;
+  }
+
+  int _getCurrentPageNumber(String url) {
+    final pageMatch = RegExp(r'/page/(\d+)', caseSensitive: false).firstMatch(url);
+    if (pageMatch != null) {
+      return int.tryParse(pageMatch.group(1)!) ?? 1;
+    }
+    final qMatch = RegExp(r'[?&]page=(\d+)', caseSensitive: false).firstMatch(url);
+    if (qMatch != null) {
+      return int.tryParse(qMatch.group(1)!) ?? 1;
+    }
+    return 1;
+  }
+
+  String _buildPageUrl(String url, int targetPage) {
+    if (targetPage <= 1) {
+      var clean = url.replaceAll(RegExp(r'/page/\d+/?'), '/');
+      clean = clean.replaceAll(RegExp(r'[?&]page=\d+'), '');
+      return clean;
+    }
+    if (url.contains('/forum/')) {
+      var base = url.replaceAll(RegExp(r'/page/\d+/?'), '/');
+      if (!base.endsWith('/')) base += '/';
+      return '${base}page/$targetPage/';
+    } else {
+      final uri = Uri.parse(url);
+      final params = Map<String, String>.from(uri.queryParameters);
+      params['page'] = targetPage.toString();
+      return uri.replace(queryParameters: params).toString();
+    }
+  }
+
+  void _goToPage(int page) {
+    if (page < 1) return;
+    final newUrl = _buildPageUrl(_currentUrl, page);
+    _loadUrlWithDoH(newUrl);
+  }
+
+  void _showJumpToPageDialog(int currentPage) {
+    final ctrl = TextEditingController(text: currentPage.toString());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Jump to Page", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Enter page number to navigate:", style: TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF0F121C),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+            onPressed: () {
+              final p = int.tryParse(ctrl.text.trim());
+              if (p != null && p > 0) {
+                Navigator.pop(ctx);
+                _goToPage(p);
+              }
+            },
+            child: const Text("Go", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadUrlWithDoH(String url, {bool addToHistory = true}) async {
@@ -104,7 +189,6 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
     }
   }
 
-
   String _prepareCleanHtml(String rawHtml, String currentUrl) {
     var html = rawHtml;
 
@@ -128,6 +212,15 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
         .tthumbGridview_img, .tthumb_standard, [data-background-src] {
           background-size: cover !important;
           background-position: center top !important;
+        }
+
+        /* Highlight pagination clearly */
+        .ipsPagination, [data-role="tablePagination"] {
+          display: flex !important;
+          visibility: visible !important;
+          background: #141824 !important;
+          padding: 8px !important;
+          border-radius: 8px !important;
         }
       </style>
       <script>
@@ -176,74 +269,14 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
     return html;
   }
 
-
-
-
-  void _handleLinkClick(String href) {
-    var cleanHref = href.trim();
-    if (cleanHref.isEmpty || cleanHref.startsWith('javascript:') || cleanHref.startsWith('#')) {
-      return;
+  void _handleLinkClick(String url) {
+    if (url.startsWith('https://dropmms.co/topic/') || url.contains('/topic/')) {
+      _loadUrlWithDoH(url);
+    } else if (url.startsWith('https://dropmms.co/') || url.startsWith('http://dropmms.co/') || url.contains('/forum/') || url.contains('/discover') || url.contains('/page/')) {
+      _loadUrlWithDoH(url);
+    } else {
+      playVideo(context, url, _currentTitle);
     }
-
-    final lower = cleanHref.toLowerCase();
-
-    // 1. Block known ad / spam networks completely
-    if (lower.contains('monetag') ||
-        lower.contains('profitablecpmrate') ||
-        lower.contains('onclick') ||
-        lower.contains('popunder') ||
-        lower.contains('adsterra') ||
-        lower.contains('bit.ly') ||
-        lower.contains('tinyurl') ||
-        lower.contains('telegram.me') ||
-        lower.contains('t.me') ||
-        lower.contains('revenuehits')) {
-      debugPrint("Blocked ad click: $cleanHref");
-      return;
-    }
-
-    // 2. Check if internal DropMMS navigation across all mirror domains
-    final isDropmms = lower.contains('dropmms') ||
-        cleanHref.startsWith('/') ||
-        lower.contains('dropmms.co') ||
-        lower.contains('dropmms.com') ||
-        lower.contains('dropmms.net') ||
-        lower.contains('dropmms.fun') ||
-        lower.contains('dropmms.us') ||
-        lower.contains('dropmms.wtf') ||
-        lower.contains('dropmms.link') ||
-        lower.contains('dropmms.forum');
-
-    if (isDropmms) {
-      var fullUrl = cleanHref;
-      if (cleanHref.startsWith('/')) {
-        fullUrl = 'https://dropmms.co$cleanHref';
-      }
-      _loadUrlWithDoH(fullUrl);
-      return;
-    }
-
-    // 3. Check if video stream or download mirror
-    if (lower.contains('streamtape') ||
-        lower.contains('vidara') ||
-        lower.contains('luluvdo') ||
-        lower.contains('lulustream') ||
-        lower.contains('playmate') ||
-        lower.contains('vidsonic') ||
-        lower.contains('vibevdo')) {
-      _playMediaStream(cleanHref, "DropMMS Stream");
-      return;
-    } else if (lower.contains('torupload') || lower.contains('upfiles') || lower.contains('frdl')) {
-      DropmmsService.downloadInApp(
-        context: context,
-        rawUrl: cleanHref,
-        defaultFileName: "DropMMS_Download.mp4",
-      );
-      return;
-    }
-
-    // If it's another domain, ignore it to prevent ad redirects
-    debugPrint("Ignored external URL click: $cleanHref");
   }
 
   void _goBack() {
@@ -261,115 +294,73 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
   }
 
   void _showDomainSwitcher() {
-    // Known working DropMMS mirror domains
-    const domains = [
-      ('dropmms.co', 'https://dropmms.co/'),
-      ('dropmms.com', 'https://dropmms.com/'),
-      ('dropmms.net', 'https://dropmms.net/'),
-      ('dropmms.fun', 'https://dropmms.fun/'),
-      ('dropmms.us', 'https://dropmms.us/'),
-      ('dropmms.wtf', 'https://dropmms.wtf/'),
-      ('m2.dropmms.forum', 'https://m2.dropmms.forum/'),
+    final domains = [
+      'dropmms.co',
+      'dropmms.com',
+      'dropmms.net',
+      'dropmms.org',
     ];
 
-    // Extract current path so we switch domain but keep the same page
-    String currentPath = '/';
-    try {
-      final uri = Uri.parse(_currentUrl);
-      currentPath = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
-    } catch (_) {}
-    final savedPath = currentPath;
-
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF161B26),
-        title: const Text('🌐 Switch Mirror Domain', style: TextStyle(color: Colors.white, fontSize: 16)),
-        content: Column(
+      backgroundColor: const Color(0xFF161B26),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('All mirrors load the same content. Switch if current domain is slow.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const Text("Select Mirror Domain", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 12),
-            ...domains.map((d) {
-              final domainLabel = d.$1;
-              final baseUrl = d.$2;
-              final isCurrent = _currentUrl.contains(domainLabel);
-              return ListTile(
-                dense: true,
-                leading: Icon(
-                  isCurrent ? Icons.check_circle_rounded : Icons.language_rounded,
-                  color: isCurrent ? Colors.cyanAccent : Colors.white38,
-                  size: 18,
-                ),
-                title: Text(
-                  domainLabel,
-                  style: TextStyle(
-                    color: isCurrent ? Colors.cyanAccent : Colors.white,
-                    fontSize: 14,
-                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                  ),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  if (!isCurrent) {
-                    final newUrl = baseUrl.endsWith('/') && savedPath.startsWith('/')
-                        ? baseUrl.substring(0, baseUrl.length - 1) + savedPath
-                        : baseUrl + savedPath;
+            ...domains.map((d) => ListTile(
+                  leading: const Icon(Icons.public_rounded, color: Colors.cyanAccent),
+                  title: Text(d, style: const TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    final uri = Uri.parse(_currentUrl);
+                    final newUrl = uri.replace(host: d).toString();
                     _loadUrlWithDoH(newUrl);
-                  }
-                },
-              );
-            }),
+                  },
+                )),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-          ),
-        ],
       ),
     );
   }
 
-  Future<void> _playMediaStream(String rawUrl, String videoTitle) async {
-    await playVideo(context, rawUrl, videoTitle);
-  }
-
   void _showExtractedMediaSheet(DropmmsTopicDetails details) {
-    _selectedImages.clear();
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (bctx) {
+      builder: (sheetCtx) {
         return StatefulBuilder(
-          builder: (sheetContext, setSheetState) {
+          builder: (BuildContext context, StateSetter setSheetState) {
             return DraggableScrollableSheet(
-              initialChildSize: 0.88,
+              initialChildSize: 0.75,
+              minChildSize: 0.4,
               maxChildSize: 0.95,
-              minChildSize: 0.5,
               builder: (_, scrollController) {
                 return Container(
                   decoration: const BoxDecoration(
                     color: Color(0xFF121622),
                     borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                    border: Border(top: BorderSide(color: Colors.cyanAccent, width: 1.5)),
+                    border: Border(top: BorderSide(color: Color(0xFF00E676), width: 1.5)),
                   ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Handle
                       Center(
                         child: Container(
-                          margin: const EdgeInsets.only(top: 10, bottom: 12),
-                          width: 44,
-                          height: 5,
-                          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+                          margin: const EdgeInsets.only(top: 10, bottom: 8),
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
                         ),
                       ),
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -378,21 +369,9 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
-                                    color: Colors.cyanAccent.withValues(alpha: 0.2),
+                                    color: const Color(0xFF00E676).withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(color: Colors.cyanAccent, width: 0.8),
-                                  ),
-                                  child: Text(
-                                    details.categoryName.toUpperCase(),
-                                    style: const TextStyle(color: Colors.cyanAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                                const Spacer(),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: Colors.greenAccent.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: const Color(0xFF00E676), width: 0.8),
                                   ),
                                   child: const Text(
                                     "100% AD-FREE",
@@ -547,14 +526,17 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
                                               if (isSelected)
                                                 Container(
                                                   decoration: BoxDecoration(
-                                                    border: Border.all(color: const Color(0xFF00E676), width: 3),
+                                                    color: Colors.black45,
+                                                    border: Border.all(color: const Color(0xFF00E676), width: 2.5),
                                                     borderRadius: BorderRadius.circular(10),
-                                                    color: const Color(0xFF00E676).withValues(alpha: 0.2),
+                                                  ),
+                                                  child: const Center(
+                                                    child: Icon(Icons.check_circle_rounded, color: Color(0xFF00E676), size: 30),
                                                   ),
                                                 ),
                                               Positioned(
-                                                top: 4,
-                                                right: 4,
+                                                top: 6,
+                                                right: 6,
                                                 child: GestureDetector(
                                                   onTap: () {
                                                     setSheetState(() {
@@ -568,25 +550,15 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
                                                   child: Container(
                                                     padding: const EdgeInsets.all(4),
                                                     decoration: BoxDecoration(
-                                                      shape: BoxShape.circle,
                                                       color: isSelected ? const Color(0xFF00E676) : Colors.black54,
-                                                      border: Border.all(color: Colors.white, width: 1),
+                                                      shape: BoxShape.circle,
                                                     ),
                                                     child: Icon(
                                                       isSelected ? Icons.check : Icons.circle_outlined,
+                                                      color: isSelected ? Colors.black : Colors.white,
                                                       size: 14,
-                                                      color: isSelected ? Colors.black : Colors.white70,
                                                     ),
                                                   ),
-                                                ),
-                                              ),
-                                              Positioned(
-                                                bottom: 4,
-                                                right: 4,
-                                                child: Container(
-                                                  padding: const EdgeInsets.all(3),
-                                                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                                                  child: const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
                                                 ),
                                               ),
                                             ],
@@ -597,161 +569,201 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
                                   },
                                 ),
                               ),
-                              const SizedBox(height: 20),
+                              const SizedBox(height: 16),
                             ],
 
                             // 2. Video Streams Section
-                            Row(
-                              children: [
-                                const Icon(Icons.play_circle_filled_rounded, color: Color(0xFF00E676), size: 18),
-                                const SizedBox(width: 8),
-                                Text(
-                                  "IN-APP VIDEO STREAMS (${details.videoLinks.length})",
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            if (details.videoLinks.isEmpty)
-                              Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(color: const Color(0xFF161B26), borderRadius: BorderRadius.circular(12)),
-                                child: const Text("No video streams found for this post. Check download mirrors below.", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                              )
-                            else
-                              ...details.videoLinks.map((vLink) {
+                            if (details.videoLinks.isNotEmpty) ...[
+                              Row(
+                                children: [
+                                  const Icon(Icons.play_circle_filled_rounded, color: Color(0xFF00E676), size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    "ONLINE VIDEO STREAMS (${details.videoLinks.length})",
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ...details.videoLinks.map((vl) {
                                 return Container(
-                                  margin: const EdgeInsets.only(bottom: 10),
+                                  margin: const EdgeInsets.only(bottom: 8),
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF161B26),
-                                    borderRadius: BorderRadius.circular(14),
+                                    color: const Color(0xFF181E2E),
+                                    borderRadius: BorderRadius.circular(12),
                                     border: Border.all(color: Colors.white12),
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                  child: Row(
                                     children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF00E676).withValues(alpha: 0.18),
-                                              borderRadius: BorderRadius.circular(6),
-                                            ),
-                                            child: Text(
-                                              vLink.host.toUpperCase(),
-                                              style: const TextStyle(
-                                                color: Color(0xFF00E676),
-                                                fontSize: 10.5,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              vLink.name,
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Icon(Icons.movie_filter_rounded, color: Color(0xFF00E676), size: 20),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              vl.name,
                                               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                             ),
-                                          ),
-                                        ],
+                                            Text(
+                                              vl.host.toUpperCase(),
+                                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                      const SizedBox(height: 10),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: ElevatedButton.icon(
-                                              onPressed: () {
-                                                Navigator.pop(bctx);
-                                                _playMediaStream(vLink.url, details.title);
-                                              },
-                                              icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                                              label: const Text("PLAY IN-APP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: const Color(0xFF00E676),
-                                                foregroundColor: Colors.black,
-                                                padding: const EdgeInsets.symmetric(vertical: 9),
-                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: ElevatedButton.icon(
-                                              onPressed: () {
-                                                DropmmsService.downloadInApp(
-                                                  context: context,
-                                                  rawUrl: vLink.url,
-                                                  defaultFileName: "${details.title}_${vLink.host}.mp4",
-                                                );
-                                              },
-                                              icon: const Icon(Icons.download_rounded, size: 16),
-                                              label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: const Color(0xFF1E2638),
-                                                foregroundColor: Colors.cyanAccent,
-                                                padding: const EdgeInsets.symmetric(vertical: 9),
-                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.cyanAccent, width: 0.8)),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          playVideo(
+                                            context,
+                                            vl.url,
+                                            details.title,
+                                          );
+                                        },
+                                        icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                                        label: const Text("WATCH", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF00E676),
+                                          foregroundColor: Colors.black,
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          minimumSize: Size.zero,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      IconButton(
+                                        icon: const Icon(Icons.download_rounded, color: Colors.cyanAccent, size: 18),
+                                        tooltip: "Download In-App",
+                                        onPressed: () {
+                                          DropmmsService.downloadInApp(
+                                            context: context,
+                                            rawUrl: vl.url,
+                                            defaultFileName: details.title,
+                                            poster: details.images.isNotEmpty ? details.images.first : null,
+                                          );
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 18),
+                                        tooltip: "Post to Telegram Channel",
+                                        onPressed: () {
+                                          ExtractorTelegramDialog.show(
+                                            context,
+                                            title: details.title,
+                                            category: details.categoryName,
+                                            topicUrl: details.topicUrl,
+                                            initialImages: details.images,
+                                            videoLinks: details.videoLinks,
+                                            downloadLinks: details.downloadLinks,
+                                            defaultSelectedLink: vl,
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
                                 );
                               }),
+                              const SizedBox(height: 16),
+                            ],
 
-                            const SizedBox(height: 16),
-
-                            // 3. Download Mirrors Section
+                            // 3. Direct Download Links
                             if (details.downloadLinks.isNotEmpty) ...[
                               Row(
                                 children: [
-                                  const Icon(Icons.cloud_download_rounded, color: Colors.amberAccent, size: 18),
+                                  const Icon(Icons.file_download_rounded, color: Colors.amberAccent, size: 18),
                                   const SizedBox(width: 8),
                                   Text(
-                                    "DOWNLOAD MIRRORS (${details.downloadLinks.length})",
+                                    "FAST DOWNLOAD SERVERS (${details.downloadLinks.length})",
                                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
+                              const SizedBox(height: 8),
                               ...details.downloadLinks.map((dl) {
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF161B26),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white10),
+                                    color: const Color(0xFF181E2E),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.white12),
                                   ),
                                   child: Row(
                                     children: [
-                                      const Icon(Icons.insert_drive_file_outlined, color: Colors.amberAccent, size: 16),
-                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amberAccent.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Icon(Icons.cloud_download_rounded, color: Colors.amberAccent, size: 20),
+                                      ),
+                                      const SizedBox(width: 12),
                                       Expanded(
-                                        child: Text(
-                                          dl.name,
-                                          style: const TextStyle(color: Colors.white70, fontSize: 12),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              dl.name,
+                                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            Text(
+                                              dl.host.toUpperCase(),
+                                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      TextButton.icon(
+                                      ElevatedButton.icon(
                                         onPressed: () {
                                           DropmmsService.downloadInApp(
                                             context: context,
                                             rawUrl: dl.url,
-                                            defaultFileName: "${details.title}_${dl.host}.mp4",
+                                            defaultFileName: details.title,
+                                            poster: details.images.isNotEmpty ? details.images.first : null,
                                           );
                                         },
-                                        icon: const Icon(Icons.download_rounded, size: 14),
-                                        label: const Text("Download", style: TextStyle(fontSize: 11)),
-                                        style: TextButton.styleFrom(foregroundColor: Colors.amberAccent),
+                                        icon: const Icon(Icons.download_rounded, size: 16),
+                                        label: const Text("DOWNLOAD", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.amberAccent,
+                                          foregroundColor: Colors.black,
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          minimumSize: Size.zero,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.send_rounded, color: Color(0xFF229ED9), size: 18),
+                                        tooltip: "Post to Telegram Channel",
+                                        onPressed: () {
+                                          ExtractorTelegramDialog.show(
+                                            context,
+                                            title: details.title,
+                                            category: details.categoryName,
+                                            topicUrl: details.topicUrl,
+                                            initialImages: details.images,
+                                            videoLinks: details.videoLinks,
+                                            downloadLinks: details.downloadLinks,
+                                            defaultSelectedLink: DropmmsMediaLink(
+                                              name: dl.name,
+                                              url: dl.url,
+                                              host: dl.host,
+                                              type: 'download',
+                                              isDirectStreamable: false,
+                                            ),
+                                          );
+                                        },
                                       ),
                                       IconButton(
                                         icon: const Icon(Icons.copy_rounded, color: Colors.white38, size: 16),
@@ -816,6 +828,8 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final currentPage = _getCurrentPageNumber(_currentUrl);
+
     return Scaffold(
       backgroundColor: const Color(0xFF0D111A),
       appBar: AppBar(
@@ -945,7 +959,86 @@ class _DropmmsBrowserScreenState extends State<DropmmsBrowserScreen> {
             },
           ),
 
-          // Floating Action Button for Instant Media Extraction & Playback
+          // Floating Pagination Bar on Category / Forum Pages
+          if (!_isTopicPage)
+            Positioned(
+              bottom: 16,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141A28).withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF00E676).withValues(alpha: 0.4)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Prev Page Button
+                    ElevatedButton.icon(
+                      onPressed: currentPage > 1 ? () => _goToPage(currentPage - 1) : null,
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 13),
+                      label: const Text("PREV", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1E2638),
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.white10,
+                        disabledForegroundColor: Colors.white24,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+
+                    // Current Page & Jump Badge
+                    GestureDetector(
+                      onTap: () => _showJumpToPageDialog(currentPage),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E676).withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF00E676), width: 1),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.tag_rounded, color: Color(0xFF00E676), size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              "PAGE $currentPage",
+                              style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.w900, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // Next Page Button
+                    ElevatedButton.icon(
+                      onPressed: () => _goToPage(currentPage + 1),
+                      icon: const Text("NEXT", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                      label: const Icon(Icons.arrow_forward_ios_rounded, size: 13),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E676),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Floating Action Button for Instant Media Extraction & Playback (Topic Pages)
           if (_isTopicPage && _currentTopicDetails != null)
             Positioned(
               bottom: 24,

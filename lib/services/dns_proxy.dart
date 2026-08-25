@@ -530,6 +530,14 @@ String? mediaForwardUrlIfNeeded(String url) {
   String referer = 'https://dropmms.co/';
   if (lower.contains('eporner')) {
     referer = 'https://www.eporner.com/';
+  } else if (lower.contains('hdmaal')) {
+    referer = 'https://hdmaal.gg/';
+  } else if (lower.contains('uffmaal') || lower.contains('azmaal') || lower.contains('bmaal') || lower.contains('pmaal') || lower.contains('cdn.azmaal.com') || lower.contains('cdn.bmaal.com') || lower.contains('cdn.pmaal.com')) {
+    referer = 'https://uffmaal.com/';
+  } else if (lower.contains('aagmaal') || lower.contains('uncutmaal') || lower.contains('9redmovies') || lower.contains('hotbazi')) {
+    referer = 'https://aagmaal.mba/';
+  } else if (lower.contains('hdmove99')) {
+    referer = 'https://hdmove99.com/';
   } else if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('tnmr.org') || lower.contains('cdn-tnmr.org') || lower.contains('lulucdn')) {
     referer = 'https://luluvdo.com/';
   } else if (lower.contains('streamtape') || lower.contains('tapecontent') || lower.contains('strcloud') || lower.contains('stape')) {

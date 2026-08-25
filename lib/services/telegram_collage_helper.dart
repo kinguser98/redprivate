@@ -5,17 +5,42 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 class TelegramCollageHelper {
-  /// Fetch image bytes from any HTTP / HTTPS URL
+  /// Fetch image bytes from any HTTP / HTTPS URL with anti-hotlink bypass headers
   static Future<Uint8List?> fetchImageBytes(String url) async {
     final clean = url.trim();
     if (clean.isEmpty) return null;
     try {
+      final lower = clean.toLowerCase();
+      String referer = 'https://dropmms.co/';
+      if (lower.contains('imagetwist')) {
+        referer = 'https://imagetwist.com/';
+      } else if (lower.contains('turboimagehost')) {
+        referer = 'https://www.turboimagehost.com/';
+      } else if (lower.contains('postimg') || lower.contains('postimages')) {
+        referer = 'https://postimages.org/';
+      } else if (lower.contains('pixhost')) {
+        referer = 'https://pixhost.to/';
+      } else if (lower.contains('fastpic')) {
+        referer = 'https://fastpic.org/';
+      } else if (lower.contains('iblog')) {
+        referer = 'https://iblog.ws/';
+      } else if (lower.contains('imagebam')) {
+        referer = 'https://www.imagebam.com/';
+      }
+
       final res = await http.get(Uri.parse(clean), headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'Referer': referer,
+        'Origin': referer.endsWith('/') ? referer.substring(0, referer.length - 1) : referer,
       }).timeout(const Duration(seconds: 15));
+
       if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-        return res.bodyBytes;
+        // Validate magic bytes for image (JPEG: FF D8, PNG: 89 50, WEBP: 52 49, GIF: 47 49)
+        final bytes = res.bodyBytes;
+        if (bytes.length > 100) {
+          return bytes;
+        }
       }
     } catch (_) {}
     return null;

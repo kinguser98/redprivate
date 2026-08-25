@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/streamtape_service.dart';
 import '../services/aagmaal_resolver.dart';
+import '../services/uffmaal_scraper.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/hls_quality_parser.dart';
@@ -101,6 +102,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   String _currentTitle = '';
   bool _isSwitchingEpisode = false;
 
+  // Stream Auto-Recovery & Error Handling
+  bool _hasRetriedRefresh = false;
+  bool _isRefreshingStream = false;
+  String? _hasPlaybackError;
+
   @override
   void initState() {
     super.initState();
@@ -167,7 +173,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     try {
       String playUrl = _currentVideoUrl.isNotEmpty ? _currentVideoUrl : widget.videoUrl;
 
-      // 1. If playUrl is an un-resolved Streamtape web page, resolve it first!
+      // 1. Clean HTML entity encoding in stream URLs (e.g. &#038; -> &)
+      playUrl = playUrl.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+
+      // 2. If playUrl is an un-resolved Streamtape web page, resolve it first!
       if (StreamtapeService.isStreamtapeFamily(playUrl) &&
           !playUrl.contains('tapecontent.net') &&
           !playUrl.contains('get_video') &&
@@ -178,19 +187,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
       }
 
-      // 2. Remove fragment #video.mp4
+      // 3. Remove fragment #video.mp4
       if (playUrl.contains('#')) {
         playUrl = playUrl.split('#')[0];
       }
 
-      // 3. Add &stream=1 to direct Streamtape/tapecontent streams before proxying
+      // 4. Add &stream=1 to direct Streamtape/tapecontent streams before proxying
       if (!playUrl.contains('stream=1') &&
           (StreamtapeService.isStreamtapeFamily(playUrl) || playUrl.contains('tapecontent')) &&
           !playUrl.contains('/ep?u=')) {
         playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
       }
 
-      // 4. DNS-poisoned hosts streamed through local DoH forwarder
+      // 5. DNS-poisoned hosts streamed through local DoH forwarder
       final proxied = mediaForwardUrlIfNeeded(playUrl);
       if (proxied != null) {
         playUrl = proxied;
@@ -198,12 +207,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
       String referer = 'https://streamtape.com/';
       String? origin;
-      if (playUrl.contains('ixifile') || playUrl.contains('uncutmasti')) {
+      final lowerUrl = playUrl.toLowerCase();
+
+      final isMaalCdn = lowerUrl.contains('maal') || RegExp(r'cdn\.[a-z0-9_]+maal\.com').hasMatch(lowerUrl);
+      if (lowerUrl.contains('hdmaal') || lowerUrl.contains('maalcdn')) {
+        referer = 'https://hdmaal.gg/';
+        origin = 'https://hdmaal.gg';
+      } else if (isMaalCdn || lowerUrl.contains('uffmaal') || lowerUrl.contains('azmaal') || lowerUrl.contains('bmaal') || lowerUrl.contains('pmaal') || lowerUrl.contains('hmaal')) {
+        referer = 'https://uffmaal.com/';
+        origin = 'https://uffmaal.com';
+      } else if (lowerUrl.contains('aagmaal') || lowerUrl.contains('uncutmaal') || lowerUrl.contains('9redmovies') || lowerUrl.contains('hotbazi')) {
+        referer = 'https://aagmaal.mba/';
+        origin = 'https://aagmaal.mba';
+      } else if (lowerUrl.contains('ixifile') || lowerUrl.contains('uncutmasti')) {
         referer = 'https://uncutmasti.com/';
-      } else if (playUrl.contains('tnmr.org') || playUrl.contains('luluvdo') || playUrl.contains('lulustream') || playUrl.contains('lulucdn')) {
+        origin = 'https://uncutmasti.com';
+      } else if (lowerUrl.contains('hdmove99')) {
+        referer = 'https://hdmove99.com/';
+        origin = 'https://hdmove99.com';
+      } else if (lowerUrl.contains('skymovies') || lowerUrl.contains('skymovieshd')) {
+        referer = 'https://skymovieshd.ceo/';
+        origin = 'https://skymovieshd.ceo';
+      } else if (lowerUrl.contains('tnmr.org') || lowerUrl.contains('luluvdo') || lowerUrl.contains('lulustream') || lowerUrl.contains('lulucdn')) {
         referer = 'https://luluvdo.com/';
         origin = 'https://luluvdo.com';
-      } else if (playUrl.contains('xhamster') || playUrl.contains('xhvid') || playUrl.contains('xh.video') || playUrl.contains('xhcdn')) {
+      } else if (lowerUrl.contains('xhamster') || lowerUrl.contains('xhvid') || lowerUrl.contains('xh.video') || lowerUrl.contains('xhcdn')) {
         referer = 'https://xhamster.com/';
         origin = 'https://xhamster.com';
       }
@@ -268,20 +296,76 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         setState(() {
           _ready = true;
           _playing = true;
+          _hasPlaybackError = null;
         });
         _armHideControls();
       }
     } catch (e) {
+      debugPrint("VideoPlayer initialization exception: $e");
+      // Auto-Recovery: If S3 presigned token expired or 403 occurred, try refreshing live stream once
+      if (!_hasRetriedRefresh) {
+        _hasRetriedRefresh = true;
+        final refreshed = await _attemptDynamicRefresh();
+        if (refreshed && mounted) {
+          await _open();
+          return;
+        }
+      }
+
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not play stream: $e')),
-      );
+      setState(() {
+        _hasPlaybackError = e.toString();
+        _ready = false;
+        _buffering = false;
+      });
     }
+  }
+
+  /// Attempts to dynamically re-extract fresh presigned CDN links from the source webpage
+  Future<bool> _attemptDynamicRefresh() async {
+    try {
+      String targetPageUrl = '';
+      if (_episodes.isNotEmpty && _currentEpisodeIndex < _episodes.length) {
+        final ep = _episodes[_currentEpisodeIndex];
+        targetPageUrl = (ep['page_url'] ?? ep['url'] ?? ep['episode_url'] ?? '').toString().trim();
+      }
+      if (targetPageUrl.isEmpty || !targetPageUrl.contains('http')) {
+        targetPageUrl = widget.videoUrl.trim();
+      }
+
+      final lowerPage = targetPageUrl.toLowerCase();
+      if (lowerPage.contains('uffmaal') || lowerPage.contains('azmaal') || lowerPage.contains('bmaal') || lowerPage.contains('pmaal') || _currentVideoUrl.toLowerCase().contains('bmaal') || _currentVideoUrl.toLowerCase().contains('azmaal') || _currentVideoUrl.toLowerCase().contains('uffmaal')) {
+        final d = await UffmaalScraper.fetchUffmaalStreamAndPoster(targetPageUrl);
+        if (d.isNotEmpty && (d['stream_url'] ?? '').toString().isNotEmpty) {
+          final freshUrl = d['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+          if (freshUrl.isNotEmpty) {
+            _currentVideoUrl = freshUrl;
+            return true;
+          }
+        }
+      }
+    } catch (_) {}
+    return false;
   }
 
   void _onControllerUpdated() {
     if (_controller == null || !mounted) return;
     final value = _controller!.value;
+
+    if (value.hasError && !_hasRetriedRefresh) {
+      _hasRetriedRefresh = true;
+      _attemptDynamicRefresh().then((refreshed) {
+        if (refreshed && mounted) {
+          _open();
+        } else if (mounted) {
+          setState(() {
+            _hasPlaybackError = value.errorDescription ?? 'Playback error';
+          });
+        }
+      });
+      return;
+    }
+
     setState(() {
       _position = value.position;
       _duration = value.duration;
@@ -1103,8 +1187,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             // 2. GESTURE HUD OVERLAY (Volume, Brightness, Double-tap Seek)
             if (_hudType != null) _buildHudOverlay(),
 
-            // 3. MAIN CONTROLS OVERLAY (WITH BRIGHTNESS/VOLUME SLIDERS & FAR TOP RIGHT BUTTONS)
-            if (_showControls) _buildControlsLayout(context),
+            // 3. ERROR OVERLAY (AUTO-RECOVERY & REFRESH)
+            if (_hasPlaybackError != null) _buildErrorOverlay(),
+
+            // 4. MAIN CONTROLS OVERLAY (WITH BRIGHTNESS/VOLUME SLIDERS & FAR TOP RIGHT BUTTONS)
+            if (_showControls && _hasPlaybackError == null) _buildControlsLayout(context),
           ],
         ),
       ),
@@ -1700,6 +1787,89 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+
+  Widget _buildErrorOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black87,
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141926).withOpacity(0.92),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white12),
+                ),
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.refresh_rounded, color: Color(0xFFE50914), size: 48),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Stream Expired or Blocked',
+                      style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'CDN security token expired or stream link requires refresh.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE50914),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: _isRefreshingStream
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : const Icon(Icons.autorenew_rounded, size: 18),
+                          label: Text(_isRefreshingStream ? 'Refreshing...' : 'Refresh & Play'),
+                          onPressed: _isRefreshingStream ? null : () async {
+                            setState(() {
+                              _isRefreshingStream = true;
+                              _hasPlaybackError = null;
+                              _hasRetriedRefresh = false;
+                            });
+                            await _attemptDynamicRefresh();
+                            setState(() => _isRefreshingStream = false);
+                            await _open();
+                          },
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white24),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Exit'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

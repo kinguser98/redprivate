@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
+import 'luluvdo_resolver.dart';
+import 'streamtape_service.dart';
 
 /// A single search result item from UffMaal, HDMaal, or Uncut-based sites.
 class UffmaalItem {
@@ -26,18 +28,13 @@ class UffmaalScraper {
   static const Map<String, List<String>> _domains = {
     'uffmaal': [
       'https://uffmaal.com',
-      'https://uffmaal.skin',
-      'https://uffmaal.bond',
     ],
     'hdmaal': [
       'https://hdmaal.gg',
-      'https://hdmaal.click',
-      'https://hdmaal.co',
     ],
     'uncut': [
-      'https://uncutmasti.net',
       'https://uncutmasti.com',
-      'https://uncutmasti.in',
+      'https://uncutmasti.net',
     ],
   };
 
@@ -47,9 +44,13 @@ class UffmaalScraper {
     try {
       final prefs = await SharedPreferences.getInstance();
       String? saved;
-      if (source == 'uffmaal') saved = prefs.getString('uffmaal_domain');
-      else if (source == 'hdmaal') saved = prefs.getString('hdmaal_domain');
-      else if (source == 'uncut') saved = prefs.getString('uncutmasti_domain');
+      if (source == 'uffmaal') {
+        saved = prefs.getString('uffmaal_domain');
+      } else if (source == 'hdmaal') {
+        saved = prefs.getString('hdmaal_domain');
+      } else if (source == 'uncut') {
+        saved = prefs.getString('uncutmasti_domain');
+      }
 
       if (saved != null && saved.trim().isNotEmpty && saved.trim().startsWith('http')) {
         list.add(saved.trim().endsWith('/') ? saved.trim().substring(0, saved.trim().length - 1) : saved.trim());
@@ -123,46 +124,62 @@ class UffmaalScraper {
 
     for (final base in domainList) {
       try {
-        final uri = Uri.parse("$base/?s=${Uri.encodeComponent(query)}");
-        final res = await http.get(uri, headers: {
-          ..._headers,
-          'Referer': '$base/',
-        }).timeout(const Duration(seconds: 12));
+        final url = '$base/?s=${Uri.encodeComponent(query)}';
+        final res = await http.get(
+          Uri.parse(url),
+          headers: {..._headers, 'Referer': '$base/'},
+        ).timeout(const Duration(seconds: 10));
 
         if (res.statusCode != 200) continue;
         final html = res.body;
 
-        // HDMaal video card format: <a class="video" href="..." title="..." style="background-image: url(...)">
-        final reg = RegExp(
-          r'<a[^>]+class="[^"]*video[^"]*"[^>]*href="([^"]+)"[^>]*title="([^"]*)"[^>]*style="([^"]*)"|<a[^>]+class="[^"]*video[^"]*"[^>]*style="([^"]*)"[^>]*title="([^"]*)"[^>]*href="([^"]+)"',
+        final anchorReg = RegExp(
+          r'''<a[^>]+href=['"](https?://[^\s'"]+)['"][^>]*>([\s\S]*?)<h2[^>]*class=['"]vtitle['"][^>]*>(.*?)</h2>''',
           caseSensitive: false,
         );
 
-        for (final match in reg.allMatches(html)) {
-          final url = (match.group(1) ?? match.group(6) ?? '').trim();
-          final title = (match.group(2) ?? match.group(5) ?? '')
+        for (final m in anchorReg.allMatches(html)) {
+          final pageUrl = m.group(1)!.trim();
+          final rawTitle = m.group(3)!.trim();
+          final title = rawTitle
+              .replaceAll(RegExp(r'<[^>]*>'), '')
               .replaceAll('&amp;', '&')
               .replaceAll('&#8211;', '–')
               .replaceAll('&#8217;', "'")
               .trim();
-          final style = match.group(3) ?? match.group(4) ?? '';
-          var poster = '';
-          final bgMatch = RegExp(r'''background-image:\s*url\(['"]?([^'")]+)['"]?\)''')
-              .firstMatch(style);
-          if (bgMatch != null) {
-            poster = bgMatch.group(1) ?? '';
+
+          if (title.isEmpty ||
+              pageUrl.contains('/category/') ||
+              pageUrl.contains('/tag/') ||
+              pageUrl.contains('/topic/') ||
+              seenUrls.contains(pageUrl)) {
+            continue;
           }
 
-          if (url.isNotEmpty && title.isNotEmpty && !seenUrls.contains(url)) {
-            seenUrls.add(url);
-            results.add(UffmaalItem(
-              title: title,
-              pageUrl: url,
-              poster: poster,
-              isEpisode: true,
-              source: 'hdmaal',
-            ));
+          var poster = '';
+          final block = m.group(2) ?? '';
+          final imgM = RegExp(
+            r'''<img[^>]+(?:src|data-src)=['"]([^'"]+)['"]''',
+            caseSensitive: false,
+          ).firstMatch(block);
+          if (imgM != null) {
+            poster = imgM.group(1)!.trim();
+          } else {
+            final bgM = RegExp(
+              r'''background-image:\s*url\(['"]?([^'")]+)['"]?\)''',
+              caseSensitive: false,
+            ).firstMatch(block);
+            if (bgM != null) poster = bgM.group(1)!.trim();
           }
+
+          seenUrls.add(pageUrl);
+          results.add(UffmaalItem(
+            title: title,
+            pageUrl: pageUrl,
+            poster: poster,
+            isEpisode: pageUrl.contains('/episode/'),
+            source: 'hdmaal',
+          ));
         }
 
         if (results.isNotEmpty) return results;
@@ -171,22 +188,22 @@ class UffmaalScraper {
       }
     }
 
-    // Backend PHP fallback (matches Link Extractor)
+    // Fallback: PHP Backend API
     try {
       final res = await _callAdminApi('search_hdmaal_catalog', {'query': query});
       if (res['status'] == 'success' && res['data']?['items'] != null) {
         final items = res['data']['items'] as List<dynamic>;
         for (final item in items) {
-          final url = (item['page_url'] ?? item['url'] ?? '').toString().trim();
+          final pageUrl = (item['page_url'] ?? '').toString().trim();
           final title = (item['title'] ?? '').toString().trim();
-          final poster = (item['poster'] ?? '').toString().trim();
-          if (url.isNotEmpty && title.isNotEmpty && !seenUrls.contains(url)) {
-            seenUrls.add(url);
+          final poster = (item['poster'] ?? item['raw_poster'] ?? '').toString().trim();
+          if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+            seenUrls.add(pageUrl);
             results.add(UffmaalItem(
               title: title,
-              pageUrl: url,
+              pageUrl: pageUrl,
               poster: poster,
-              isEpisode: true,
+              isEpisode: pageUrl.contains('/episode/'),
               source: 'hdmaal',
             ));
           }
@@ -197,28 +214,27 @@ class UffmaalScraper {
     return results;
   }
 
-  // ── Uncut Search (PHP Backend + Direct Fallback) ──
+  // ── Uncut Search (Backend Scraper API + Direct Fallback) ──
   static Future<List<UffmaalItem>> _searchUncut(String query,
       {String? customBase}) async {
     final results = <UffmaalItem>[];
     final seenUrls = <String>{};
 
-    // 1. Backend PHP API (Primary, exact same endpoint used in Link Extractor)
     try {
       final res = await _callAdminApi('search_uncutmasti_catalog', {'query': query});
       if (res['status'] == 'success' && res['data']?['items'] != null) {
         final items = res['data']['items'] as List<dynamic>;
         for (final item in items) {
-          final url = (item['page_url'] ?? item['url'] ?? '').toString().trim();
+          final pageUrl = (item['page_url'] ?? '').toString().trim();
           final title = (item['title'] ?? '').toString().trim();
           final poster = (item['poster'] ?? '').toString().trim();
-          if (url.isNotEmpty && title.isNotEmpty && !seenUrls.contains(url)) {
-            seenUrls.add(url);
+          if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+            seenUrls.add(pageUrl);
             results.add(UffmaalItem(
               title: title,
-              pageUrl: url,
+              pageUrl: pageUrl,
               poster: poster,
-              isEpisode: true,
+              isEpisode: pageUrl.contains('/episode/'),
               source: 'uncut',
             ));
           }
@@ -228,11 +244,10 @@ class UffmaalScraper {
 
     if (results.isNotEmpty) return results;
 
-    // 2. Direct client scraping fallback across mirrors
-    final dynamicUncutDomains = await getDomainsFor('uncut');
+    final dynamicDomains = await getDomainsFor('uncut');
     final domainList = [
       if (customBase != null && customBase.trim().isNotEmpty) customBase.trim(),
-      ...dynamicUncutDomains,
+      ...dynamicDomains,
     ];
 
     for (final base in domainList) {
@@ -241,37 +256,17 @@ class UffmaalScraper {
         final res = await http.get(
           Uri.parse(url),
           headers: {..._headers, 'Referer': '$base/'},
-        ).timeout(const Duration(seconds: 12));
+        ).timeout(const Duration(seconds: 10));
 
         if (res.statusCode != 200) continue;
         final html = res.body;
 
-        // Post-card articles or standard WordPress search cards
         final articleReg = RegExp(
-          r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<h2>([^<]+)</h2>',
+          r'''<article[^>]*>[\s\S]*?<a[^>]+href=['"]([^'"]+)['"][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=['"]([^'"]+)['"][\s\S]*?<(?:h[1-4]|span)[^>]*>([^<]+)</(?:h[1-4]|span)>''',
           caseSensitive: false,
         );
+
         for (final m in articleReg.allMatches(html)) {
-          _addResult(results, seenUrls, m.group(1), m.group(2), m.group(3), base, 'uncut');
-        }
-
-        // Standard WordPress search result layout
-        final stdReg = RegExp(
-          r'<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>\s*<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>([^<]+)</a>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27]',
-          caseSensitive: false,
-        );
-        for (final m in stdReg.allMatches(html)) {
-          _addResult(results, seenUrls, m.group(1), m.group(3), m.group(2), base, 'uncut');
-        }
-
-        if (results.isNotEmpty) return results;
-
-        // Generic anchor with img & header
-        final anchorReg = RegExp(
-          r'<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<(?:h[1-4]|b)[^>]*>([^<]+)</(?:h[1-4]|b)>',
-          caseSensitive: false,
-        );
-        for (final m in anchorReg.allMatches(html)) {
           _addResult(results, seenUrls, m.group(1), m.group(2), m.group(3), base, 'uncut');
         }
 
@@ -284,7 +279,7 @@ class UffmaalScraper {
     return results;
   }
 
-  // ── UffMaal Search (Direct Post-Cards + Multi-Episode Series Expansion) ──
+  // ── UffMaal Search (Direct Multi-Domain Fast Query + Series Expansion + PHP Fallback) ──
   static Future<List<UffmaalItem>> _searchUffmaal(String query,
       {String? customBase}) async {
     final results = <UffmaalItem>[];
@@ -302,54 +297,73 @@ class UffmaalScraper {
         final res = await http.get(
           Uri.parse(url),
           headers: {..._headers, 'Referer': '$base/'},
-        ).timeout(const Duration(seconds: 12));
+        ).timeout(const Duration(seconds: 10));
 
         if (res.statusCode != 200) continue;
         final html = res.body;
 
-        // Match WordPress post-card articles
+        // 1. Match WordPress post-card articles
         final articleReg = RegExp(
-          r'<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<h2>([^<]+)</h2>',
+          r'''<article[^>]*class="[^"]*post-card[^"]*"[^>]*>[\s\S]*?<a[^>]+href=['"]([^'"]+)['"][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=['"]([^'"]+)['"][\s\S]*?<h2>([^<]+)</h2>''',
           caseSensitive: false,
         );
         for (final m in articleReg.allMatches(html)) {
           _addResult(results, seenUrls, m.group(1), m.group(2), m.group(3), base, 'uffmaal');
         }
 
-        // If results contain a series page, also extract all individual episode cards
-        if (results.isNotEmpty) {
-          final firstSeries = results.firstWhere(
-            (r) => !r.pageUrl.contains('/episode/'),
-            orElse: () => results.first,
+        // 2. Generic anchor fallback
+        if (results.isEmpty) {
+          final anchorReg = RegExp(
+            r'''<a[^>]+href=['"]([^'"]+)['"][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=['"]([^'"]+)['"][\s\S]*?<(?:h[1-4]|b)[^>]*>([^<]+)</(?:h[1-4]|b)>''',
+            caseSensitive: false,
           );
-          if (firstSeries.pageUrl.isNotEmpty) {
-            final epList = await _fetchUffmaalSeriesEpisodes(firstSeries.pageUrl, base);
-            if (epList.isNotEmpty) {
-              // Prepend all individual episodes so user sees every single episode poster!
-              for (final ep in epList) {
-                if (!seenUrls.contains(ep.pageUrl)) {
-                  seenUrls.add(ep.pageUrl);
-                  results.insert(0, ep);
-                }
+          for (final m in anchorReg.allMatches(html)) {
+            _addResult(results, seenUrls, m.group(1), m.group(2), m.group(3), base, 'uffmaal');
+          }
+        }
+
+        // 3. If any matched item is a series container, expand all its individual episodes
+        if (results.isNotEmpty) {
+          final seriesCards = results.where((r) => !r.pageUrl.contains('/episode/')).toList();
+          for (final series in seriesCards) {
+            final epList = await _fetchUffmaalSeriesEpisodes(series.pageUrl, base);
+            for (final ep in epList) {
+              if (!seenUrls.contains(ep.pageUrl)) {
+                seenUrls.add(ep.pageUrl);
+                results.add(ep);
               }
             }
           }
           return results;
         }
-
-        // Generic fallback
-        final anchorReg = RegExp(
-          r'<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<(?:h[1-4]|b)[^>]*>([^<]+)</(?:h[1-4]|b)>',
-          caseSensitive: false,
-        );
-        for (final m in anchorReg.allMatches(html)) {
-          _addResult(results, seenUrls, m.group(1), m.group(2), m.group(3), base, 'uffmaal');
-        }
-
-        if (results.isNotEmpty) return results;
       } catch (_) {
         continue;
       }
+    }
+
+    // Fallback: PHP Backend API
+    if (results.isEmpty) {
+      try {
+        final res = await _callAdminApi('search_uffmaal_catalog', {'query': query}, timeout: 12);
+        if (res['status'] == 'success' && res['data']?['items'] != null) {
+          final items = res['data']['items'] as List<dynamic>;
+          for (final item in items) {
+            final pageUrl = (item['page_url'] ?? '').toString().trim();
+            final title = (item['title'] ?? '').toString().trim();
+            final poster = (item['poster'] ?? '').toString().trim();
+            if (pageUrl.isNotEmpty && title.isNotEmpty && !seenUrls.contains(pageUrl)) {
+              seenUrls.add(pageUrl);
+              results.add(UffmaalItem(
+                title: title,
+                pageUrl: pageUrl,
+                poster: poster,
+                isEpisode: pageUrl.contains('/episode/'),
+                source: 'uffmaal',
+              ));
+            }
+          }
+        }
+      } catch (_) {}
     }
 
     return results;
@@ -363,7 +377,7 @@ class UffmaalScraper {
       final res = await http.get(
         Uri.parse(seriesUrl),
         headers: {..._headers, 'Referer': '$base/'},
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 8));
 
       if (res.statusCode != 200) return [];
       final html = res.body;
@@ -378,7 +392,7 @@ class UffmaalScraper {
       }
 
       final epMatches = RegExp(
-        r'<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\x27]([^"\x27]+)["\x27][\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>',
+        r'''<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href=['"]([^'"]+)['"][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=['"]([^'"]+)['"][\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>''',
         caseSensitive: false,
       ).allMatches(html);
 
@@ -399,6 +413,183 @@ class UffmaalScraper {
       }
     } catch (_) {}
     return episodes;
+  }
+
+  /// Extract direct stream link & poster from an UffMaal page URL with host resolving (Luluvdo, Streamtape, Playmate)
+  static Future<Map<String, dynamic>> fetchUffmaalStreamAndPoster(
+      String pageUrl, {String? customBase}) async {
+    final cleanUrl = pageUrl.trim();
+    if (cleanUrl.isEmpty) return {};
+
+    // 1. Direct fetch if cleanUrl is already an absolute HTTP/HTTPS URL
+    if (cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://')) {
+      final uri = Uri.tryParse(cleanUrl);
+      final origin = uri != null ? uri.origin : 'https://uffmaal.com';
+      try {
+        final res = await http.get(
+          Uri.parse(cleanUrl),
+          headers: {..._headers, 'Referer': '$origin/'},
+        ).timeout(const Duration(seconds: 12));
+
+        if (res.statusCode == 200) {
+          final data = await _extractUffmaalDataFromHtml(res.body, cleanUrl);
+          if ((data['stream_url'] ?? '').toString().isNotEmpty ||
+              (data['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
+            return data;
+          }
+        }
+      } catch (_) {}
+    }
+
+    final dynamicUffmaalDomains = await getDomainsFor('uffmaal');
+    final domainList = [
+      if (customBase != null && customBase.trim().isNotEmpty) customBase.trim(),
+      ...dynamicUffmaalDomains,
+    ];
+
+    final uri = Uri.tryParse(cleanUrl);
+    final targetPath = uri != null ? (uri.path + (uri.hasQuery ? '?${uri.query}' : '')) : cleanUrl;
+
+    for (final base in domainList) {
+      try {
+        final fetchUrl = cleanUrl.startsWith('http')
+            ? (base != uri?.origin && uri != null ? '$base$targetPath' : cleanUrl)
+            : '$base/$cleanUrl';
+
+        final res = await http.get(
+          Uri.parse(fetchUrl),
+          headers: {..._headers, 'Referer': '$base/'},
+        ).timeout(const Duration(seconds: 10));
+
+        if (res.statusCode != 200) continue;
+        final data = await _extractUffmaalDataFromHtml(res.body, fetchUrl);
+        if ((data['stream_url'] ?? '').toString().isNotEmpty ||
+            (data['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
+          return data;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    // Fallback: Backend PHP API
+    try {
+      final sRes = await _callAdminApi('extract_uffmaal_details', {'page_url': cleanUrl}, timeout: 12);
+      if (sRes['status'] == 'success' && sRes['data'] != null) {
+        return sRes['data'];
+      }
+    } catch (_) {}
+
+    return {};
+  }
+
+  static Future<Map<String, dynamic>> _extractUffmaalDataFromHtml(String html, String fetchUrl) async {
+    String streamUrl = '';
+    String poster = '';
+    String title = '';
+    final episodes = <Map<String, dynamic>>[];
+
+    // Title
+    final tMatch = RegExp(
+      r'<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</h1>|<h1[^>]*>([^<]+)</h1>',
+      caseSensitive: false,
+    ).firstMatch(html);
+    if (tMatch != null) {
+      title = (tMatch.group(1) ?? tMatch.group(2) ?? '').trim();
+    }
+
+    // Poster
+    final vPoster = RegExp(r'''<video[^>]+poster=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+    if (vPoster != null) {
+      poster = vPoster.group(1)!.trim();
+    }
+    if (poster.isEmpty) {
+      final og = RegExp(r'''<meta property="og:image" content=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+      if (og != null) poster = og.group(1)!.trim();
+    }
+
+    // Episode cards
+    final epMatches = RegExp(
+      r'''<div[^>]*class="[^"]*episode-card[^"]*"[^>]*>\s*<a[^>]+href=['"]([^'"]+)['"][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=['"]([^'"]+)['"][\s\S]*?<span[^>]*class="episode-number"[^>]*>([^<]+)</span>''',
+      caseSensitive: false,
+    ).allMatches(html);
+    for (final em in epMatches) {
+      final epUrl = em.group(1)!.trim();
+      final epPoster = em.group(2)!.trim();
+      final epNum = em.group(3)!.trim();
+      episodes.add({
+        'episode_url': epUrl,
+        'poster': epPoster,
+        'episode_number': epNum,
+        'title': title.isNotEmpty ? '$title Episode $epNum' : 'Episode $epNum',
+      });
+    }
+
+    // 1. Direct <source src="...">
+    final srcMatch = RegExp(r'''<source[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+    if (srcMatch != null) {
+      streamUrl = srcMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+    }
+
+    // 2. Direct MP4/M3U8 download links
+    if (streamUrl.isEmpty) {
+      final dlMatch = RegExp(r'''<a[^>]+href=['"]([^'"]+\.(?:mp4|m3u8|mkv)[^'"]*)['"]''', caseSensitive: false).firstMatch(html);
+      if (dlMatch != null) {
+        streamUrl = dlMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+      }
+    }
+
+    // 3. Direct <video src="...">
+    if (streamUrl.isEmpty) {
+      final videoTag = RegExp(r'''<video[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+      if (videoTag != null) {
+        streamUrl = videoTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+      }
+    }
+
+    // 4. Embedded Luluvdo / LuluStream / Playmate / Streamtape
+    if (streamUrl.isEmpty) {
+      final hostMatch = RegExp(r'''(?:src|href)=['"]([^'"]*(?:luluvdo|lulustream|luluvids|streamtape|playmate|uplinks24|toolkitspro)[^'"]*)['"]''', caseSensitive: false).firstMatch(html);
+      if (hostMatch != null) {
+        final hostUrl = hostMatch.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        if (hostUrl.contains('luluvdo') || hostUrl.contains('lulustream') || hostUrl.contains('luluvids') || hostUrl.contains('uplinks24') || hostUrl.contains('toolkitspro') || hostUrl.contains('playmate')) {
+          final resolved = await LuluvdoResolver.resolveOnDevice(hostUrl);
+          if (resolved != null && resolved.isNotEmpty) {
+            streamUrl = resolved;
+          }
+        } else if (hostUrl.contains('streamtape')) {
+          final resolved = await StreamtapeService.getDirectStreamUrl(hostUrl);
+          if (resolved != null && resolved.isNotEmpty) {
+            streamUrl = resolved;
+          }
+        }
+      }
+    }
+
+    // 5. Iframe fallback
+    if (streamUrl.isEmpty) {
+      final iframeTag = RegExp(r'''<iframe[^>]+src=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
+      if (iframeTag != null) {
+        final ifSrc = iframeTag.group(1)!.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+        if (ifSrc.contains('luluvdo') || ifSrc.contains('lulustream') || ifSrc.contains('playmate')) {
+          final resolved = await LuluvdoResolver.resolveOnDevice(ifSrc);
+          if (resolved != null && resolved.isNotEmpty) streamUrl = resolved;
+        } else if (ifSrc.contains('streamtape')) {
+          final resolved = await StreamtapeService.getDirectStreamUrl(ifSrc);
+          if (resolved != null && resolved.isNotEmpty) streamUrl = resolved;
+        } else {
+          streamUrl = ifSrc;
+        }
+      }
+    }
+
+    return {
+      'title': title,
+      'poster': poster,
+      'stream_url': streamUrl,
+      'episodes': episodes,
+      'page_url': fetchUrl,
+    };
   }
 
   static void _addResult(
@@ -458,13 +649,13 @@ class UffmaalScraper {
       final res = await http.get(
         Uri.parse(cleanUrl),
         headers: {..._headers, 'Referer': '$base/'},
-      ).timeout(const Duration(seconds: 12));
+      ).timeout(const Duration(seconds: 10));
 
       if (res.statusCode == 200) {
         final html = res.body;
 
         // 1. Check video tag poster
-        final vPoster = RegExp(r'<video[^>]+poster=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
+        final vPoster = RegExp(r'''<video[^>]+poster=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
         if (vPoster != null) {
           final u = vPoster.group(1)!.trim();
           if (u.isNotEmpty && !seen.contains(u)) {
@@ -474,7 +665,7 @@ class UffmaalScraper {
         }
 
         // 2. Check og:image meta tag
-        final ogMatch = RegExp(r'<meta property="og:image" content=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
+        final ogMatch = RegExp(r'''<meta property="og:image" content=['"]([^'"]+)['"]''', caseSensitive: false).firstMatch(html);
         if (ogMatch != null) {
           final u = ogMatch.group(1)!.trim();
           if (u.isNotEmpty && !seen.contains(u)) {
@@ -485,7 +676,7 @@ class UffmaalScraper {
 
         // 3. Extract all content screenshot images
         final imgReg = RegExp(
-          r'<img[^>]+(?:src|data-src|data-lazy-src)=["\x27](https?://[^"\x27]+\.(?:jpg|jpeg|png|webp)[^"\x27]*)["\x27]',
+          r'''<img[^>]+(?:src|data-src|data-lazy-src)=['"](https?://[^'"]+\.(?:jpg|jpeg|png|webp)[^'"]*)['"]''',
           caseSensitive: false,
         );
         for (final m in imgReg.allMatches(html)) {
@@ -507,11 +698,15 @@ class UffmaalScraper {
       }
     } catch (_) {}
 
-    // Fallback: If results are empty and it's uncut or hdmaal, check backend extractor
+    // Fallback: If results are empty and it's uncut, uffmaal, or hdmaal, check backend extractor
     if (results.isEmpty) {
       try {
         if (cleanUrl.contains('hdmaal')) {
           final res = await _callAdminApi('extract_hdmaal_details', {'page_url': cleanUrl});
+          final p = (res['data']?['poster'] ?? res['data']?['raw_poster'] ?? '').toString().trim();
+          if (p.isNotEmpty) results.add(p);
+        } else if (cleanUrl.contains('uffmaal')) {
+          final res = await _callAdminApi('extract_uffmaal_details', {'page_url': cleanUrl});
           final p = (res['data']?['poster'] ?? res['data']?['raw_poster'] ?? '').toString().trim();
           if (p.isNotEmpty) results.add(p);
         } else if (cleanUrl.contains('uncut')) {

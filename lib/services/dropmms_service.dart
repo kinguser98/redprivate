@@ -1,3 +1,5 @@
+import 'download_service.dart';
+import '../screens/downloads_screen.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -51,6 +53,8 @@ class DropmmsTopicDetails {
   final List<String> images;
   final List<DropmmsMediaLink> videoLinks;
   final List<DropmmsMediaLink> downloadLinks;
+
+  String get poster => images.isNotEmpty ? images.first : '';
 
   DropmmsTopicDetails({
     required this.title,
@@ -792,359 +796,122 @@ class DropmmsService {
     }
   }
 
-  /// In-App Chunked File Downloader with Progress Notification & Media Scanner
+  /// In-App Background File Downloader with Downloads Manager integration & Media Store Saver
   static Future<void> downloadInApp({
     required BuildContext context,
     required String rawUrl,
     required String defaultFileName,
+    String? poster,
     String? mediaType,
   }) async {
-    // 1. Resolve direct stream URL if possible
-    String downloadUrl = rawUrl;
-    final resolved = await resolveDirectStream(rawUrl);
-    if (resolved != null && resolved.isNotEmpty) {
-      downloadUrl = resolved;
-    }
-
-    // 2. Request Storage Permissions on Android if needed
-    if (Platform.isAndroid) {
-      await Permission.storage.request();
-    }
-
-    // 3. Determine save directory
-    Directory? saveDir;
-    try {
-      if (Platform.isAndroid) {
-        saveDir = Directory('/storage/emulated/0/Download');
-        if (!await saveDir.exists()) {
-          saveDir = await getExternalStorageDirectory();
-        }
-      } else {
-        saveDir = await getApplicationDocumentsDirectory();
-      }
-    } catch (_) {
-      saveDir = await getApplicationDocumentsDirectory();
-    }
-
-    if (saveDir == null) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Cannot access storage directory for download."), backgroundColor: Colors.red),
-        );
-      }
-      return;
-    }
-
-    // Clean file name
-    String safeName = defaultFileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-    if (!safeName.contains('.')) {
-      safeName += (mediaType == 'image' ? '.jpg' : '.mp4');
-    }
-
-    final savePath = '${saveDir.path}/$safeName';
-    final targetFile = File(savePath);
-
-    // Progress State Notifiers
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>("Starting download...");
-    bool isCancelled = false;
-
-    // Show persistent progress dialog
-    if (!context.mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        return PopScope(
-          canPop: false,
-          child: Dialog(
-            backgroundColor: const Color(0xFF161B26),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Colors.cyanAccent, width: 1),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_download_rounded, color: Colors.cyanAccent, size: 40),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "Downloading Content",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    safeName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                  const SizedBox(height: 18),
-                  ValueListenableBuilder<double>(
-                    valueListenable: progressNotifier,
-                    builder: (_, progress, __) {
-                      return Column(
-                        children: [
-                          LinearProgressIndicator(
-                            value: progress > 0 ? progress : null,
-                            backgroundColor: Colors.white10,
-                            valueColor: const AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-                            minHeight: 8,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              ValueListenableBuilder<String>(
-                                valueListenable: statusNotifier,
-                                builder: (_, status, __) => Text(
-                                  status,
-                                  style: const TextStyle(color: Colors.white54, fontSize: 11),
-                                ),
-                              ),
-                              Text(
-                                "${(progress * 100).toStringAsFixed(1)}%",
-                                style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 18),
-                  ElevatedButton(
-                    onPressed: () {
-                      isCancelled = true;
-                      Navigator.pop(dialogCtx);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white12,
-                      foregroundColor: Colors.white70,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    child: const Text("Cancel Download"),
-                  ),
-                ],
+    // 1. Show immediate feedback
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent),
               ),
-            ),
+              SizedBox(width: 12),
+              Text("Resolving media stream for background download...", style: TextStyle(color: Colors.white, fontSize: 12)),
+            ],
           ),
-        );
-      },
+          backgroundColor: Color(0xFF141824),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    // 2. Resolve direct stream URL if needed
+    String downloadUrl = rawUrl;
+    try {
+      final resolved = await resolveDirectStream(rawUrl);
+      if (resolved != null && resolved.isNotEmpty) {
+        downloadUrl = resolved;
+      }
+    } catch (_) {}
+
+    // Clean safe title
+    String safeTitle = defaultFileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    if (safeTitle.endsWith('.mp4') || safeTitle.endsWith('.mkv') || safeTitle.endsWith('.jpg')) {
+      safeTitle = safeTitle.substring(0, safeTitle.lastIndexOf('.'));
+    }
+    if (safeTitle.isEmpty) safeTitle = "DropMMS_Video";
+
+    // Set custom headers for download task
+    final headers = <String, String>{};
+    final lowerDl = downloadUrl.toLowerCase();
+    if (lowerDl.contains('luluvdo') || lowerDl.contains('lulustream') || lowerDl.contains('tnmr') || lowerDl.contains('lulucdn')) {
+      headers['Referer'] = 'https://luluvdo.com/';
+      headers['Origin'] = 'https://luluvdo.com';
+    } else if (lowerDl.contains('merivo') || lowerDl.contains('vidara')) {
+      headers['Referer'] = 'https://merivo.fit/';
+      headers['Origin'] = 'https://merivo.fit';
+    } else if (lowerDl.contains('vibevdo')) {
+      headers['Referer'] = 'https://vibevdo.xyz/';
+      headers['Origin'] = 'https://vibevdo.xyz';
+    } else if (lowerDl.contains('vidsonic')) {
+      headers['Referer'] = 'https://vidsonic.net/';
+      headers['Origin'] = 'https://vidsonic.net';
+    } else if (lowerDl.contains('uncutmasti') || lowerDl.contains('ixifile')) {
+      headers['Referer'] = 'https://uncutmasti.com/';
+      headers['Origin'] = 'https://uncutmasti.com';
+    } else if (lowerDl.contains('maal') || lowerDl.contains('uffmaal') || lowerDl.contains('azmaal') || lowerDl.contains('bmaal') || lowerDl.contains('pmaal') || lowerDl.contains('hmaal')) {
+      headers['Referer'] = 'https://uffmaal.com/';
+      headers['Origin'] = 'https://uffmaal.com';
+    } else if (lowerDl.contains('streamtape') || lowerDl.contains('tapecontent') || lowerDl.contains('strcloud') || lowerDl.contains('advtpe')) {
+      headers['Referer'] = 'https://streamtape.com/';
+      headers['Origin'] = 'https://streamtape.com';
+    } else {
+      headers['Referer'] = 'https://dropmms.co/';
+    }
+
+    // 3. Queue task in DownloadManager (visible in Downloads Screen, background downloads, notifications, pause/resume)
+    await DownloadManager.instance.start(
+      downloadUrl,
+      safeTitle,
+      poster: poster ?? '',
+      originalUrl: rawUrl,
+      contentType: 1,
+      headers: headers,
     );
 
-    try {
-      final isHls = downloadUrl.contains('.m3u8');
-      final lowerDl = downloadUrl.toLowerCase();
-      String referer = 'https://dropmms.co/';
-      if (lowerDl.contains('luluvdo') || lowerDl.contains('lulustream') || lowerDl.contains('tnmr.org') || lowerDl.contains('lulucdn')) {
-        referer = 'https://luluvdo.com/';
-      } else if (lowerDl.contains('merivo') || lowerDl.contains('vidara')) {
-        referer = 'https://merivo.fit/';
-      } else if (lowerDl.contains('vibevdo')) {
-        referer = 'https://vibevdo.xyz/';
-      } else if (lowerDl.contains('vidsonic')) {
-        referer = 'https://vidsonic.net/';
-      }
-
-      if (isHls) {
-        // Full HLS Video Stream Downloader (downloads & stitches TS video chunks into complete .mp4)
-        final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
-        final req = await client.getUrl(Uri.parse(downloadUrl));
-        req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        req.headers.set('Referer', referer);
-        final resp = await req.close();
-        final m3u8Content = await utf8.decodeStream(resp);
-
-        var targetPlaylistUrl = downloadUrl;
-        var subM3u8Content = m3u8Content;
-
-        if (m3u8Content.contains('#EXT-X-STREAM-INF')) {
-          final lines = m3u8Content.split('\n');
-          String? subVariant;
-          for (int i = 0; i < lines.length; i++) {
-            if (lines[i].contains('#EXT-X-STREAM-INF') && i + 1 < lines.length) {
-              final nextLine = lines[i + 1].trim();
-              if (nextLine.isNotEmpty && !nextLine.startsWith('#')) {
-                subVariant = nextLine;
-              }
-            }
-          }
-          if (subVariant != null) {
-            if (subVariant.startsWith('http')) {
-              targetPlaylistUrl = subVariant;
-            } else {
-              final base = downloadUrl.substring(0, downloadUrl.lastIndexOf('/') + 1);
-              targetPlaylistUrl = base + subVariant;
-            }
-            final sReq = await client.getUrl(Uri.parse(targetPlaylistUrl));
-            sReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-            sReq.headers.set('Referer', referer);
-            final sResp = await sReq.close();
-            subM3u8Content = await utf8.decodeStream(sResp);
-          }
-        }
-
-        final lines = subM3u8Content.split('\n');
-        final chunkUrls = <String>[];
-        final playlistBase = targetPlaylistUrl.substring(0, targetPlaylistUrl.lastIndexOf('/') + 1);
-
-        for (final l in lines) {
-          final line = l.trim();
-          if (line.isNotEmpty && !line.startsWith('#')) {
-            if (line.startsWith('http')) {
-              chunkUrls.add(line);
-            } else {
-              chunkUrls.add(playlistBase + line);
-            }
-          }
-        }
-
-        if (chunkUrls.isEmpty) throw Exception("Failed to extract HLS video segments.");
-
-        if (await targetFile.exists()) await targetFile.delete();
-        final sink = targetFile.openWrite(mode: FileMode.writeOnlyAppend);
-        int totalChunks = chunkUrls.length;
-
-        for (int i = 0; i < totalChunks; i++) {
-          if (isCancelled) {
-            await sink.close();
-            if (await targetFile.exists()) await targetFile.delete();
-            client.close();
-            return;
-          }
-
-          final chunkUrl = chunkUrls[i];
-          final cReq = await client.getUrl(Uri.parse(chunkUrl));
-          cReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-          cReq.headers.set('Referer', referer);
-          final cResp = await cReq.close();
-          await sink.addStream(cResp);
-
-          final progress = (i + 1) / totalChunks;
-          progressNotifier.value = progress;
-          statusNotifier.value = "Segment ${i + 1} / $totalChunks";
-        }
-
-        await sink.flush();
-        await sink.close();
-        client.close();
-      } else {
-        // Direct MP4 / Binary Downloader
-        final client = http.Client();
-        final request = http.Request('GET', Uri.parse(downloadUrl));
-        request.headers.addAll({
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Referer': referer,
-        });
-
-        final response = await client.send(request);
-
-        // If returned content is an HTML webpage rather than a media file, redirect to browser
-        if (response.headers['content-type']?.contains('text/html') == true) {
-          client.close();
-          if (context.mounted && Navigator.canPop(context)) {
-            Navigator.pop(context);
-          }
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("File locker mirror requires verification. Opening in browser..."),
-                backgroundColor: Colors.amber,
-              ),
-            );
-          }
-          await launchUrl(Uri.parse(rawUrl), mode: LaunchMode.externalApplication);
-          return;
-        }
-
-        final totalBytes = response.contentLength ?? 0;
-        int receivedBytes = 0;
-
-        final sink = targetFile.openWrite();
-
-        await for (final chunk in response.stream) {
-          if (isCancelled) {
-            await sink.close();
-            if (await targetFile.exists()) await targetFile.delete();
-            client.close();
-            return;
-          }
-
-          sink.add(chunk);
-          receivedBytes += chunk.length;
-
-          if (totalBytes > 0) {
-            final progress = receivedBytes / totalBytes;
-            progressNotifier.value = progress;
-            final currentMb = (receivedBytes / (1024 * 1024)).toStringAsFixed(1);
-            final totalMb = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
-            statusNotifier.value = "$currentMb MB / $totalMb MB";
-          } else {
-            final currentMb = (receivedBytes / (1024 * 1024)).toStringAsFixed(1);
-            statusNotifier.value = "$currentMb MB downloaded";
-          }
-        }
-
-        await sink.flush();
-        await sink.close();
-        client.close();
-      }
-
-      // Trigger MediaScanner on Android so file shows up in Downloads/Gallery immediately
-      if (Platform.isAndroid) {
-        try {
-          await Process.run('am', [
-            'broadcast',
-            '-a',
-            'android.intent.action.MEDIA_SCANNER_SCAN_FILE',
-            '-d',
-            'file://$savePath'
-          ]);
-        } catch (_) {}
-      }
-
-      if (context.mounted && Navigator.canPop(context)) {
-        Navigator.pop(context); // Close progress dialog
-      }
-
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text("Downloaded to Downloads/$safeName", overflow: TextOverflow.ellipsis),
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.download_done_rounded, color: Colors.cyanAccent, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Downloading in background: $safeTitle",
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
-            backgroundColor: const Color(0xFF161B26),
-            action: SnackBarAction(
-              label: "OPEN",
-              textColor: Colors.cyanAccent,
-              onPressed: () {
-                OpenFilex.open(savePath);
-              },
-            ),
-            duration: const Duration(seconds: 8),
+              ),
+            ],
           ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Download error: $e"), backgroundColor: Colors.red),
-        );
-      }
+          action: SnackBarAction(
+            label: "VIEW",
+            textColor: Colors.amberAccent,
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+              );
+            },
+          ),
+          backgroundColor: const Color(0xFF101624),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
