@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Dynamic resolver for Aagmaal & Uncutmaal streams.
 /// Renews temporary Nginx `?md5=...&expires=...` tokens on the fly so movies never expire.
@@ -91,12 +92,24 @@ class AagmaalResolver {
     _cache[originalUrl] = _CachedStream(resolvedStreamUrl, expDate.subtract(const Duration(minutes: 5)));
   }
 
+  static Future<String> _getBaseDomain() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('aagmaal_domain')?.trim();
+      if (saved != null && saved.isNotEmpty && saved.startsWith('http')) {
+        return saved.endsWith('/') ? saved.substring(0, saved.length - 1) : saved;
+      }
+    } catch (_) {}
+    return 'https://aagmaal.mba';
+  }
+
   static Future<String?> _scrapeFreshStreamFromPage(String pageUrl) async {
     try {
+      final base = await _getBaseDomain();
       final res = await http.get(Uri.parse(pageUrl), headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Referer': 'https://aagmaal.mba/',
+        'Referer': '$base/',
       }).timeout(const Duration(seconds: 12));
       if (res.statusCode != 200) return null;
       final html = res.body;

@@ -9,6 +9,7 @@ import '../services/luluvdo_resolver.dart';
 import '../services/xhamster_resolver.dart';
 import '../services/eporner_resolver.dart';
 import '../services/tnaflix_resolver.dart';
+import '../services/uffmaal_scraper.dart';
 import '../widgets/resolving_dialog.dart';
 import 'subscription_vip_screen.dart';
 import 'video_player_screen.dart';
@@ -24,6 +25,9 @@ Future<void> playVideo(
     Map<String, String>? headers,
     List<Map<String, dynamic>>? playlist,
     int initialEpisodeIndex = 0}) async {
+  // Clean HTML entity encoding in stream URLs (e.g. &#038; -> &)
+  rawUrl = rawUrl.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+
   // Refresh VIP status from the server so admin grants / coupon redemptions take effect
   final uid = AppSession.user?.id ?? 0;
   if (uid > 0) {
@@ -70,6 +74,15 @@ Future<void> playVideo(
       currentQuality = initialQuality;
     } else if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
       finalUrl = await AagmaalResolver.resolveStream(rawUrl);
+    } else if (lowerRaw.contains('maal') || lowerRaw.contains('uffmaal') || lowerRaw.contains('azmaal') || lowerRaw.contains('bmaal') || lowerRaw.contains('pmaal') || lowerRaw.contains('hmaal')) {
+      if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8')) {
+        finalUrl = rawUrl;
+      } else {
+        final d = await UffmaalScraper.fetchUffmaalStreamAndPoster(rawUrl);
+        if (d.isNotEmpty && (d['stream_url'] ?? '').toString().isNotEmpty) {
+          finalUrl = d['stream_url'].toString().trim();
+        }
+      }
     } else if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8') || lowerRaw.contains('rdtcdn') || lowerRaw.contains('sb-cdn') || lowerRaw.contains('spankbang')) {
       finalUrl = rawUrl;
     } else if (XHamsterResolver.isXHamsterUrl(rawUrl)) {
@@ -155,6 +168,29 @@ Future<void> playVideo(
       return;
     }
 
+    final effectiveHeaders = Map<String, String>.from(headers ?? {});
+    final lowerFinal = finalUrl.toLowerCase();
+
+    if (lowerFinal.contains('hdmaal') || lowerFinal.contains('maalcdn')) {
+      effectiveHeaders['Referer'] = 'https://hdmaal.gg/';
+      effectiveHeaders['Origin'] = 'https://hdmaal.gg';
+    } else if (lowerFinal.contains('uffmaal') || lowerFinal.contains('azmaal') || lowerFinal.contains('bmaal') || lowerFinal.contains('pmaal') || lowerFinal.contains('cdn.azmaal.com') || lowerFinal.contains('cdn.bmaal.com') || lowerFinal.contains('cdn.pmaal.com')) {
+      effectiveHeaders['Referer'] = 'https://uffmaal.com/';
+      effectiveHeaders['Origin'] = 'https://uffmaal.com';
+    } else if (lowerFinal.contains('aagmaal') || lowerFinal.contains('uncutmaal') || lowerFinal.contains('9redmovies') || lowerFinal.contains('hotbazi')) {
+      effectiveHeaders['Referer'] = 'https://aagmaal.mba/';
+      effectiveHeaders['Origin'] = 'https://aagmaal.mba';
+    } else if (lowerFinal.contains('uncutmasti') || lowerFinal.contains('ixifile')) {
+      effectiveHeaders['Referer'] = 'https://uncutmasti.com/';
+      effectiveHeaders['Origin'] = 'https://uncutmasti.com';
+    } else if (lowerFinal.contains('hdmove99')) {
+      effectiveHeaders['Referer'] = 'https://hdmove99.com/';
+      effectiveHeaders['Origin'] = 'https://hdmove99.com';
+    } else if (lowerFinal.contains('skymovies') || lowerFinal.contains('skymovieshd')) {
+      effectiveHeaders['Referer'] = 'https://skymovieshd.ceo/';
+      effectiveHeaders['Origin'] = 'https://skymovieshd.ceo';
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -165,7 +201,7 @@ Future<void> playVideo(
           contentType: contentType,
           qualities: qualities ?? streamQualities,
           initialQuality: initialQuality ?? currentQuality,
-          headers: headers,
+          headers: effectiveHeaders.isNotEmpty ? effectiveHeaders : headers,
           playlist: playlist,
           initialEpisodeIndex: initialEpisodeIndex,
         ),

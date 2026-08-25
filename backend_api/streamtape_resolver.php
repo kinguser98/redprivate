@@ -21,7 +21,7 @@ curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
 curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'Accept-Language: en-US,en;q=0.9',
     'Referer: https://streamtape.com/'
@@ -87,17 +87,34 @@ if (!empty($direct_link)) {
         $direct_link .= (strpos($direct_link, '?') !== false ? '&stream=1' : '?stream=1');
     }
 
-    // Append format hint fragment #video.mp4 so media_kit / libmpv recognizes format immediately!
-    if (strpos($direct_link, '#') === false) {
-        $direct_link .= '#video.mp4';
+    // Follow redirect to resolve direct tapecontent CDN video URL
+    $ch2 = curl_init();
+    curl_setopt($ch2, CURLOPT_URL, $direct_link);
+    curl_setopt($ch2, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch2, CURLOPT_FOLLOWLOCATION, false);
+    curl_setopt($ch2, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch2, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    curl_setopt($ch2, CURLOPT_REFERER, $watch_url);
+    curl_setopt($ch2, CURLOPT_HEADER, true);
+    curl_setopt($ch2, CURLOPT_NOBODY, true);
+    curl_setopt($ch2, CURLOPT_TIMEOUT, 6);
+    curl_exec($ch2);
+    $redirect_url = curl_getinfo($ch2, CURLINFO_REDIRECT_URL);
+    curl_close($ch2);
+
+    $final_stream = (!empty($redirect_url) && strpos($redirect_url, 'http') === 0) ? $redirect_url : $direct_link;
+
+    // Append format hint fragment #video.mp4
+    if (strpos($final_stream, '#') === false) {
+        $final_stream .= '#video.mp4';
     }
 
     json_response(true, [
         "original_url" => $url,
-        "stream_url" => $direct_link,
+        "stream_url" => $final_stream,
         "source" => "scraper"
     ], "Streamtape link resolved");
 } else {
-    json_response(false, ["original_url" => $url], "Failed to extract Streamtape video token. Link may be dead or deleted.");
+    json_response(false, [], "Unable to find direct stream link in Streamtape page");
 }
 ?>

@@ -13,25 +13,24 @@ class StreamtapeService {
   static List<String> _apiDomains = [];
 
   static const List<String> defaultWatchCdnDomains = [
-    'advtpe.com',
-    'advtape.com',
-    'streamta.pe',
     'strcloud.link',
-    'strcolud.club',
+    'streamta.pe',
     'stape.fun',
-    'streamtape.com',
+    'adblocktape.fun',
+    'advtpe.com',
+    'tpead.net',
+    'advtape.com',
+    'shavetape.cash',
+    'tapepops.com',
     'streamtape.to',
+    'streamtape.com',
     'streamtape.xyz',
     'tapecontent.net',
-    'shavetape.cash',
-    'adblocktape.fun',
-    'tpead.net',
-    'tapepops.com',
   ];
 
   static const List<String> defaultApiDomains = [
-    'api.streamtape.com',
     'api.streamtape.to',
+    'api.streamtape.com',
   ];
 
   // Initialize domains from SharedPreferences
@@ -68,7 +67,6 @@ class StreamtapeService {
     final str = domains.join(',');
     await prefs.setString('admin_streamtape_api_domains', str);
     _apiDomains = List<String>.from(domains);
-    await _syncDomainsToServer(apiDomainsStr: str);
   }
 
   static Future<void> saveFamilyDomains(List<String> domains) async {
@@ -76,7 +74,6 @@ class StreamtapeService {
     final str = domains.join(',');
     await prefs.setString('admin_streamtape_family_domains', str);
     _watchDomains = List<String>.from(domains);
-    await _syncDomainsToServer(familyDomainsStr: str);
   }
 
   static Future<void> resetDomainsToDefault() async {
@@ -85,55 +82,27 @@ class StreamtapeService {
     await prefs.remove('admin_streamtape_family_domains');
     _watchDomains = List<String>.from(defaultWatchCdnDomains);
     _apiDomains = List<String>.from(defaultApiDomains);
-    await _syncDomainsToServer(
-      apiDomainsStr: defaultApiDomains.join(','),
-      familyDomainsStr: defaultWatchCdnDomains.join(','),
-    );
-  }
-
-  static Future<void> _syncDomainsToServer({String? apiDomainsStr, String? familyDomainsStr}) async {
-    try {
-      final apiStr = apiDomainsStr ?? _apiDomains.join(',');
-      final familyStr = familyDomainsStr ?? _watchDomains.join(',');
-
-      final body = {
-        'action': 'save_app_settings',
-        'settings': {
-          'streamtape_api_domains': apiStr,
-          'streamtape_family_domains': familyStr,
-        }
-      };
-
-      await http.post(
-        Uri.parse(ApiConfig.adminUrl),
-        body: json.encode(body),
-        headers: {'Content-Type': 'application/json'},
-      ).timeout(const Duration(seconds: 8));
-    } catch (_) {}
   }
 
   static bool isStreamtapeFamily(String url) {
     if (url.isEmpty) return false;
     final lower = url.toLowerCase();
     
-    // Check main patterns
     if (lower.contains('streamtape') ||
-        lower.contains('tapecontent') ||
+        lower.contains('streamta.pe') ||
         lower.contains('strcloud') ||
         lower.contains('strcolud') ||
-        lower.contains('stape') ||
-        lower.contains('streamta.pe') ||
+        lower.contains('tapecontent') ||
+        lower.contains('stape.fun') ||
+        lower.contains('shavetape') ||
         lower.contains('advtpe') ||
         lower.contains('advtape') ||
-        lower.contains('adtape') ||
-        lower.contains('shavetape') ||
         lower.contains('adblocktape') ||
         lower.contains('tpead') ||
         lower.contains('tapepops')) {
       return true;
     }
 
-    // Check custom domains dynamically loaded in memory
     for (final domain in _watchDomains) {
       if (lower.contains(domain.toLowerCase())) return true;
     }
@@ -184,8 +153,6 @@ class StreamtapeService {
 
     final lower = streamtapeUrl.toLowerCase();
     if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('lulucdn')) {
-      // Luluvdo tokens are IP-bound to the requesting device.
-      // Returning null delegates to EmbedResolver to generate phone-authenticated streams on device.
       return null;
     }
 
@@ -199,17 +166,31 @@ class StreamtapeService {
       return _urlCache[streamtapeUrl];
     }
 
-    await init(); // Ensure custom dynamic domains are loaded
+    await init();
 
     final fileId = extractFileId(streamtapeUrl);
     if (fileId == null) return null;
 
-    // LAYER 1: Javascript Substring Evaluator on Streamtape Mirror Pages
-    final searchDomains = _watchDomains.isNotEmpty ? _watchDomains : defaultWatchCdnDomains;
+    // Fast unblocked mirror domains prioritized for Indian ISPs & global access
+    final searchDomains = [
+      'strcloud.link',
+      'streamta.pe',
+      'stape.fun',
+      'adblocktape.fun',
+      'advtpe.com',
+      'tpead.net',
+      'streamtape.to',
+      ...(_watchDomains.isNotEmpty ? _watchDomains : defaultWatchCdnDomains)
+    ];
+
     for (final domain in searchDomains) {
       try {
         final pageUrl = 'https://$domain/v/$fileId';
-        final res = await _getFast(pageUrl);
+        final res = await http.get(Uri.parse(pageUrl), headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }).timeout(const Duration(seconds: 6));
+
         if (res.statusCode == 200) {
           final html = res.body;
           final match = RegExp(
@@ -237,16 +218,16 @@ class StreamtapeService {
               fullPath = 'https://$domain$fullPath';
             }
 
+            // Replace streamtape.com with unblocked mirror domain
+            fullPath = fullPath.replaceAll('streamtape.com', domain);
+
             if (!fullPath.contains('stream=1')) {
               fullPath += fullPath.contains('?') ? '&stream=1' : '?stream=1';
             }
 
-            // Follow redirect to resolve direct CDN video URL (tapecontent.net/radosgw/...)
-            final redirectUrl = await _resolveRedirectUrl(fullPath, 'https://$domain/v/$fileId');
-            final finalMediaUrl = redirectUrl ?? fullPath;
-            debugPrint("Resolved Direct Streamtape Video URL ($domain): $finalMediaUrl");
-            _urlCache[streamtapeUrl] = finalMediaUrl;
-            return finalMediaUrl;
+            debugPrint("Resolved Direct Stream URL ($domain): $fullPath");
+            _urlCache[streamtapeUrl] = fullPath;
+            return fullPath;
           }
         }
       } catch (e) {
@@ -254,92 +235,6 @@ class StreamtapeService {
       }
     }
 
-    // LAYER 2: Backend PHP resolver fallback
-    try {
-      final response = await _getFast("${ApiConfig.baseUrl}/streamtape_resolver.php?url=${Uri.encodeComponent(streamtapeUrl)}");
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'success' && data['data']?['stream_url'] != null) {
-          String url = data['data']['stream_url'].toString().trim();
-          if (url.startsWith('http')) {
-            if (!url.contains('stream=1')) {
-              url += url.contains('?') ? '&stream=1' : '?stream=1';
-            }
-            if (url.contains('#')) {
-              url = url.split('#')[0];
-            }
-            debugPrint("Resolved stream URL from backend fallback: $url");
-            _urlCache[streamtapeUrl] = url;
-            return url;
-          }
-        }
-      }
-    } catch (_) {}
-
     return null;
-  }
-
-  static HttpClient _createDohClient() {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 8)
-      ..badCertificateCallback = (cert, host, port) => true;
-    client.findProxy = (uri) => 'DIRECT';
-    client.connectionFactory = (uri, host, port) async {
-      String targetIp = '104.26.1.182';
-      try {
-        final s = await Socket.connect(targetIp, uri.port, timeout: const Duration(seconds: 4));
-        if (uri.scheme == 'https') {
-          final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
-          return ConnectionTask.fromSocket(Future.value(sec), () {});
-        }
-        return ConnectionTask.fromSocket(Future.value(s), () {});
-      } catch (_) {
-        final s = await Socket.connect('104.26.2.182', uri.port, timeout: const Duration(seconds: 4));
-        if (uri.scheme == 'https') {
-          final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
-          return ConnectionTask.fromSocket(Future.value(sec), () {});
-        }
-        return ConnectionTask.fromSocket(Future.value(s), () {});
-      }
-    };
-    return client;
-  }
-
-  static Future<String?> _resolveRedirectUrl(String targetUrl, String referer) async {
-    final ioClient = _createDohClient();
-    try {
-      final req = await ioClient.getUrl(Uri.parse(targetUrl));
-      req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      req.headers.set('Referer', referer);
-      req.followRedirects = false; // Capture HTTP 302 location header directly!
-      final resp = await req.close().timeout(const Duration(seconds: 6));
-      final redirectUrl = resp.headers.value('location') ?? resp.headers.value('content-location');
-      if (redirectUrl != null && redirectUrl.startsWith('http')) {
-        return redirectUrl;
-      }
-      if (resp.statusCode == 200) {
-        return targetUrl;
-      }
-    } catch (_) {} finally {
-      ioClient.close();
-    }
-    return null;
-  }
-
-  static Future<http.Response> _getFast(String fetchUrl) async {
-    final ioClient = _createDohClient();
-    final client = IOClient(ioClient);
-    try {
-      return await client.get(
-        Uri.parse(fetchUrl),
-        headers: {
-          'Connection': 'close',
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      ).timeout(const Duration(seconds: 6));
-    } finally {
-      client.close();
-    }
   }
 }
