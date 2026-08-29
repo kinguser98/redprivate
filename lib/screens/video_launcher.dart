@@ -74,6 +74,17 @@ Future<void> playVideo(
       currentQuality = initialQuality;
     } else if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
       finalUrl = await AagmaalResolver.resolveStream(rawUrl);
+    } else if (StreamtapeService.isStreamtapeFamily(rawUrl) && !StreamtapeService.isDirectMediaUrl(rawUrl)) {
+      String? resolved = await StreamtapeService.getDirectStreamUrl(rawUrl, forceRefresh: true);
+      if ((resolved == null ||
+              resolved.isEmpty ||
+              !resolved.startsWith('http')) &&
+          context.mounted) {
+        resolved = await EmbedResolver.resolve(context, rawUrl);
+      }
+      if (resolved != null && resolved.isNotEmpty && resolved.startsWith('http')) {
+        finalUrl = resolved;
+      }
     } else if (lowerRaw.contains('maal') || lowerRaw.contains('uffmaal') || lowerRaw.contains('azmaal') || lowerRaw.contains('bmaal') || lowerRaw.contains('pmaal') || lowerRaw.contains('hmaal')) {
       if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8')) {
         finalUrl = rawUrl;
@@ -82,6 +93,23 @@ Future<void> playVideo(
         if (d.isNotEmpty && (d['stream_url'] ?? '').toString().isNotEmpty) {
           finalUrl = d['stream_url'].toString().trim();
         }
+      }
+    } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
+      finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
+    } else if (lowerRaw.contains('playmate')) {
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        final code = rawUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => WebViewPlayerScreen(
+              embedUrl: 'https://playmate.to/embed/$code',
+              videoTitle: title,
+            ),
+          ),
+        );
+        return;
       }
     } else if (lowerRaw.contains('.mp4') || lowerRaw.contains('.m3u8') || lowerRaw.contains('rdtcdn') || lowerRaw.contains('sb-cdn') || lowerRaw.contains('spankbang')) {
       finalUrl = rawUrl;
@@ -121,23 +149,6 @@ Future<void> playVideo(
         } else if (context.mounted) {
           finalUrl = await EmbedResolver.resolve(context, rawUrl);
         }
-      }
-    } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
-      finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
-    } else if (lowerRaw.contains('playmate')) {
-      if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        final code = rawUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => WebViewPlayerScreen(
-              embedUrl: 'https://playmate.to/embed/$code',
-              videoTitle: title,
-            ),
-          ),
-        );
-        return;
       }
     } else if (StreamtapeService.isDirectMediaUrl(rawUrl)) {
       finalUrl = rawUrl;

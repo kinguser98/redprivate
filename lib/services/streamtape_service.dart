@@ -129,7 +129,11 @@ class StreamtapeService {
     if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('uplinks')) {
       return false;
     }
-    if (isStreamtapeFamily(url) && !lower.contains('/radosgw/') && !lower.endsWith('.mp4')) {
+    // Streamtape web pages (/v/, /e/, /f/) are NEVER direct media, even if they end in .mp4 or .mkv
+    if (isStreamtapeFamily(url)) {
+      if (lower.contains('get_video') || lower.contains('/radosgw/') || lower.contains('/ep?u=')) {
+        return true;
+      }
       return false;
     }
 
