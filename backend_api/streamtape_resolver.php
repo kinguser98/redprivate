@@ -12,23 +12,63 @@ if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false ||
     exit(0);
 }
 
-// Convert embed URLs (/e/) or watch URLs (/v/) to standard watch URL
-$watch_url = preg_replace('#/(?:e|f)/#', '/v/', $url);
+// Extract Streamtape file ID
+$file_id = '';
+if (preg_match('#/(?:e|f|v)/([a-zA-Z0-9_-]+)#', $url, $m)) {
+    $file_id = $m[1];
+}
 
-$ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, $watch_url);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Accept-Language: en-US,en;q=0.9',
-    'Referer: https://streamtape.com/'
-]);
-curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-$html = curl_exec($ch);
-curl_close($ch);
+$mirrors = ['strcloud.link', 'streamta.pe', 'stape.fun', 'advtpe.com', 'streamtape.com'];
+$html = false;
+$active_domain = 'strcloud.link';
+$watch_url = $url;
+
+if (!empty($file_id)) {
+    foreach ($mirrors as $mirror) {
+        $try_url = "https://{$mirror}/v/{$file_id}";
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $try_url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept-Language: en-US,en;q=0.9',
+            'Referer: https://' . $mirror . '/'
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+        $res = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code == 200 && !empty($res) && strpos($res, 'robotlink') !== false) {
+            $html = $res;
+            $active_domain = $mirror;
+            $watch_url = $try_url;
+            break;
+        }
+    }
+}
+
+if (!$html) {
+    // Fallback: direct fetch from original watch url
+    $watch_url = preg_replace('#/(?:e|f)/#', '/v/', $url);
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $watch_url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Accept-Language: en-US,en;q=0.9',
+        'Referer: https://streamtape.com/'
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    $html = curl_exec($ch);
+    curl_close($ch);
+}
 
 if (!$html) {
     json_response(false, [], "Failed to fetch Streamtape page");
