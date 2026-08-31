@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -21,7 +20,7 @@ class TelegramExtractorService {
     final prefs = await SharedPreferences.getInstance();
     String botToken = prefs.getString(_keyBotToken) ?? '';
     String channelId = prefs.getString(_keyChannelId) ?? '';
-    bool useServer = prefs.getBool(_keyUseServer) ?? false;
+    bool useServer = prefs.getBool(_keyUseServer) ?? true; // Default: server-side (0 MB mobile data)
 
     if (botToken.isEmpty) {
       botToken = prefs.getString('telegram_bot_token') ?? '';
@@ -196,7 +195,7 @@ class TelegramExtractorService {
 
       req.fields['media'] = json.encode(mediaGroup);
 
-      final streamed = await req.send().timeout(const Duration(seconds: 45));
+      final streamed = await req.send().timeout(const Duration(seconds: 300));
       final res = await http.Response.fromStream(streamed);
       final body = json.decode(res.body);
 
@@ -278,7 +277,7 @@ class TelegramExtractorService {
         final request = http.Request('GET', Uri.parse(cleanUrl));
         headers.forEach((k, v) => request.headers[k] = v);
 
-        final streamed = await client.send(request).timeout(const Duration(seconds: 30));
+        final streamed = await client.send(request).timeout(const Duration(seconds: 120));
         if (streamed.statusCode >= 400) {
           client.close();
           return {
@@ -391,7 +390,7 @@ class TelegramExtractorService {
       final req = http.Request('GET', Uri.parse(m3u8Url));
       headers.forEach((k, v) => req.headers[k] = v);
 
-      final res = await client.send(req).timeout(const Duration(seconds: 15));
+      final res = await client.send(req).timeout(const Duration(seconds: 60));
       if (res.statusCode != 200) {
         client.close();
         return false;
@@ -428,7 +427,7 @@ class TelegramExtractorService {
           final vClient = http.Client();
           final vReq = http.Request('GET', Uri.parse(variantUrl));
           headers.forEach((k, v) => vReq.headers[k] = v);
-          final vRes = await vClient.send(vReq).timeout(const Duration(seconds: 15));
+          final vRes = await vClient.send(vReq).timeout(const Duration(seconds: 60));
           if (vRes.statusCode == 200) {
             playlistBody = await vRes.stream.bytesToString();
           }
@@ -459,7 +458,7 @@ class TelegramExtractorService {
         final segReq = http.Request('GET', Uri.parse(segUrl));
         headers.forEach((k, v) => segReq.headers[k] = v);
 
-        final segRes = await segClient.send(segReq).timeout(const Duration(seconds: 20));
+        final segRes = await segClient.send(segReq).timeout(const Duration(seconds: 120));
         if (segRes.statusCode == 200 || segRes.statusCode == 206) {
           await for (final chunk in segRes.stream) {
             sink.add(chunk);

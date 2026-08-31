@@ -21,6 +21,7 @@ import '../../services/streamtape_service.dart';
 import '../../services/dropmms_service.dart';
 import '../../services/skymovies_scraper.dart';
 import '../../services/uffmaal_scraper.dart';
+import '../../services/maal_network_scraper.dart';
 import '../../services/telegram_collage_helper.dart';
 import '../dropmms_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -10107,7 +10108,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     required Future<void> Function() refresh,
   }) {
     final searchCtrl = TextEditingController(text: seriesTitle.trim());
-    int tab = 0; // 0 = UFFMaal, 1 = HDMaal, 2 = Uncut
+    int tab = 0; // 0 = UFFMaal, 1 = HDMaal, 2 = Uncut, 3 = Maal Network
     bool isSearching = false;
     bool isImporting = false;
     String importStatus = '';
@@ -10117,6 +10118,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     String selectedQuality = '720p';
     int startOrder = currentEpisodes.length + 1;
     String? errorText;
+    // Maal Network site picker (multi-select from registry)
+    List<String> maalSelectedDomains = MaalNetworkScraper.allSites
+        .where((s) => s['group'] == 'Premium')
+        .map((s) => s['domain']!)
+        .toList();
 
     showDialog(
       context: context,
@@ -10205,6 +10211,20 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'selected': true,
                       }];
                     }
+                  } else if (tab == 3) {
+                    // Maal Network URL paste
+                    final details = await MaalNetworkScraper.fetchEpisodeDetails(q);
+                    if (details != null && (details.streamUrl ?? '').isNotEmpty) {
+                      episodeItems = [{
+                        'raw_title': details.title ?? 'Episode 1',
+                        'title': details.title ?? 'Episode 1',
+                        'url': q,
+                        'stream_url': details.streamUrl,
+                        'poster': (details.poster ?? '').toString(),
+                        'ep_num': _parseEpisodeNumber(details.title ?? '', q) ?? 1,
+                        'selected': true,
+                      }];
+                    }
                   }
                 } else {
                   // Search query
@@ -10242,7 +10262,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'selected': true,
                       };
                     }).toList();
-                  } else {
+                  } else if (tab == 2) {
                     // Uncut
                     final res = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
                     if (res['status'] == 'success' && res['data']?['items'] != null) {
@@ -10261,6 +10281,27 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         };
                       }).toList();
                     }
+                  } else if (tab == 3) {
+                    // Maal Network multi-domain search
+                    final results = await MaalNetworkScraper.search(
+                      q,
+                      siteDomains: maalSelectedDomains,
+                    );
+                    episodeItems = results.map((r) {
+                      final titleStr = r.title;
+                      final urlStr = r.pageUrl;
+                      final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                      return {
+                        'raw_title': titleStr,
+                        'title': titleStr,
+                        'url': urlStr,
+                        'poster': r.poster,
+                        'ep_num': parsedNum,
+                        'selected': true,
+                        'site_name': r.siteName,
+                        'site_domain': r.siteDomain,
+                      };
+                    }).toList();
                   }
                 }
 
@@ -10362,11 +10403,26 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
                       }
                     }
-                  } else {
+                  } else if (tab == 2) {
                     final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
                     if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
                       streamUrl = res['data']['stream_url'].toString().trim();
                       if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
+                    }
+                  } else if (tab == 3) {
+                    // Maal Network: try client first, then server
+                    final d = await MaalNetworkScraper.fetchEpisodeDetails(pageUrl);
+                    if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                      streamUrl = d.streamUrl!.trim();
+                      if (poster.isEmpty) poster = (d.poster ?? '').trim();
+                    }
+                    // Server fallback
+                    if (streamUrl.isEmpty) {
+                      final sRes = await _adminPhpApi('extract_maal_network_episode', {'page_url': pageUrl});
+                      if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
+                        streamUrl = sRes['data']['stream_url'].toString().trim();
+                        if (poster.isEmpty) poster = (sRes['data']['poster'] ?? '').toString().trim();
+                      }
                     }
                   }
                 }
@@ -10599,8 +10655,28 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                alignment: Alignment.center,
+                                 alignment: Alignment.center,
                                 child: Text("UncutMasti", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: isImporting ? null : () {
+                                dialogSetState(() {
+                                  tab = 3;
+                                  episodeItems = [];
+                                  errorText = null;
+                                });
+                                performSearch();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: tab == 3 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text("🌐 Maal Network", style: TextStyle(color: tab == 3 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                               ),
                             ),
                           ),
@@ -15776,7 +15852,7 @@ class _TelegramBroadcastModal extends StatefulWidget {
 }
 
 class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
-  int _tab = 0; // 0 = Episodes, 1 = SkymoviesHD, 2 = UffMaal / HDMaal / Uncut, 3 = Web Grabber
+  int _tab = 0; // 0 = Episodes, 1 = SkymoviesHD, 2 = UffMaal / HDMaal / Uncut, 3 = Web Grabber, 4 = Maal Network
   late TextEditingController _captionCtrl;
   final _skymoviesSearchCtrl = TextEditingController();
   final _uncutSearchCtrl = TextEditingController();
@@ -15796,6 +15872,15 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
   bool _searchingUncut = false;
   List<UffmaalItem> _uncutEntries = [];
   UffmaalItem? _selectedUncutEntry;
+
+  // Maal Network search state
+  bool _searchingMaal = false;
+  List<MaalNetworkItem> _maalEntries = [];
+  MaalNetworkItem? _selectedMaalEntry;
+  List<String> _maalSelectedDomains = MaalNetworkScraper.allSites
+      .where((s) => s['group'] == 'Premium')
+      .map((s) => s['domain']!)
+      .toList();
 
   // Screenshot Pool & Selection
   List<String> _availableScreenshots = [];
@@ -16408,6 +16493,8 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                           _tabBtn(2, "🔥 UffMaal / HDMaal / Uncut", Colors.deepOrangeAccent),
                           const SizedBox(width: 6),
                           _tabBtn(3, "🌐 Web Grabber", Colors.cyanAccent),
+                          const SizedBox(width: 6),
+                          _tabBtn(4, "🌐 Maal Network", Colors.greenAccent),
                         ],
                       ),
                     ),
@@ -16760,7 +16847,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                         ),
                       ],
 
-                    ] else ...[
+                    ] else if (_tab == 3) ...[
                       // Web Grabber Tab
                       Container(
                         padding: const EdgeInsets.all(12),
@@ -16780,6 +16867,122 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                               label: const Text("Open Web Image Grabber", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                               style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
                             ),
+                          ],
+                        ),
+                      ),
+                    ] else if (_tab == 4) ...[ 
+                      // Maal Network Tab
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141722),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              const Icon(Icons.public, color: Colors.greenAccent, size: 16),
+                              const SizedBox(width: 6),
+                              const Text("🌐 Maal Network Search", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                            ]),
+                            const SizedBox(height: 6),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: MaalNetworkScraper.allSites.map((site) {
+                                  final domain = site['domain']!;
+                                  final isSelected = _maalSelectedDomains.contains(domain);
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 6),
+                                    child: FilterChip(
+                                      label: Text(site['name']!, style: TextStyle(fontSize: 9, color: isSelected ? Colors.black : Colors.white54)),
+                                      selected: isSelected,
+                                      selectedColor: Colors.greenAccent,
+                                      backgroundColor: const Color(0xFF1A2035),
+                                      side: BorderSide(color: isSelected ? Colors.greenAccent : Colors.white12),
+                                      onSelected: (val) => setState(() {
+                                        if (val) { _maalSelectedDomains.add(domain); } else { _maalSelectedDomains.remove(domain); }
+                                      }),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: _searchingMaal ? null : () async {
+                                  setState(() { _searchingMaal = true; _maalEntries = []; });
+                                  try {
+                                    final results = await MaalNetworkScraper.search(widget.title, siteDomains: _maalSelectedDomains);
+                                    setState(() { _maalEntries = results; });
+                                  } catch (e) { /* silent */ } finally {
+                                    setState(() { _searchingMaal = false; });
+                                  }
+                                },
+                                icon: _searchingMaal
+                                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                                    : const Icon(Icons.search, size: 14),
+                                label: Text(_searchingMaal ? "Searching..." : "Search Maal Network"),
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black,
+                                    textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                              ),
+                            ),
+                            if (_maalEntries.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: 130,
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: _maalEntries.length,
+                                  itemBuilder: (ctx, i) {
+                                    final item = _maalEntries[i];
+                                    final isSel = _selectedMaalEntry == item;
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setState(() { _selectedMaalEntry = item; });
+                                        if (item.poster.isNotEmpty) {
+                                          _availableScreenshots = [item.poster];
+                                          _selectedScreenshotUrls.clear();
+                                          _selectedScreenshotUrls.add(item.poster);
+                                          _generateCollageFromUrls([item.poster]);
+                                        }
+                                      },
+                                      child: Container(
+                                        width: 90,
+                                        margin: const EdgeInsets.only(right: 8),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: isSel ? Colors.greenAccent : Colors.white12, width: isSel ? 2 : 1),
+                                        ),
+                                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                                          Expanded(child: ClipRRect(
+                                            borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
+                                            child: item.poster.isNotEmpty
+                                                ? CachedNetworkImage(imageUrl: item.poster, fit: BoxFit.cover,
+                                                    errorWidget: (_, __, ___) => Container(color: const Color(0xFF141722), child: const Icon(Icons.image, color: Colors.white24)))
+                                                : Container(color: const Color(0xFF141722), child: const Icon(Icons.image, color: Colors.white24)),
+                                          )),
+                                          Container(
+                                            padding: const EdgeInsets.all(4),
+                                            decoration: const BoxDecoration(color: Color(0xFF141722), borderRadius: BorderRadius.vertical(bottom: Radius.circular(7))),
+                                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                              Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.bold)),
+                                              const SizedBox(height: 2),
+                                              Text(item.siteName, style: const TextStyle(color: Colors.greenAccent, fontSize: 8)),
+                                            ]),
+                                          ),
+                                        ]),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

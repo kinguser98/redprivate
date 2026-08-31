@@ -4514,6 +4514,219 @@ if ($action === 'extract_uffmaal_details') {
     ], 'UFFMaal details extracted');
 }
 
+// ── Maal Network: Search across one or multiple sites ─────────────────────────
+if ($action === 'search_maal_network') {
+    $query   = trim($input['query'] ?? '');
+    $domains = $input['domains'] ?? [];
+    if (!is_array($domains)) $domains = [$domains];
+    if (empty($query)) json_response(false, [], 'Query required');
+    if (empty($domains)) {
+        // Default: top premium sites
+        $domains = ['uffmaal.com', 'goldmaal.com.co', 'ottmela.co', 'ottdude.com', 'aagmaal.hot', 'bmaal.net'];
+    }
+
+    $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    $all_items = [];
+
+    foreach (array_slice($domains, 0, 8) as $domain) {
+        $domain = preg_replace('#^https?://#', '', trim($domain));
+        $base   = 'https://' . $domain;
+        $search_url = $base . '/?s=' . urlencode($query);
+
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $search_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => 6,
+            CURLOPT_TIMEOUT        => 12,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_USERAGENT      => $ua,
+            CURLOPT_HTTPHEADER     => [
+                'Referer: ' . $base . '/',
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+            ],
+        ]);
+        $html      = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code != 200 || empty($html)) continue;
+
+        // Parse WordPress article cards
+        preg_match_all('/<article[^>]*>[\s\S]*?<a\s+href=["\']([^"\']+)["\'][^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["\']([^"\']+)["\'][\s\S]*?<\/article>/i', $html, $matches);
+
+        for ($i = 0; $i < count($matches[1]); $i++) {
+            $href  = trim($matches[1][$i]);
+            $img   = trim($matches[2][$i]);
+            if (empty($href) || strpos($href, 'http') !== 0) continue;
+
+            // Extract title from link or nearby heading
+            $title = '';
+            if (preg_match('/<h[1-6][^>]*>(.*?)<\/h[1-6]>/is', $matches[0][$i], $tm)) {
+                $title = trim(html_entity_decode(strip_tags($tm[1])));
+            }
+            if (empty($title)) {
+                // Derive from URL slug
+                $parts = explode('/', rtrim($href, '/'));
+                $slug  = end($parts);
+                $title = ucwords(str_replace(['-', '_'], ' ', $slug));
+            }
+
+            $all_items[] = [
+                'title'       => $title,
+                'page_url'    => $href,
+                'poster'      => $img,
+                'site_domain' => $domain,
+                'site_name'   => ucwords(str_replace(['.', '-'], ' ', explode('.', $domain)[0])),
+                'is_episode'  => false,
+            ];
+        }
+
+        // Fallback: generic href + img within results
+        if (empty($all_items) || count($all_items) < 2) {
+            preg_match_all('/<a\s+href=["\']([^"\']+)["\'][^>]*>[\s\S]*?<img[^>]+src=["\']([^"\']+)["\'][^>]*>/i', $html, $simple);
+            for ($i = 0; $i < min(count($simple[1]), 15); $i++) {
+                $href = trim($simple[1][$i]);
+                $img  = trim($simple[2][$i]);
+                if (empty($href) || strpos($href, $domain) === false) continue;
+                $parts = explode('/', rtrim($href, '/'));
+                $slug  = end($parts);
+                $title = ucwords(str_replace(['-', '_'], ' ', $slug));
+                $all_items[] = [
+                    'title'       => $title,
+                    'page_url'    => $href,
+                    'poster'      => $img,
+                    'site_domain' => $domain,
+                    'site_name'   => ucwords(str_replace(['.', '-'], ' ', explode('.', $domain)[0])),
+                    'is_episode'  => false,
+                ];
+            }
+        }
+    }
+
+    json_response(true, ['items' => $all_items], count($all_items) . ' results found');
+}
+
+// ── Maal Network: Extract stream URL from an episode page ─────────────────────
+if ($action === 'extract_maal_network_episode') {
+    $page_url = trim($input['page_url'] ?? '');
+    if (empty($page_url)) json_response(false, [], 'Page URL required');
+
+    $parsed  = parse_url($page_url);
+    $base    = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
+    $ua      = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $page_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_USERAGENT      => $ua,
+        CURLOPT_HTTPHEADER     => [
+            'Referer: ' . $base . '/',
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+        ],
+    ]);
+    $html      = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code != 200 || empty($html)) {
+        json_response(false, [], 'Failed to fetch episode page (HTTP ' . $http_code . ')');
+    }
+
+    $stream_url = '';
+    $referer    = $base . '/';
+
+    // 1. <source src="...mp4/m3u8">
+    if (preg_match('/<source[^>]+src=["\']([^"\']+\.(?:mp4|m3u8)[^"\']*)["\']/', $html, $m)) {
+        $stream_url = html_entity_decode(trim($m[1]));
+    }
+    // 2. <video src="...">
+    if (empty($stream_url) && preg_match('/<video[^>]+src=["\']([^"\']+\.(?:mp4|m3u8)[^"\']*)["\']/', $html, $m)) {
+        $stream_url = html_entity_decode(trim($m[1]));
+    }
+    // 3. file: "..." (JWPlayer / Plyr)
+    if (empty($stream_url) && preg_match('/file\s*:\s*["\']([^"\']+\.(?:mp4|m3u8)[^"\']*)["\']/', $html, $m)) {
+        $stream_url = html_entity_decode(trim($m[1]));
+    }
+    // 4. data-src / data-file / data-video
+    if (empty($stream_url) && preg_match('/data-(?:src|file|video)=["\']([^"\']+\.(?:mp4|m3u8)[^"\']*)["\']/', $html, $m)) {
+        $stream_url = html_entity_decode(trim($m[1]));
+    }
+    // 5. Known embed hosters (Streamtape, Luluvdo, Vidara, etc.)
+    if (empty($stream_url)) {
+        $embed_pattern = '/(?:src|href|data-src)=["\']([^"\']*(?:streamtape|luluvdo|lulustream|vidara|vidhide|playmate|uplinks24|toolkitspro|ivdo\.cc|vkprime)[^"\']*)["\']/i';
+        if (preg_match($embed_pattern, $html, $m)) {
+            $embed_url = trim($m[1]);
+            // Resolve Streamtape
+            if (strpos($embed_url, 'streamtape') !== false) {
+                $resolved = resolve_server_stream_url($embed_url);
+                if (!empty($resolved)) $stream_url = $resolved;
+                else $stream_url = $embed_url;
+            } else {
+                $stream_url = $embed_url;
+            }
+        }
+    }
+    // 6. Iframe src that looks like a player
+    if (empty($stream_url)) {
+        if (preg_match('/<iframe[^>]+src=["\']([^"\']+)["\'][^>]*>/i', $html, $m)) {
+            $iframe = trim($m[1]);
+            if (strpos($iframe, 'cdn.') !== false || strpos($iframe, 'player.') !== false || strpos($iframe, '/embed/') !== false || strpos($iframe, 'streamtape') !== false) {
+                $stream_url = $iframe;
+            }
+        }
+    }
+
+    // Poster
+    $poster = '';
+    if (preg_match('/<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']/', $html, $m)) {
+        $poster = trim($m[1]);
+    } elseif (preg_match('/<video[^>]+poster=["\']([^"\']+)["\']/', $html, $m)) {
+        $poster = trim($m[1]);
+    }
+
+    // Title
+    $title = '';
+    if (preg_match('/<h1[^>]*>(.*?)<\/h1>/is', $html, $m)) {
+        $title = trim(html_entity_decode(strip_tags($m[1])));
+    } elseif (preg_match('/<title>(.*?)<\/title>/is', $html, $m)) {
+        $title = trim(html_entity_decode(strip_tags($m[1])));
+    }
+
+    // Images pool
+    $images = [];
+    preg_match_all('/<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)["\']/', $html, $img_matches);
+    foreach ($img_matches[1] as $img_url) {
+        if (strpos($img_url, 'logo') !== false || strpos($img_url, 'icon') !== false) continue;
+        $images[] = $img_url;
+        if (count($images) >= 10) break;
+    }
+
+    if (empty($stream_url)) {
+        json_response(false, [
+            'title'  => $title,
+            'poster' => $poster,
+            'images' => $images,
+        ], 'No stream found on this page');
+    }
+
+    json_response(true, [
+        'stream_url' => $stream_url,
+        'poster'     => $poster,
+        'title'      => $title,
+        'images'     => $images,
+        'referer'    => $referer,
+    ], 'Stream extracted');
+}
+
 if ($action === 'extract_hdmaal_details') {
     list($skymovies_domain, $hdmaal_domain) = get_scraper_domains($pdo);
     $page_url = trim($input['page_url'] ?? '');
