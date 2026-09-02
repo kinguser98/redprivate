@@ -25,15 +25,31 @@ function base_select($alias, $search, $genre, $network_id, $contentType) {
         $params[] = "%$search%";
         $params[] = "%$search%";
     }
-    // OTT filter: network_id (via content_network_log) is authoritative.
-    // Don't ALSO apply the genre-name LIKE — OTT names are usually not in the
-    // genres column and would wrongly empty the results.
-    if ($network_id > 0) {
-        $where[] = "EXISTS (SELECT 1 FROM content_network_log cnl WHERE cnl.content_id = " . $alias . ".id AND cnl.content_type = " . $contentType . " AND cnl.network_id = ?)";
-        $params[] = $network_id;
-    } else if (!empty($genre)) {
-        $where[] = "$alias.genres LIKE ?";
-        $params[] = "%$genre%";
+    // Comprehensive OTT & Genre filtering
+    if ($network_id > 0 || !empty($genre)) {
+        $ottClauses = [];
+        if ($network_id > 0) {
+            $ottClauses[] = "FIND_IN_SET(?, $alias.genres)";
+            $params[] = $network_id;
+            $ottClauses[] = "EXISTS (SELECT 1 FROM content_network_log cnl WHERE cnl.content_id = " . $alias . ".id AND cnl.content_type = " . $contentType . " AND cnl.network_id = ?)";
+            $params[] = $network_id;
+            $ottClauses[] = "EXISTS (SELECT 1 FROM genres g WHERE g.id = ? AND ($alias.genres LIKE CONCAT('%', g.name, '%') OR FIND_IN_SET(g.id, $alias.genres)))";
+            $params[] = $network_id;
+        }
+        if (!empty($genre)) {
+            $genreList = array_filter(array_map('trim', explode(',', $genre)));
+            foreach ($genreList as $g) {
+                if (empty($g)) continue;
+                $ottClauses[] = "$alias.genres LIKE ?";
+                $params[] = "%$g%";
+                $ottClauses[] = "EXISTS (SELECT 1 FROM genres gr WHERE (gr.name LIKE ? OR gr.name = ?) AND (FIND_IN_SET(gr.id, $alias.genres) OR $alias.genres LIKE CONCAT('%', gr.name, '%')))";
+                $params[] = "%$g%";
+                $params[] = $g;
+            }
+        }
+        if (!empty($ottClauses)) {
+            $where[] = "(" . implode(" OR ", $ottClauses) . ")";
+        }
     }
     // Only hide content with NO active links at all.
     if ($contentType == 1) {
@@ -48,7 +64,7 @@ $items = [];
 try {
     if ($type === 'movie' || $type === 'all') {
         list($w, $p) = base_select('m', $search, $genre, $network_id, 1);
-        $stmt = $pdo->prepare("SELECT m.id, m.name, m.poster, m.banner, '8.5' AS rating, m.release_date, 'movie' AS item_type FROM movies AS m WHERE $w $order_movie LIMIT $limit");
+        $stmt = $pdo->prepare("SELECT m.id, m.name, m.poster, m.banner, '8.5' AS rating, m.release_date, 'movie' AS item_type, m.genres, COALESCE((SELECT UPPER(g.name) FROM genres g WHERE FIND_IN_SET(g.id, m.genres) LIMIT 1), 'RED EXCLUSIVE') AS ott_name FROM movies AS m WHERE $w $order_movie LIMIT $limit");
         $stmt->execute($p);
         foreach ($stmt->fetchAll() as $row) {
             $row['custom_tag'] = 'HD';
@@ -59,7 +75,7 @@ try {
     }
     if ($type === 'series' || $type === 'all') {
         list($w, $p) = base_select('s', $search, $genre, $network_id, 2);
-        $stmt = $pdo->prepare("SELECT s.id, s.name, s.poster, s.banner, '8.5' AS rating, s.release_date, 'series' AS item_type FROM web_series AS s WHERE $w $order_series LIMIT $limit");
+        $stmt = $pdo->prepare("SELECT s.id, s.name, s.poster, s.banner, '8.5' AS rating, s.release_date, 'series' AS item_type, s.genres, COALESCE((SELECT UPPER(g.name) FROM genres g WHERE FIND_IN_SET(g.id, s.genres) LIMIT 1), 'RED EXCLUSIVE') AS ott_name FROM web_series AS s WHERE $w $order_series LIMIT $limit");
         $stmt->execute($p);
         foreach ($stmt->fetchAll() as $row) {
             $row['custom_tag'] = 'HD';

@@ -131,9 +131,10 @@ class MaalNetworkScraper {
         .toList();
   }
 
-  /// Sites in a specific group
-  static List<Map<String, String>> sitesInGroup(String group) {
-    return allSites.where((s) => s['group'] == group).toList();
+  /// Check if a given URL matches any registered Maal Network domain
+  static bool matchesAny(String url) {
+    final lower = url.toLowerCase();
+    return allSites.any((s) => lower.contains(s['domain']!.toLowerCase()));
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -199,6 +200,22 @@ class MaalNetworkScraper {
     return results;
   }
 
+  static String _unescapeHtml(String text) {
+    return text
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#039;', "'")
+        .replaceAll('&#8217;', "'")
+        .replaceAll('&#8216;', "'")
+        .replaceAll('&#8220;', '"')
+        .replaceAll('&#8221;', '"')
+        .replaceAll('&#8211;', '-')
+        .replaceAll('&#8212;', '—')
+        .replaceAll('&nbsp;', ' ');
+  }
+
   /// Client-side scrape search on a single site
   static Future<List<MaalNetworkItem>> _searchSite(
       String query, String domain) async {
@@ -220,10 +237,9 @@ class MaalNetworkScraper {
       final body = res.body;
       final items = <MaalNetworkItem>[];
 
-      // Extract WordPress article cards
-      // Pattern: href="URL" ... img src="POSTER" ... text content
+      // 1. Extract WordPress article cards (e.g. BMaal, UffMaal)
       final articlePattern = RegExp(
-        r'<article[^>]*>.*?<a\s+href="([^"]+)"[^>]*>.*?<img[^>]+src="([^"]+)"[^>]*>.*?<h[1-6][^>]*>(.*?)</h[1-6]>.*?</article>',
+        r'<article[^>]*>.*?<a\s+href="([^"]+)"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>.*?(?:<h[1-6][^>]*>(.*?)</h[1-6]>|title="([^"]+)").*?</article>',
         dotAll: true,
         caseSensitive: false,
       );
@@ -231,8 +247,8 @@ class MaalNetworkScraper {
       for (final m in articlePattern.allMatches(body)) {
         final href = m.group(1) ?? '';
         final img = m.group(2) ?? '';
-        final rawTitle = m.group(3) ?? '';
-        final cleanTitle = rawTitle.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+        final rawTitle = m.group(3) ?? m.group(4) ?? '';
+        final cleanTitle = _unescapeHtml(rawTitle.replaceAll(RegExp(r'<[^>]+>'), '').trim());
 
         if (href.isEmpty || cleanTitle.isEmpty) continue;
         if (!href.startsWith('http') && !href.startsWith('/')) continue;
@@ -248,10 +264,36 @@ class MaalNetworkScraper {
         ));
       }
 
-      // Fallback: simpler link+image extraction
+      // 2. Extract post-card layouts (e.g. WOWMaal, NewMaal)
+      if (items.isEmpty) {
+        final postCardPattern = RegExp(
+          r'<a\b[^>]+href="([^"]+)"[^>]*class="[^"]*post-card[^"]*"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>.*?<h[1-6][^>]*class="[^"]*post-card-title[^"]*"[^>]*>(.*?)</h[1-6]>',
+          dotAll: true,
+          caseSensitive: false,
+        );
+        for (final m in postCardPattern.allMatches(body)) {
+          final href = m.group(1) ?? '';
+          final img = m.group(2) ?? '';
+          final rawTitle = m.group(3) ?? '';
+          final cleanTitle = _unescapeHtml(rawTitle.replaceAll(RegExp(r'<[^>]+>'), '').trim());
+
+          if (href.isEmpty || cleanTitle.isEmpty) continue;
+          final fullUrl = href.startsWith('http') ? href : '$baseUrl$href';
+
+          items.add(MaalNetworkItem(
+            title: cleanTitle,
+            pageUrl: fullUrl,
+            poster: img.startsWith('http') ? img : '$baseUrl$img',
+            siteName: siteInfo['name'] ?? domain,
+            siteDomain: domain,
+          ));
+        }
+      }
+
+      // 3. Fallback: simpler link+image extraction
       if (items.isEmpty) {
         final simplePattern = RegExp(
-          r'href="(https?://[^"]*' + RegExp.escape(domain) + r'[^"]*)"[^>]*>[^<]*<[^>]*>[^<]*<img[^>]+src="([^"]+)"',
+          r'href="(https?://[^"]*' + RegExp.escape(domain) + r'[^"]*)"[^>]*>[^<]*<[^>]*>[^<]*<img[^>]+(?:src|data-src)="([^"]+)"',
           caseSensitive: false,
         );
         for (final m in simplePattern.allMatches(body).take(20)) {
@@ -297,7 +339,7 @@ class MaalNetworkScraper {
         final data = json.decode(res.body);
         if (data['success'] == true && (data['stream_url'] ?? '').isNotEmpty) {
           return MaalNetworkEpisodeDetails(
-            streamUrl: data['stream_url'],
+            streamUrl: _unescapeHtml(data['stream_url']),
             poster: data['poster'],
             title: data['title'],
             images: List<String>.from(data['images'] ?? []),
@@ -331,13 +373,14 @@ class MaalNetworkScraper {
 
       final body = res.body;
 
-      // 1. Direct <source src="..."> or <video src="...">
-      final sourceMatch = RegExp(
-              r'<source[^>]+src=["\x27]([^"\x27]+\.(?:mp4|m3u8)[^"\x27]*)["\x27]',
-              caseSensitive: false)
-          .firstMatch(body);
-      if (sourceMatch != null) {
-        final streamUrl = _resolveUrl(sourceMatch.group(1)!, baseUrl);
+      // 1. JSON-LD Schema embedUrl (e.g. BMaal, AzMaal)
+      final jsonLdMatch = RegExp(
+        r'"embedUrl"\s*:\s*"([^"]+)"',
+        caseSensitive: false,
+      ).firstMatch(body);
+      if (jsonLdMatch != null) {
+        final rawStream = _unescapeHtml(jsonLdMatch.group(1)!);
+        final streamUrl = _resolveUrl(rawStream, baseUrl);
         final poster = _extractPoster(body, baseUrl);
         final images = _extractImages(body, baseUrl, uri.host);
         return MaalNetworkEpisodeDetails(
@@ -348,12 +391,30 @@ class MaalNetworkScraper {
         );
       }
 
-      // 2. video src="..."
+      // 2. Direct <source src="..."> or <video src="..."> (e.g. WOWMaal, NewMaal)
+      final sourceMatch = RegExp(
+              r'<source[^>]+src=["\x27]([^"\x27]+\.(?:mp4|m3u8)[^"\x27]*)["\x27]',
+              caseSensitive: false)
+          .firstMatch(body);
+      if (sourceMatch != null) {
+        final rawStream = _unescapeHtml(sourceMatch.group(1)!);
+        final streamUrl = _resolveUrl(rawStream, baseUrl);
+        final poster = _extractPoster(body, baseUrl);
+        final images = _extractImages(body, baseUrl, uri.host);
+        return MaalNetworkEpisodeDetails(
+          streamUrl: streamUrl,
+          poster: poster,
+          images: images,
+          referer: baseUrl,
+        );
+      }
+
+      // 3. video src="..."
       final videoSrcMatch =
           RegExp(r'<video[^>]+src=["\x27]([^"\x27]+)["\x27]', caseSensitive: false)
               .firstMatch(body);
       if (videoSrcMatch != null) {
-        final url = videoSrcMatch.group(1)!;
+        final url = _unescapeHtml(videoSrcMatch.group(1)!);
         if (url.contains('.mp4') || url.contains('.m3u8')) {
           return MaalNetworkEpisodeDetails(
             streamUrl: _resolveUrl(url, baseUrl),
@@ -364,43 +425,46 @@ class MaalNetworkScraper {
         }
       }
 
-      // 3. file: "URL" (jwplayer style)
+      // 4. file: "URL" (jwplayer style)
       final jwMatch = RegExp(
               r'''file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']''',
               caseSensitive: false)
           .firstMatch(body);
       if (jwMatch != null) {
+        final rawStream = _unescapeHtml(jwMatch.group(1)!);
         return MaalNetworkEpisodeDetails(
-          streamUrl: _resolveUrl(jwMatch.group(1)!, baseUrl),
+          streamUrl: _resolveUrl(rawStream, baseUrl),
           poster: _extractPoster(body, baseUrl),
           images: _extractImages(body, baseUrl, uri.host),
           referer: baseUrl,
         );
       }
 
-      // 4. data-src or data-file
+      // 5. data-src or data-file
       final dataSrcMatch = RegExp(
               r'''data-(?:src|file|video)=["']([^"']+\.(?:mp4|m3u8)[^"']*)["']''',
               caseSensitive: false)
           .firstMatch(body);
       if (dataSrcMatch != null) {
+        final rawStream = _unescapeHtml(dataSrcMatch.group(1)!);
         return MaalNetworkEpisodeDetails(
-          streamUrl: _resolveUrl(dataSrcMatch.group(1)!, baseUrl),
+          streamUrl: _resolveUrl(rawStream, baseUrl),
           poster: _extractPoster(body, baseUrl),
           images: _extractImages(body, baseUrl, uri.host),
           referer: baseUrl,
         );
       }
 
-      // 5. Look for embedded iframe (player pages)
+      // 6. Look for embedded iframe (player pages)
       final iframeMatch =
           RegExp(r'<iframe[^>]+src=["\x27]([^"\x27]+)["\x27]', caseSensitive: false)
               .firstMatch(body);
       if (iframeMatch != null) {
-        final iframeSrc = iframeMatch.group(1)!;
+        final iframeSrc = _unescapeHtml(iframeMatch.group(1)!);
         // Known embed hosts
         if (iframeSrc.contains('cdn.') ||
             iframeSrc.contains('player.') ||
+            iframeSrc.contains('ivdo.cc') ||
             iframeSrc.contains('/embed/')) {
           return MaalNetworkEpisodeDetails(
             streamUrl: _resolveUrl(iframeSrc, baseUrl),

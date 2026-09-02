@@ -19,6 +19,7 @@ import 'all_ott_screen.dart';
 import 'navigation_helper.dart';
 import 'downloads_screen.dart';
 import 'fly_mode_screen.dart';
+import '../widgets/quick_preview_modal.dart';
 
 class OttSectionModel {
   final int networkId;
@@ -1199,6 +1200,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final movie = _heroSlider[index];
         return GestureDetector(
           onTap: () => navigateToContent(context, movie.id, movie.itemType),
+          onLongPress: () =>
+              QuickPreviewModal.show(context, movie: movie, user: widget.user),
           child: SizedBox(
             height: 440,
             width: double.infinity,
@@ -1570,6 +1573,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final movie = list[index];
           return GestureDetector(
             onTap: () => navigateToContent(context, movie.id, movie.itemType),
+            onLongPress: () => QuickPreviewModal.show(context, movie: movie, user: widget.user),
             child: Container(
               width: 150,
               margin: const EdgeInsets.only(right: 12),
@@ -1666,6 +1670,8 @@ class _HomeScreenState extends State<HomeScreen> {
           final movie = list[index];
           return GestureDetector(
             onTap: () => navigateToContent(context, movie.id, movie.itemType),
+            onLongPress: () =>
+                QuickPreviewModal.show(context, movie: movie, user: widget.user),
             child: Container(
               width: 135,
               margin: const EdgeInsets.only(right: 14),

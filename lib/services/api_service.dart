@@ -550,28 +550,71 @@ class ApiService {
     return [];
   }
 
+  static const String _cachedOttGenresKey = 'cached_ott_genres_v2';
+  static List<dynamic>? _inMemoryOttGenres;
+
   static Future<List<dynamic>> fetchOttGenres() async {
+    // 1. In-memory cache
+    if (_inMemoryOttGenres != null && _inMemoryOttGenres!.isNotEmpty) {
+      return _inMemoryOttGenres!;
+    }
+
+    // 2. Persistent disk cache (instant on restart)
     try {
-      final res = await _postWithFallback(
-        ApiConfig.adminUrl,
-        {'Content-Type': 'application/json'},
-        json.encode({'action': 'get_taxonomy'}),
-      );
+      final prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(_cachedOttGenresKey);
+      if (cachedStr != null && cachedStr.isNotEmpty) {
+        final decoded = json.decode(cachedStr);
+        if (decoded is List && decoded.isNotEmpty) {
+          _inMemoryOttGenres = decoded;
+          // Refresh in background
+          _refreshOttGenresInBackground();
+          return decoded;
+        }
+      }
+    } catch (_) {}
+
+    // 3. Network fetch from home.php
+    return await _refreshOttGenres();
+  }
+
+  static void _refreshOttGenresInBackground() {
+    _refreshOttGenres().catchError((_) => <dynamic>[]);
+  }
+
+  static Future<List<dynamic>> _refreshOttGenres() async {
+    try {
+      final res = await _getWithFallback(ApiConfig.homeUrl);
       if (res.statusCode == 200) {
         final data = json.decode(res.body);
-        if (data['status'] == 'success' && data['data'] != null) {
-          // ott_platforms = OTT platforms (Voovi, Rabbit, Kooku etc. from genres table)
-          final networks = (data['data']['ott_platforms'] as List? ?? []);
-          return networks.where((o) {
-            final name = (o['name'] ?? '').toString().trim();
-            return name.isNotEmpty;
-          }).toList();
+        final list = (data['all_ott_genres'] as List? ?? data['ott_genres'] as List? ?? []);
+        final normalized = list.where((o) {
+          final name = (o['name'] ?? '').toString().trim();
+          return name.isNotEmpty;
+        }).map((o) {
+          final icon = (o['icon'] ?? o['logo'] ?? '').toString();
+          return {
+            'id': o['id'],
+            'name': o['name'],
+            'icon': icon,
+            'logo': icon,
+            'is_hidden': o['is_hidden'] ?? 0,
+          };
+        }).toList();
+
+        if (normalized.isNotEmpty) {
+          _inMemoryOttGenres = normalized;
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(_cachedOttGenresKey, json.encode(normalized));
+          } catch (_) {}
+          return normalized;
         }
       }
     } catch (e) {
       print("fetchOttGenres error: $e");
     }
-    return [];
+    return _inMemoryOttGenres ?? [];
   }
 
   // Catalog Search & Filters

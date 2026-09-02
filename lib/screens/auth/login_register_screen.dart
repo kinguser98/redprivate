@@ -140,7 +140,7 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+              child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -157,18 +157,28 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
         ),
       );
     } else {
-      setState(() =>
-          _errorMessage = friendlyError(res['message'], 'Login failed'));
+      final msg = res['message']?.toString() ?? 'Login failed';
+      setState(() => _errorMessage = friendlyError(msg, 'Login failed'));
     }
   }
 
   Future<void> _handleRegister() async {
     final name = _regNameController.text.trim();
-    final email = _regEmailController.text.trim();
+    final email = _regEmailController.text.trim().toLowerCase();
     final pass = _regPassController.text.trim();
 
     if (name.isEmpty || email.isEmpty || pass.isEmpty) {
       setState(() => _errorMessage = 'Please fill all required fields');
+      return;
+    }
+
+    if (!email.contains('@') || !email.contains('.') || email.length < 5) {
+      setState(() => _errorMessage = 'Please enter a valid email address (e.g. name@domain.com)');
+      return;
+    }
+
+    if (pass.length < 4) {
+      setState(() => _errorMessage = 'Password must be at least 4 characters');
       return;
     }
 
@@ -189,8 +199,8 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
         MaterialPageRoute(builder: (_) => MainLayoutScreen(user: user)),
       );
     } else {
-      setState(() =>
-          _errorMessage = friendlyError(res['message'], 'Registration failed'));
+      final msg = res['message']?.toString() ?? 'Registration failed';
+      setState(() => _errorMessage = friendlyError(msg, 'Registration failed'));
     }
   }
 

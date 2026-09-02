@@ -28,11 +28,71 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Default Activity without launcher filter so aliases can toggle launcher icon -->
+
+            <!-- Custom Scheme Deep Linking (redapp://watch?id=... or redapp://...) -->
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="redapp" />
+            </intent-filter>
+
+            <!-- Cloudflare Worker Deep Links (e.g. redwatch.infinityredchillies.workers.dev) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="redwatch.infinityredchillies.workers.dev" />
+                <data android:scheme="http" android:host="redwatch.infinityredchillies.workers.dev" />
+            </intent-filter>
+
+            <!-- Web HTTPS Deep Linking for red.goprivate.fun -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="red.goprivate.fun" />
+                <data android:scheme="http" android:host="red.goprivate.fun" />
+            </intent-filter>
+
+            <!-- Web HTTPS Deep Linking for ott.redapp.space & redapp.space -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ott.redapp.space" />
+                <data android:scheme="http" android:host="ott.redapp.space" />
+                <data android:scheme="https" android:host="redapp.space" />
+                <data android:scheme="http" android:host="redapp.space" />
             </intent-filter>
         </activity>
+        
+        <activity-alias
+            android:name=".MainActivityAlias"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/launcher_icon"
+            android:label="Red App"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".StealthNotesAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_notes_launcher"
+            android:label="Quick Notes"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <meta-data
             android:name="com.google.android.gms.version"
             android:value="@integer/google_play_services_version" />

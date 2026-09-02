@@ -22,39 +22,77 @@ try {
 
 if ($action === 'register') {
     $name = trim($input['name'] ?? '');
-    $email = trim($input['email'] ?? '');
+    $email = strtolower(trim($input['email'] ?? ''));
     $password = trim($input['password'] ?? '');
     $device_id = trim($input['device_id'] ?? '');
     $device_name = trim($input['device_name'] ?? '');
 
     if (empty($name) || empty($email) || empty($password)) {
-        json_response(false, [], "All fields are required");
+        json_response(false, [], "Please fill in all fields (Name, Email, Password)");
+    }
+
+    if (strlen($password) < 4) {
+        json_response(false, [], "Password must be at least 4 characters long");
     }
 
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        json_response(false, [], "Invalid email address format");
+        json_response(false, [], "Please enter a valid email address (e.g. name@domain.com)");
     }
 
     try {
-        $stmt = $pdo->prepare("SELECT id FROM user_db WHERE email = ?");
+        $stmt = $pdo->prepare("SELECT id FROM user_db WHERE LOWER(TRIM(email)) = ?");
         $stmt->execute([$email]);
         if ($stmt->fetch()) {
-            json_response(false, [], "Email already registered");
+            json_response(false, [], "This email is already registered. Please log in.");
         }
 
         $hashed_pass = md5($password);
 
-        try {
-            $stmt = $pdo->prepare("INSERT INTO user_db (name, email, password, role, active_subscription, subscription_type, time, amount, subscription_start, subscription_exp, profile_pic, device_id, device_name) VALUES (?, ?, ?, 0, 'Free', 0, 0, 0, '1970-01-01', '1970-01-01', '', ?, ?)");
-            $stmt->execute([$name, $email, $hashed_pass, $device_id, $device_name]);
-        } catch (Exception $e1) {
-            try {
-                $stmt = $pdo->prepare("INSERT INTO user_db (name, email, password, role, active_subscription, subscription_type, time, amount, profile_pic, device_id, device_name) VALUES (?, ?, ?, 0, 'Free', 0, 0, 0, '', ?, ?)");
-                $stmt->execute([$name, $email, $hashed_pass, $device_id, $device_name]);
-            } catch (Exception $e2) {
-                $stmt = $pdo->prepare("INSERT INTO user_db (name, email, password, role, active_subscription, subscription_type, time, amount, profile_pic) VALUES (?, ?, ?, 0, 'Free', 0, 0, 0, '')");
-                $stmt->execute([$name, $email, $hashed_pass]);
+        // Fetch all actual table columns in user_db to dynamically build the INSERT
+        // This prevents MySQL Strict Mode (STRICT_TRANS_TABLES) errors on custom or missing columns.
+        $colsStmt = $pdo->query("SHOW COLUMNS FROM user_db");
+        $allCols = $colsStmt ? $colsStmt->fetchAll(PDO::FETCH_COLUMN) : [];
+
+        $defaultMap = [
+            'name' => $name,
+            'email' => $email,
+            'password' => $hashed_pass,
+            'role' => 0,
+            'active_subscription' => 'Free',
+            'subscription_type' => 0,
+            'time' => 0,
+            'amount' => 0,
+            'subscription_start' => '1970-01-01',
+            'subscription_exp' => '1970-01-01',
+            'profile_pic' => '',
+            'device_id' => $device_id,
+            'device_name' => $device_name,
+            'status' => 1,
+            'type' => 0,
+            'custom_tag' => '',
+            'app_version' => '1.0.0',
+            'verified' => 1,
+        ];
+
+        $insertCols = [];
+        $insertVals = [];
+        $placeholders = [];
+
+        foreach ($defaultMap as $col => $val) {
+            if (empty($allCols) || in_array($col, $allCols)) {
+                $insertCols[] = "`$col`";
+                $placeholders[] = "?";
+                $insertVals[] = $val;
             }
+        }
+
+        if (!empty($insertCols)) {
+            $sql = "INSERT INTO user_db (" . implode(', ', $insertCols) . ") VALUES (" . implode(', ', $placeholders) . ")";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($insertVals);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO user_db (name, email, password, role, active_subscription) VALUES (?, ?, ?, 0, 'Free')");
+            $stmt->execute([$name, $email, $hashed_pass]);
         }
 
         $user_id = $pdo->lastInsertId();
@@ -65,12 +103,12 @@ if ($action === 'register') {
 
         json_response(true, ["user" => $userRow], "Registration successful");
     } catch (Exception $e) {
-        json_response(false, [], "Server Error: " . $e->getMessage());
+        json_response(false, [], "Registration error: " . $e->getMessage());
     }
 }
 
 if ($action === 'login') {
-    $email = trim($input['email'] ?? '');
+    $email = strtolower(trim($input['email'] ?? ''));
     $password = trim($input['password'] ?? '');
     $device_id = trim($input['device_id'] ?? '');
     $device_name = trim($input['device_name'] ?? '');
@@ -81,7 +119,7 @@ if ($action === 'login') {
     }
 
     $hashed_pass = md5($password);
-    $stmt = $pdo->prepare("SELECT id, name, email, role, profile_pic, active_subscription, subscription_type, time, amount, subscription_exp, device_id, device_name FROM user_db WHERE email = ? AND (password = ? OR password = ?)");
+    $stmt = $pdo->prepare("SELECT id, name, email, role, profile_pic, active_subscription, subscription_type, time, amount, subscription_exp, device_id, device_name FROM user_db WHERE LOWER(TRIM(email)) = ? AND (password = ? OR password = ?)");
     $stmt->execute([$email, $hashed_pass, $password]);
     $user = $stmt->fetch();
 

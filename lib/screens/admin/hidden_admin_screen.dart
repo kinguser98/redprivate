@@ -24,6 +24,7 @@ import '../../services/uffmaal_scraper.dart';
 import '../../services/maal_network_scraper.dart';
 import '../../services/telegram_collage_helper.dart';
 import '../dropmms_browser_screen.dart';
+import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
 import '../video_player_screen.dart';
 import '../webview_player_screen.dart';
@@ -64,6 +65,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     'Fly Mode Manager',
     '⚡ Extractor Cinema (Ad-Free Player)',
     '✈️ Telegram Channel Studio',
+    '🧪 Link Tester (CDN Health)',
   ];
 
   final List<IconData> _navIcons = [
@@ -90,6 +92,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.flight_takeoff_rounded,
     Icons.bolt_rounded,
     Icons.send_rounded,
+    Icons.science_rounded,
   ];
 
   // Data lists
@@ -166,6 +169,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final TextEditingController _hdmove99DomainCtrl = TextEditingController(text: 'https://hdmove99.com');
   final TextEditingController _aagmaalDomainCtrl = TextEditingController(text: 'https://aagmaal.mba');
   final TextEditingController _uffmaalDomainCtrl = TextEditingController(text: 'https://uffmaal.com');
+  final TextEditingController _aagmaalBzDomainCtrl = TextEditingController(text: 'https://aagmaal.group');
   List<dynamic> _skymoviesCatalog = [];
   bool _skymoviesLoading = false;
   String _skymoviesCat = 'Hot-Short-Film';
@@ -2192,7 +2196,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
   // Dead Scanner Logic
   Future<void> _startScan({String? ottFilter}) async {
-    final ott = ottFilter ?? _deadOttFilter;
+    final ott = (ottFilter ?? _deadOttFilter).trim();
+    final normalizedOtt = (ott == 'All' || ott == 'all') ? '' : ott;
     setState(() {
       _scanning = true;
       _scanDone = false;
@@ -2205,8 +2210,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     });
 
     // Reset server-side scan state so totals are stable across batches
-    await _adminPhpApi('reset_scan', {'ott': ott}, timeout: 30);
-    final init = await _adminPhpApi('get_scan_progress', {'ott': ott}, timeout: 30);
+    await _adminPhpApi('reset_scan', {'ott': normalizedOtt}, timeout: 30);
+    final init = await _adminPhpApi('get_scan_progress', {'ott': normalizedOtt}, timeout: 30);
     if (init['status'] == 'success' && init['data']?['movie'] != null) {
       setState(() {
         _movieTotal = int.tryParse('${init['data']['movie']['total']}') ?? 0;
@@ -2214,51 +2219,62 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       });
     }
 
-    const batchSize = 50;
+    const batchSize = 20;
     bool movieDone = false;
+    int movieRetries = 0;
 
     while (!movieDone && _scanning) {
-      final d = await _adminPhpApi('scan_movie_links', {'offset': 0, 'limit': batchSize, 'ott': ott}, timeout: 120);
-      if (d['status'] == 'success') {
+      final d = await _adminPhpApi('scan_movie_links', {'offset': 0, 'limit': batchSize, 'ott': normalizedOtt}, timeout: 45);
+      if (d['status'] == 'success' && d['data'] != null) {
+        movieRetries = 0;
         final parked = (d['data']['parked_movies'] as List? ?? []);
         setState(() {
-          _movieChecked = int.tryParse('${d['data']['checked']}') ?? _movieChecked;
+          _movieChecked = int.tryParse('${d['data']['checked']}') ?? (_movieChecked + batchSize);
           if ((d['data']['total'] ?? 0) > 0) {
             _movieTotal = int.tryParse('${d['data']['total']}') ?? _movieTotal;
           }
           _movieDead += int.tryParse('${d['data']['found_dead']}') ?? 0;
-          movieDone = (d['data']['done'] ?? false) == true;
+          movieDone = (d['data']['done'] ?? false) == true || (_movieTotal > 0 && _movieChecked >= _movieTotal);
           _mergeParkedMoviesLive(parked);
         });
       } else {
-        // If a batch fails (network), pause briefly then retry once
-        if (!_scanning) break;
-        await Future.delayed(const Duration(seconds: 2));
+        movieRetries++;
+        if (!_scanning || movieRetries >= 3) {
+          movieDone = true;
+          break;
+        }
+        await Future.delayed(const Duration(seconds: 1));
       }
     }
 
     bool epDone = false;
+    int epRetries = 0;
     while (!epDone && _scanning) {
-      final d = await _adminPhpApi('scan_episode_links', {'offset': 0, 'limit': batchSize, 'ott': ott}, timeout: 120);
-      if (d['status'] == 'success') {
+      final d = await _adminPhpApi('scan_episode_links', {'offset': 0, 'limit': batchSize, 'ott': normalizedOtt}, timeout: 45);
+      if (d['status'] == 'success' && d['data'] != null) {
+        epRetries = 0;
         final parked = (d['data']['parked_series'] as List? ?? []);
         setState(() {
-          _epChecked = int.tryParse('${d['data']['checked']}') ?? _epChecked;
+          _epChecked = int.tryParse('${d['data']['checked']}') ?? (_epChecked + batchSize);
           if ((d['data']['total'] ?? 0) > 0) {
             _epTotal = int.tryParse('${d['data']['total']}') ?? _epTotal;
           }
           _epDead += int.tryParse('${d['data']['found_dead']}') ?? 0;
-          epDone = (d['data']['done'] ?? false) == true;
+          epDone = (d['data']['done'] ?? false) == true || (_epTotal > 0 && _epChecked >= _epTotal);
           _mergeParkedSeriesLive(parked);
         });
       } else {
-        if (!_scanning) break;
-        await Future.delayed(const Duration(seconds: 2));
+        epRetries++;
+        if (!_scanning || epRetries >= 3) {
+          epDone = true;
+          break;
+        }
+        await Future.delayed(const Duration(seconds: 1));
       }
     }
 
     if (_scanning) {
-      await _adminPhpApi('park_dead_content', {'ott': ott}, timeout: 120);
+      await _adminPhpApi('park_dead_content', {'ott': normalizedOtt}, timeout: 45);
       setState(() {
         _scanning = false;
         _scanDone = true;
@@ -2436,6 +2452,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildExtractorCinemaView();
       case 22:
         return _buildTelegramStudioView();
+      case 23:
+        return _buildLinkTesterView();
       default:
         return _buildDashboardView();
     }
@@ -7418,6 +7436,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
                     child: TextField(
+                      controller: _aagmaalBzDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "AAGMaal.bz Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://aagmaal.bz",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.deepOrangeAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
                       controller: _uffmaalDomainCtrl,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
@@ -7583,6 +7618,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         _hdmove99DomainCtrl.text = settings['hdmove99_domain']?.toString() ?? 'https://hdmove99.com';
         _aagmaalDomainCtrl.text = settings['aagmaal_domain']?.toString() ?? 'https://aagmaal.mba';
         _uffmaalDomainCtrl.text = settings['uffmaal_domain']?.toString() ?? 'https://uffmaal.com';
+        _aagmaalBzDomainCtrl.text = settings['aagmaal_bz_domain']?.toString() ?? 'https://aagmaal.bz';
 
         if (_tgBotTokenCtrl.text.isEmpty && settings['tg_bot_token'] != null) {
           _tgBotTokenCtrl.text = settings['tg_bot_token'].toString();
@@ -7633,6 +7669,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'hdmove99_domain': _hdmove99DomainCtrl.text.trim(),
         'aagmaal_domain': _aagmaalDomainCtrl.text.trim(),
         'uffmaal_domain': _uffmaalDomainCtrl.text.trim(),
+        'aagmaal_bz_domain': _aagmaalBzDomainCtrl.text.trim(),
         'tg_bot_token': _tgBotTokenCtrl.text.trim(),
         'tg_channel_id': _tgChannelIdCtrl.text.trim(),
         'tg_caption_template': _tgCaptionTemplateCtrl.text.trim(),
@@ -7647,6 +7684,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       await prefs.setString('hdmove99_domain', _hdmove99DomainCtrl.text.trim());
       await prefs.setString('aagmaal_domain', _aagmaalDomainCtrl.text.trim());
       await prefs.setString('uffmaal_domain', _uffmaalDomainCtrl.text.trim());
+      await prefs.setString('aagmaal_bz_domain', _aagmaalBzDomainCtrl.text.trim());
     } catch (_) {}
 
     if (!mounted) return;
@@ -9480,6 +9518,75 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+
+      Future<List<Map<String, dynamic>>> _scrapeAagmaalbzCatalog({String query = '', int page = 1}) async {
+    try {
+      final q = query.trim();
+      final base = _aagmaalBzDomainCtrl.text.trim().isNotEmpty ? _aagmaalBzDomainCtrl.text.trim() : 'https://aagmaal.group';
+      final cleanBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+      final targetUrl = q.isNotEmpty
+          ? (page > 1 ? "$cleanBase/page/$page/?s=${Uri.encodeComponent(q)}" : "$cleanBase/?s=${Uri.encodeComponent(q)}")
+          : (page > 1 ? "$cleanBase/page/$page/" : "$cleanBase/");
+
+      final response = await http.get(
+        Uri.parse(targetUrl),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) return [];
+      final html = response.body;
+      final results = <Map<String, dynamic>>[];
+      final seen = <String>{};
+
+      // Pattern 1: WordPress video item cards
+      final cardMatches = RegExp(r'<div[^>]*data-post-id=[\x22\x27](\d+)[\x22\x27][^>]*>[\s\S]*?<a[^>]+href=[\x22\x27]([^"\x27]+)[\x22\x27][^>]*title=[\x22\x27]([^"\x27]+)[\x22\x27][\s\S]*?<img[^>]+(?:src|data-src)=[\x22\x27]([^"\x27]+)[\x22\x27]', caseSensitive: false).allMatches(html);
+      for (final m in cardMatches) {
+        final postUrl = m.group(2)!.trim();
+        final rawTitle = m.group(3)!.trim().replaceAll(RegExp(r'<[^>]+>'), '');
+        final poster = m.group(4)!.trim();
+
+        if (postUrl.isNotEmpty && rawTitle.isNotEmpty && !seen.contains(postUrl)) {
+          seen.add(postUrl);
+          results.add({
+            'title': rawTitle,
+            'page_url': postUrl,
+            'poster': poster,
+            'source': 'AAGMaal.bz',
+            'date': 'Latest',
+          });
+        }
+      }
+
+      // Pattern 2: Generic links fallback
+      if (results.isEmpty) {
+        final linkMatches = RegExp(r'<a[^>]+href=[\x22\x27](https?:\/\/[^"\x27]+\/[^"\x27]+)[\x22\x27][^>]*title=[\x22\x27]([^"\x27]+)[\x22\x27]>[\s\S]*?<img[^>]+(?:src|data-src)=[\x22\x27]([^"\x27]+)[\x22\x27]', caseSensitive: false).allMatches(html);
+        for (final m in linkMatches) {
+          final postUrl = m.group(1)!.trim();
+          final rawTitle = m.group(2)!.trim().replaceAll(RegExp(r'<[^>]+>'), '');
+          final poster = m.group(3)!.trim();
+
+          if (!postUrl.contains('/category/') && !postUrl.contains('/tag/') && postUrl.isNotEmpty && rawTitle.isNotEmpty && !seen.contains(postUrl)) {
+            seen.add(postUrl);
+            results.add({
+              'title': rawTitle,
+              'page_url': postUrl,
+              'poster': poster,
+              'source': 'AAGMaal.bz',
+              'date': 'Latest',
+            });
+          }
+        }
+      }
+
+      return results;
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<void> _loadAagmaalCatalog({bool forceRefresh = false}) async {
     setState(() => _aagmaalLoading = true);
     final q = _aagmaalSearchCtrl.text.trim();
@@ -9607,7 +9714,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
-    int tab = 0; // 0 = HDMaal, 1 = Aagmaal, 2 = Uncut, 3 = HDMove99, 4 = SKY
+    int tab = 0; // 0 = Maal Network, 1 = HDMaal, 2 = UFFMaal, 3 = Uncut, 4 = HDMove99, 5 = SKY
     bool isSearching = false;
     bool isExtracting = false;
     List<dynamic> searchResults = [];
@@ -9653,8 +9760,44 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   return;
                 }
 
+                // Maal Network / multi-domain client & server extraction
+                if (tab == 0 || MaalNetworkScraper.matchesAny(q)) {
+                  final clientDetails = await MaalNetworkScraper.fetchEpisodeDetails(q);
+                  if (clientDetails != null && (clientDetails.streamUrl ?? '').isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    onLinkSelected(clientDetails.streamUrl!, posterUrl: clientDetails.poster);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(clientDetails.poster != null ? "Extracted stream link & poster!" : "Extracted stream link!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    return;
+                  }
+                  final res = await _adminPhpApi('extract_maal_network_episode', {'page_url': q});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    final streamUrl = res['data']['stream_url'].toString().trim();
+                    if (streamUrl.isNotEmpty) {
+                      if (!dialogCtx.mounted) return;
+                      dialogSetState(() => isExtracting = false);
+                      final poster = (res['data']['poster'] ?? '').toString();
+                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(poster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                      return;
+                    }
+                  }
+                }
+
                 // Direct UFFMaal URL client fallback
-                if (q.contains('uffmaal') || tab == 1) {
+                if (q.contains('uffmaal') || tab == 2) {
                   final clientData = await _scrapeUffmaalDetails(q);
                   if (clientData != null) {
                     final streamUrl = (clientData['stream_url'] ?? '').toString();
@@ -9676,7 +9819,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 }
 
                 // Direct HDMaal URL client fallback
-                if (q.contains('hdmaal') || tab == 0) {
+                if (q.contains('hdmaal') || tab == 1) {
                   final clientData = await _scrapeHdmaalDetails(q);
                   if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
                     if (!dialogCtx.mounted) return;
@@ -9695,11 +9838,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   }
                 }
 
-                String extractAction = 'extract_hdmaal_details';
-                if (tab == 1) extractAction = 'extract_uffmaal_details';
-                if (tab == 2) extractAction = 'extract_uncutmasti_details';
-                if (tab == 3) extractAction = 'extract_hdmove99_details';
-                if (tab == 4) extractAction = 'extract_skymovies_details';
+                String extractAction = 'extract_maal_network_episode';
+                if (tab == 1) extractAction = 'extract_hdmaal_details';
+                if (tab == 2) extractAction = 'extract_uffmaal_details';
+                if (tab == 3) extractAction = 'extract_uncutmasti_details';
+                if (tab == 4) extractAction = 'extract_hdmove99_details';
+                if (tab == 5) extractAction = 'extract_skymovies_details';
 
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
@@ -9736,6 +9880,16 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               List<dynamic> items = [];
 
               if (tab == 0) {
+                // Maal Network: Multi-site search across all 56 network sites
+                final results = await MaalNetworkScraper.search(q);
+                items = results.map((r) => {
+                  'title': r.title,
+                  'page_url': r.pageUrl,
+                  'poster': r.poster,
+                  'site_name': r.siteName,
+                  'site_domain': r.siteDomain,
+                }).toList();
+              } else if (tab == 1) {
                 // HDMaal search: instant client scraper first
                 items = await _scrapeHdmaalSearch(q);
                 if (items.isEmpty) {
@@ -9744,13 +9898,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     items = res['data']['items'];
                   }
                 }
-              } else if (tab == 1) {
+              } else if (tab == 2) {
                 // UFFMaal search: instant client scraper
                 items = await _scrapeUffmaalCatalog(query: q);
               } else {
                 String searchAction = 'search_uncutmasti_catalog';
-                if (tab == 3) searchAction = 'search_hdmove99_catalog';
-                if (tab == 4) searchAction = 'search_skymovies_catalog';
+                if (tab == 4) searchAction = 'search_hdmove99_catalog';
+                if (tab == 5) searchAction = 'search_skymovies_catalog';
                 final res = await _adminPhpApi(searchAction, {'query': q});
                 if (res['status'] == 'success' && res['data']?['items'] != null) {
                   items = res['data']['items'];
@@ -9776,7 +9930,21 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               String? streamUrl;
               String? extractedPoster;
 
-              if (tab == 0) {
+              if (tab == 0 || MaalNetworkScraper.matchesAny(pageUrl)) {
+                // Maal Network: instant client extraction + server fallback
+                final clientData = await MaalNetworkScraper.fetchEpisodeDetails(pageUrl);
+                if (clientData != null && (clientData.streamUrl ?? '').isNotEmpty) {
+                  streamUrl = clientData.streamUrl;
+                  extractedPoster = clientData.poster;
+                } else {
+                  final res = await _adminPhpApi('extract_maal_network_episode', {'page_url': pageUrl});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    streamUrl = res['data']['stream_url'].toString().trim();
+                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                  }
+                }
+              } else if (tab == 1) {
+
                 // HDMaal: instant client extraction
                 final clientData = await _scrapeHdmaalDetails(pageUrl);
                 if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
@@ -9789,7 +9957,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
                   }
                 }
-              } else if (tab == 1) {
+              } else if (tab == 2) {
                 // UFFMaal: instant client extraction
                 final clientData = await _scrapeUffmaalDetails(pageUrl);
                 if (clientData != null) {
@@ -9808,8 +9976,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 }
               } else {
                 String extractAction = 'extract_uncutmasti_details';
-                if (tab == 3) extractAction = 'extract_hdmove99_details';
-                if (tab == 4) extractAction = 'extract_skymovies_details';
+                if (tab == 4) extractAction = 'extract_hdmove99_details';
+                if (tab == 5) extractAction = 'extract_skymovies_details';
                 final res = await _adminPhpApi(extractAction, {'page_url': pageUrl});
                 if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
                   streamUrl = res['data']['stream_url'].toString().trim();
@@ -9842,6 +10010,36 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
             }
 
+            Widget buildTabButton(int index, String label, Color color) {
+              final isSelected = tab == index;
+              return GestureDetector(
+                onTap: () {
+                  dialogSetState(() {
+                    tab = index;
+                    searchResults = [];
+                    errorText = null;
+                  });
+                  runSearch();
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withOpacity(0.2) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: isSelected ? color : Colors.white10),
+                  ),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: isSelected ? color : Colors.white54,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              );
+            }
+
             return AlertDialog(
               backgroundColor: const Color(0xFF0D1117),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Colors.white12)),
@@ -9858,97 +10056,22 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Source Tabs (HDMaal, UFFMaal, Uncut, HDMove99, SKY)
-                    Container(
-                      height: 34,
-                      decoration: BoxDecoration(color: const Color(0xFF161B22), borderRadius: BorderRadius.circular(8)),
+                    // Source Tabs (Maal Network, HDMaal, UFFMaal, Uncut, HDMove99, SKY)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() {
-                                  tab = 0;
-                                  searchResults = [];
-                                  errorText = null;
-                                });
-                                runSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(color: tab == 0 ? Colors.purpleAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                                alignment: Alignment.center,
-                                child: Text("HDMaal", style: TextStyle(color: tab == 0 ? Colors.purpleAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() {
-                                  tab = 1;
-                                  searchResults = [];
-                                  errorText = null;
-                                });
-                                runSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(color: tab == 1 ? Colors.amberAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                                alignment: Alignment.center,
-                                child: Text("UFFMaal", style: TextStyle(color: tab == 1 ? Colors.amberAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() {
-                                  tab = 2;
-                                  searchResults = [];
-                                  errorText = null;
-                                });
-                                runSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                                alignment: Alignment.center,
-                                child: Text("Uncut", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() {
-                                  tab = 3;
-                                  searchResults = [];
-                                  errorText = null;
-                                });
-                                runSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(color: tab == 3 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                                alignment: Alignment.center,
-                                child: Text("HDMove99", style: TextStyle(color: tab == 3 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() {
-                                  tab = 4;
-                                  searchResults = [];
-                                  errorText = null;
-                                });
-                                runSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(color: tab == 4 ? Colors.cyanAccent.withOpacity(0.2) : Colors.transparent, borderRadius: BorderRadius.circular(8)),
-                                alignment: Alignment.center,
-                                child: Text("SKY", style: TextStyle(color: tab == 4 ? Colors.cyanAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
+                          buildTabButton(0, "🌐 Maal Net (56 Sites)", Colors.greenAccent),
+                          const SizedBox(width: 6),
+                          buildTabButton(1, "HDMaal", Colors.purpleAccent),
+                          const SizedBox(width: 6),
+                          buildTabButton(2, "UFFMaal", Colors.amberAccent),
+                          const SizedBox(width: 6),
+                          buildTabButton(3, "Uncut", Colors.orangeAccent),
+                          const SizedBox(width: 6),
+                          buildTabButton(4, "HDMove99", Colors.lightGreenAccent),
+                          const SizedBox(width: 6),
+                          buildTabButton(5, "SKY", Colors.cyanAccent),
                         ],
                       ),
                     ),
@@ -9962,7 +10085,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             controller: queryCtrl,
                             style: const TextStyle(color: Colors.white, fontSize: 12),
                             decoration: InputDecoration(
-                              hintText: "Enter movie title or paste full page URL...",
+                              hintText: "Enter title or paste full episode/movie URL...",
                               hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
                               prefixIcon: const Icon(Icons.search, color: Colors.white38, size: 16),
                               filled: true,
@@ -10001,12 +10124,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       ),
                     ] else if (searchResults.isNotEmpty) ...[
                       SizedBox(
-                        height: 220,
+                        height: 240,
                         child: ListView.builder(
                           itemCount: searchResults.length,
                           itemBuilder: (context, idx) {
                             final item = searchResults[idx];
                             final fullTitle = item['title'] ?? 'Title';
+                            final siteName = (item['site_name'] ?? item['site_domain'] ?? '').toString();
                             return Card(
                               color: const Color(0xFF141722),
                               margin: const EdgeInsets.only(bottom: 6),
@@ -10020,15 +10144,36 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                           borderRadius: BorderRadius.circular(6),
                                           child: CachedNetworkImage(
                                             imageUrl: item['poster'].toString(),
-                                            width: 32,
-                                            height: 32,
+                                            width: 34,
+                                            height: 34,
                                             fit: BoxFit.cover,
                                             errorWidget: (c, u, e) => const Icon(Icons.movie, color: Colors.white24, size: 20),
                                           ),
                                         )
                                       : const Icon(Icons.movie_outlined, color: Colors.amberAccent, size: 20),
                                   title: Text(fullTitle, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
-                                  subtitle: const Text("Hold to view full title", style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                  subtitle: Row(
+                                    children: [
+                                      if (siteName.isNotEmpty) ...[
+                                        Container(
+                                          margin: const EdgeInsets.only(top: 3, right: 6),
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.greenAccent.withOpacity(0.12),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 0.6),
+                                          ),
+                                          child: Text(
+                                            "🌐 $siteName",
+                                            style: const TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      ],
+                                      const Expanded(
+                                        child: Text("Tap to extract stream", style: TextStyle(color: Colors.white38, fontSize: 9), overflow: TextOverflow.ellipsis),
+                                      ),
+                                    ],
+                                  ),
                                   trailing: const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
                                   onTap: () => extractFromPage(item['page_url'] ?? ''),
                                   onLongPress: () {
@@ -10118,6 +10263,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     String selectedQuality = '720p';
     int startOrder = currentEpisodes.length + 1;
     String? errorText;
+    String resultSiteFilter = 'all';
     // Maal Network site picker (multi-select from registry)
     List<String> maalSelectedDomains = MaalNetworkScraper.allSites
         .where((s) => s['group'] == 'Premium')
@@ -10607,6 +10753,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   tab = 0;
                                   episodeItems = [];
                                   errorText = null;
+                                  resultSiteFilter = 'all';
                                 });
                                 performSearch();
                               },
@@ -10627,6 +10774,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   tab = 1;
                                   episodeItems = [];
                                   errorText = null;
+                                  resultSiteFilter = 'all';
                                 });
                                 performSearch();
                               },
@@ -10647,6 +10795,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   tab = 2;
                                   episodeItems = [];
                                   errorText = null;
+                                  resultSiteFilter = 'all';
                                 });
                                 performSearch();
                               },
@@ -10655,7 +10804,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                 alignment: Alignment.center,
+                                alignment: Alignment.center,
                                 child: Text("UncutMasti", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                               ),
                             ),
@@ -10667,6 +10816,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   tab = 3;
                                   episodeItems = [];
                                   errorText = null;
+                                  resultSiteFilter = 'all';
                                 });
                                 performSearch();
                               },
@@ -10724,6 +10874,62 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       ],
                     ),
                     const SizedBox(height: 10),
+
+                    // Website Filter Chips if multiple sources present
+                    if (episodeItems.isNotEmpty) ...[
+                      Builder(builder: (c) {
+                        final Map<String, int> siteCounts = {};
+                        for (final ep in episodeItems) {
+                          final site = (ep['site_name'] ?? ep['site_domain'] ?? '').toString().trim();
+                          if (site.isNotEmpty) {
+                            siteCounts[site] = (siteCounts[site] ?? 0) + 1;
+                          }
+                        }
+                        if (siteCounts.length <= 1) return const SizedBox.shrink();
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                const Text("Site:", style: TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
+                                const SizedBox(width: 6),
+                                GestureDetector(
+                                  onTap: isImporting ? null : () => dialogSetState(() => resultSiteFilter = 'all'),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: resultSiteFilter == 'all' ? Colors.amberAccent.withOpacity(0.25) : const Color(0xFF1B2030),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(color: resultSiteFilter == 'all' ? Colors.amberAccent : Colors.white12),
+                                    ),
+                                    child: Text("All (${episodeItems.length})", style: TextStyle(color: resultSiteFilter == 'all' ? Colors.amberAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                                  ),
+                                ),
+                                ...siteCounts.entries.map((entry) {
+                                  final isSelected = resultSiteFilter == entry.key;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: GestureDetector(
+                                      onTap: isImporting ? null : () => dialogSetState(() => resultSiteFilter = entry.key),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: isSelected ? Colors.greenAccent.withOpacity(0.25) : const Color(0xFF1B2030),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: isSelected ? Colors.greenAccent : Colors.white12),
+                                        ),
+                                        child: Text("🌐 ${entry.key} (${entry.value})", style: TextStyle(color: isSelected ? Colors.greenAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
 
                     // Naming Format, Ordering & Quality Controls
                     Container(
@@ -10789,12 +10995,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     onTap: isImporting ? null : sortEpisodesDescending,
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                      decoration: BoxDecoration(color: Colors.pinkAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      decoration: BoxDecoration(color: Colors.purpleAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
                                       child: const Row(
                                         children: [
-                                          Icon(Icons.arrow_downward_rounded, color: Colors.pinkAccent, size: 12),
+                                          Icon(Icons.arrow_downward_rounded, color: Colors.purpleAccent, size: 12),
                                           SizedBox(width: 2),
-                                          Text("N→1", style: TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                          Text("N→1", style: TextStyle(color: Colors.purpleAccent, fontSize: 10, fontWeight: FontWeight.bold)),
                                         ],
                                       ),
                                     ),
@@ -10939,109 +11145,139 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: Colors.white.withOpacity(0.06)),
                           ),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            padding: const EdgeInsets.all(6),
-                            itemCount: episodeItems.length,
-                            separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
-                            itemBuilder: (c, i) {
-                              final ep = episodeItems[i];
-                              final isChecked = ep['selected'] == true;
-                              final poster = (ep['poster'] ?? '').toString();
-                              final epNum = (ep['ep_num'] as int?) ?? (i + 1);
-                              String displayName = namingMode == 'part'
-                                  ? "Part $epNum"
-                                  : (namingMode == 'episode' ? "Episode $epNum" : (ep['raw_title'] ?? ep['title'] ?? "Episode $epNum"));
+                          child: Builder(
+                            builder: (ctx) {
+                              final displayedEpisodes = resultSiteFilter == 'all'
+                                  ? episodeItems
+                                  : episodeItems.where((e) => (e['site_name'] ?? e['site_domain'] ?? '') == resultSiteFilter).toList();
+                              return ListView.separated(
+                                shrinkWrap: true,
+                                padding: const EdgeInsets.all(6),
+                                itemCount: displayedEpisodes.length,
+                                separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
+                                itemBuilder: (c, i) {
+                                  final ep = displayedEpisodes[i];
+                                  final isChecked = ep['selected'] == true;
+                                  final poster = (ep['poster'] ?? '').toString();
+                                  final epNum = (ep['ep_num'] as int?) ?? (i + 1);
+                                  final siteName = (ep['site_name'] ?? '').toString().trim();
+                                  final siteDomain = (ep['site_domain'] ?? '').toString().trim();
+                                  String displayName = namingMode == 'part'
+                                      ? "Part $epNum"
+                                      : (namingMode == 'episode' ? "Episode $epNum" : (ep['raw_title'] ?? ep['title'] ?? "Episode $epNum"));
 
-                              return Container(
-                                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                                child: Row(
-                                  children: [
-                                    // Checkbox
-                                    Checkbox(
-                                      value: isChecked,
-                                      activeColor: Colors.amberAccent,
-                                      checkColor: Colors.black,
-                                      visualDensity: VisualDensity.compact,
-                                      onChanged: isImporting ? null : (val) {
-                                        dialogSetState(() => ep['selected'] = val == true);
-                                      },
-                                    ),
-
-                                    // Thumbnail with long-press to download
-                                    GestureDetector(
-                                      onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: displayName) : null,
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: poster.isNotEmpty
-                                            ? CachedNetworkImage(
-                                                imageUrl: poster,
-                                                width: 48,
-                                                height: 34,
-                                                fit: BoxFit.cover,
-                                                errorWidget: (cx, u, e) => Container(
-                                                  width: 48,
-                                                  height: 34,
-                                                  color: Colors.white10,
-                                                  child: const Icon(Icons.tv, color: Colors.white24, size: 18),
-                                                ),
-                                              )
-                                            : Container(
-                                                width: 48,
-                                                height: 34,
-                                                color: Colors.white10,
-                                                child: const Icon(Icons.tv, color: Colors.white24, size: 18),
-                                              ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-
-                                    // Title & raw title
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                          const SizedBox(height: 2),
-                                          Text(ep['raw_title'] ?? ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 9.5), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-
-                                    // Interactive Dropdown to assign Episode Number
-                                    Container(
-                                      height: 28,
-                                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF1F2436),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: Colors.amberAccent.withOpacity(0.4), width: 0.8),
-                                      ),
-                                      child: DropdownButtonHideUnderline(
-                                        child: DropdownButton<int>(
-                                          value: epNum,
-                                          dropdownColor: const Color(0xFF141722),
-                                          icon: const Icon(Icons.arrow_drop_down, color: Colors.amberAccent, size: 16),
-                                          style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                          items: List.generate(50, (index) => index + 1).map((n) {
-                                            return DropdownMenuItem<int>(
-                                              value: n,
-                                              child: Text("Ep $n", style: const TextStyle(color: Colors.white, fontSize: 11)),
-                                            );
-                                          }).toList(),
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                                    child: Row(
+                                      children: [
+                                        // Checkbox
+                                        Checkbox(
+                                          value: isChecked,
+                                          activeColor: Colors.amberAccent,
+                                          checkColor: Colors.black,
+                                          visualDensity: VisualDensity.compact,
                                           onChanged: isImporting ? null : (val) {
-                                            if (val != null) {
-                                              dialogSetState(() {
-                                                ep['ep_num'] = val;
-                                              });
-                                            }
+                                            dialogSetState(() => ep['selected'] = val == true);
                                           },
                                         ),
-                                      ),
+
+                                        // Thumbnail with long-press to download
+                                        GestureDetector(
+                                          onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: displayName) : null,
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(6),
+                                            child: poster.isNotEmpty
+                                                ? CachedNetworkImage(
+                                                    imageUrl: poster,
+                                                    width: 48,
+                                                    height: 34,
+                                                    fit: BoxFit.cover,
+                                                    errorWidget: (cx, u, e) => Container(
+                                                      width: 48,
+                                                      height: 34,
+                                                      color: Colors.white10,
+                                                      child: const Icon(Icons.tv, color: Colors.white24, size: 18),
+                                                    ),
+                                                  )
+                                                : Container(
+                                                    width: 48,
+                                                    height: 34,
+                                                    color: Colors.white10,
+                                                    child: const Icon(Icons.tv, color: Colors.white24, size: 18),
+                                                  ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+
+                                        // Title & raw title & Website Badge
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                                  ),
+                                                  if (siteName.isNotEmpty) ...[
+                                                    const SizedBox(width: 4),
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.greenAccent.withOpacity(0.15),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 0.5),
+                                                      ),
+                                                      child: Text(
+                                                        siteDomain.isNotEmpty ? "$siteName • $siteDomain" : siteName,
+                                                        style: const TextStyle(color: Colors.greenAccent, fontSize: 8.5, fontWeight: FontWeight.bold),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(ep['raw_title'] ?? ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 9.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+
+                                        // Interactive Dropdown to assign Episode Number
+                                        Container(
+                                          height: 28,
+                                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF1F2436),
+                                            borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(color: Colors.amberAccent.withOpacity(0.4), width: 0.8),
+                                          ),
+                                          child: DropdownButtonHideUnderline(
+                                            child: DropdownButton<int>(
+                                              value: epNum,
+                                              dropdownColor: const Color(0xFF141722),
+                                              icon: const Icon(Icons.arrow_drop_down, color: Colors.amberAccent, size: 16),
+                                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                              items: List.generate(50, (index) => index + 1).map((n) {
+                                                return DropdownMenuItem<int>(
+                                                  value: n,
+                                                  child: Text("Ep $n", style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                                );
+                                              }).toList(),
+                                              onChanged: isImporting ? null : (val) {
+                                                if (val != null) {
+                                                  dialogSetState(() {
+                                                    ep['ep_num'] = val;
+                                                  });
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
-                                ),
+                                  );
+                                },
                               );
                             },
                           ),
@@ -12690,6 +12926,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       'color': Color(0xFFFFB300),
       'icon': Icons.forum_rounded,
     },
+    {
+      'name': 'AAGMaal.bz',
+      'domain': 'aagmaal.bz',
+      'badge': 'UNCUT • STREAMTAPE',
+      'color': Color(0xFFFF3D00),
+      'icon': Icons.whatshot_rounded,
+    },
   ];
 
   Future<void> _loadCinemaCatalog({bool resetPage = false}) async {
@@ -12884,6 +13127,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         }
       } else if (_cinemaSource == 5) {
         final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
+        if (res['status'] == 'success' && res['data'] != null) {
+          details = Map<String, dynamic>.from(res['data']);
+        }
+      } else if (_cinemaSource == 7) {
+        final res = await _adminPhpApi('extract_aagmaalbz_details', {'page_url': pageUrl});
         if (res['status'] == 'success' && res['data'] != null) {
           details = Map<String, dynamic>.from(res['data']);
         }
@@ -13937,6 +14185,39 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 ),
               ),
 
+              // AAGMaal Quick Open Action (when AAGMaal is selected)
+              if (_cinemaSource == 2 || _cinemaSource == 7) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const AagmaalBrowserScreen(initialUrl: 'https://aagmaal.bz/'),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.public_rounded, size: 18, color: Colors.white),
+                        label: const Text(
+                          "⚡ OPEN AD-FREE AAGMAAL.BZ BROWSER (AUTO STREAM SNIFFER)",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11.5),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFFF3D00),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          elevation: 4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
               // DropMMS Subcategory Chips (when DropMMS is selected)
               if (_cinemaSource == 6) ...[
                 const SizedBox(height: 8),
@@ -14921,6 +15202,707 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       ),
     );
   }
+
+  //
+  // ── 🧪 23. LINK TESTER & CDN DIAGNOSTIC ENGINE ──
+  //
+  List<Map<String, dynamic>> _testerCdns = [];
+  bool _testerScanning = false;
+  final TextEditingController _testerSearchCtrl = TextEditingController();
+  String _testerFilter = 'all'; // 'all', 'working', 'failed', 'movie', 'series'
+  final Map<String, String> _testerStatus = {}; // host -> 'checking' | 'working' | 'failed'
+  final Map<String, String> _testerStatusMsg = {};
+
+  Future<void> _scanDatabaseCdns() async {
+    setState(() {
+      _testerScanning = true;
+      _testerStatus.clear();
+      _testerStatusMsg.clear();
+    });
+
+    final res = await _adminPhpApi('scan_database_unique_cdns', {});
+    if (!mounted) return;
+
+    setState(() {
+      _testerScanning = false;
+      if (res['status'] == 'success' && res['data']?['cdns'] != null) {
+        _testerCdns = List<Map<String, dynamic>>.from(res['data']['cdns']);
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res['status'] == 'success'
+            ? "Discovered ${_testerCdns.length} unique CDN hosts in database"
+            : "Scan failed: ${res['message'] ?? 'Unknown error'}"),
+        backgroundColor: res['status'] == 'success' ? Colors.green : Colors.red,
+      ),
+    );
+  }
+
+    Future<void> _testPlayCdn(Map<String, dynamic> cdn) async {
+    final rawUrl = (cdn['url'] ?? '').toString().trim();
+    final title = (cdn['sample_title'] ?? cdn['host'] ?? 'Stream').toString().trim();
+    final host = (cdn['host'] ?? '').toString().toLowerCase();
+    if (rawUrl.isEmpty) return;
+
+    setState(() {
+      _testerStatus[cdn['host']] = 'checking';
+      _testerStatusMsg[cdn['host']] = 'Resolving stream & headers for $host...';
+    });
+
+    try {
+      String finalUrl = rawUrl;
+      final headers = <String, String>{};
+      final lowerUrl = rawUrl.toLowerCase();
+
+      // 1. Resolve Streamtape family
+      if (StreamtapeService.isStreamtapeFamily(rawUrl) && !StreamtapeService.isDirectMediaUrl(rawUrl)) {
+        final stRes = await StreamtapeService.getDirectStreamUrl(rawUrl, forceRefresh: true);
+        if (stRes != null && stRes.isNotEmpty && stRes.startsWith('http')) {
+          finalUrl = stRes;
+        }
+      }
+      // 2. Resolve DropMMS / Vidara / Merivo
+      else if (lowerUrl.contains('dropmms') || lowerUrl.contains('vidara') || lowerUrl.contains('merivo') || lowerUrl.contains('luluvdo') || lowerUrl.contains('lulustream')) {
+        final dmRes = await DropmmsService.resolveDirectStream(rawUrl);
+        if (dmRes != null && dmRes.isNotEmpty && dmRes.startsWith('http')) {
+          finalUrl = dmRes;
+        }
+      }
+      // 3. Resolve FastCDN / Uffmaal / Azmaal / Bmaal / Pmaal
+      else if (lowerUrl.contains('uffmaal') || lowerUrl.contains('azmaal') || lowerUrl.contains('bmaal') || lowerUrl.contains('pmaal') || lowerUrl.contains('hdmaal')) {
+        if (!lowerUrl.contains('.mp4') && !lowerUrl.contains('.m3u8')) {
+          final d = await UffmaalScraper.fetchUffmaalStreamAndPoster(rawUrl);
+          if (d.isNotEmpty && (d['stream_url'] ?? '').toString().isNotEmpty) {
+            finalUrl = d['stream_url'].toString().trim();
+          }
+        }
+      }
+      // 4. Resolve Aagmaal
+      else if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
+        final aagRes = await AagmaalResolver.resolveStream(rawUrl);
+        if (aagRes != null && aagRes.isNotEmpty) {
+          finalUrl = aagRes;
+        }
+      }
+
+      // 5. Attach Exact Referer & Headers based on host
+      final lowerFinal = finalUrl.toLowerCase();
+      if (lowerFinal.contains('hdmaal') || lowerFinal.contains('maalcdn')) {
+        headers['Referer'] = 'https://hdmaal.gg/';
+        headers['Origin'] = 'https://hdmaal.gg';
+      } else if (lowerFinal.contains('uffmaal') || lowerFinal.contains('azmaal') || lowerFinal.contains('bmaal') || lowerFinal.contains('pmaal')) {
+        headers['Referer'] = 'https://uffmaal.com/';
+        headers['Origin'] = 'https://uffmaal.com';
+      } else if (lowerFinal.contains('aagmaal') || lowerFinal.contains('tube279')) {
+        headers['Referer'] = 'https://aagmaal.group/';
+        headers['Origin'] = 'https://aagmaal.group';
+      } else if (lowerFinal.contains('uncutmasti') || lowerFinal.contains('ixifile')) {
+        headers['Referer'] = 'https://uncutmasti.com/';
+        headers['Origin'] = 'https://uncutmasti.com';
+      } else if (lowerFinal.contains('streamtape') || lowerFinal.contains('tapecontent') || lowerFinal.contains('strcloud')) {
+        headers['Referer'] = 'https://strcloud.link/';
+      } else if (lowerFinal.contains('dropmms') || lowerFinal.contains('droplink')) {
+        headers['Referer'] = 'https://dropmms.co/';
+      }
+
+      if (!mounted) return;
+
+      final isDirectStream = finalUrl.contains('.mp4') ||
+          finalUrl.contains('.m3u8') ||
+          finalUrl.contains('tapecontent') ||
+          finalUrl.contains('/hls/') ||
+          finalUrl.contains('/hls2/') ||
+          finalUrl.contains('storage') ||
+          finalUrl.startsWith('http');
+
+      setState(() {
+        _testerStatus[cdn['host']] = 'working';
+        _testerStatusMsg[cdn['host']] = 'Live Playback Running';
+      });
+
+      // Launch full-featured native VideoPlayerScreen directly!
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VideoPlayerScreen(
+            videoUrl: finalUrl,
+            videoTitle: "$title ($host)",
+            headers: headers.isNotEmpty ? headers : null,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _testerStatus[cdn['host']] = 'failed';
+          _testerStatusMsg[cdn['host']] = 'Play error: $e';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Playback error on $host: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _testDownloadCdn(Map<String, dynamic> cdn) async {
+    final url = (cdn['url'] ?? '').toString().trim();
+    final host = (cdn['host'] ?? '').toString().trim();
+    if (url.isEmpty) return;
+
+    setState(() {
+      _testerStatus[host] = 'checking';
+      _testerStatusMsg[host] = 'Testing stream connectivity...';
+    });
+
+    try {
+      String resolved = url;
+      if (url.contains('streamtape') || url.contains('advtpe') || url.contains('tapepops')) {
+        final stRes = await StreamtapeService.getDirectStreamUrl(url);
+        if (stRes != null && stRes.isNotEmpty) resolved = stRes;
+      } else if (url.contains('dropmms') || url.contains('vidara')) {
+        final dmRes = await DropmmsService.resolveDirectStream(url);
+        if (dmRes != null && dmRes.isNotEmpty) resolved = dmRes;
+      }
+
+      final uri = Uri.tryParse(resolved);
+      if (uri != null) {
+        final client = http.Client();
+        final req = http.Request('HEAD', uri);
+        req.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+        req.headers['Referer'] = url;
+        final streamedRes = await client.send(req).timeout(const Duration(seconds: 8));
+
+        final ok = (streamedRes.statusCode >= 200 && streamedRes.statusCode < 400);
+        if (mounted) {
+          setState(() {
+            _testerStatus[host] = ok ? 'working' : 'failed';
+            _testerStatusMsg[host] = ok ? 'HTTP ' + streamedRes.statusCode.toString() + ' OK (Direct Downloadable)' : 'HTTP ' + streamedRes.statusCode.toString() + ' Error';
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("[$host] ${ok ? 'Working! Stream is alive (HTTP ' + streamedRes.statusCode.toString() + ')' : 'Failed with status ' + streamedRes.statusCode.toString()}"),
+              backgroundColor: ok ? Colors.green : Colors.red,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _testerStatus[host] = 'failed';
+            _testerStatusMsg[host] = 'Invalid URL format';
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _testerStatus[host] = 'failed';
+          _testerStatusMsg[host] = 'Connectivity timeout / failed: $e';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("[$host] Download test failed: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Color _getCdnColor(String host) {
+    final h = host.toLowerCase();
+    if (h.contains('streamtape')) return const Color(0xFF00E5FF);
+    if (h.contains('dropmms') || h.contains('vidara')) return const Color(0xFFFF9100);
+    if (h.contains('dood')) return const Color(0xFF00E676);
+    if (h.contains('uffmaal') || h.contains('hdmaal')) return const Color(0xFFE50914);
+    if (h.contains('uncut')) return const Color(0xFFD500F9);
+    if (h.contains('gofile')) return const Color(0xFFFFD600);
+    if (h.contains('drive.google')) return const Color(0xFF2979FF);
+    if (h.contains('mp4upload')) return const Color(0xFFFF4081);
+    return const Color(0xFF8E2DE2);
+  }
+
+  IconData _getCdnIcon(String host) {
+    final h = host.toLowerCase();
+    if (h.contains('streamtape')) return Icons.play_circle_fill_rounded;
+    if (h.contains('dropmms') || h.contains('vidara')) return Icons.cloud_download_rounded;
+    if (h.contains('dood')) return Icons.flash_on_rounded;
+    if (h.contains('uffmaal') || h.contains('hdmaal')) return Icons.hd_rounded;
+    if (h.contains('uncut')) return Icons.local_fire_department_rounded;
+    if (h.contains('drive.google')) return Icons.folder_shared_rounded;
+    return Icons.dns_rounded;
+  }
+
+  Widget _buildLinkTesterView() {
+    if (_testerCdns.isEmpty && !_testerScanning) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _testerCdns.isEmpty && !_testerScanning) {
+          _scanDatabaseCdns();
+        }
+      });
+    }
+
+    final query = _testerSearchCtrl.text.trim().toLowerCase();
+    final filtered = _testerCdns.where((c) {
+      final host = (c['host'] ?? '').toString().toLowerCase();
+      final title = (c['sample_title'] ?? '').toString().toLowerCase();
+      final matchesQuery = query.isEmpty || host.contains(query) || title.contains(query);
+      if (!matchesQuery) return false;
+
+      if (_testerFilter == 'working') {
+        return _testerStatus[c['host']] == 'working';
+      } else if (_testerFilter == 'failed') {
+        return _testerStatus[c['host']] == 'failed';
+      } else if (_testerFilter == 'movie') {
+        return c['item_type'] == 'movie';
+      } else if (_testerFilter == 'series') {
+        return c['item_type'] == 'series';
+      }
+      return true;
+    }).toList();
+
+    int workingCount = _testerStatus.values.where((v) => v == 'working').length;
+    int failedCount = _testerStatus.values.where((v) => v == 'failed').length;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Banner Card
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1E2638), Color(0xFF131722)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.3), width: 1.2),
+              boxShadow: [
+                BoxShadow(color: Colors.cyanAccent.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(0, 4)),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(colors: [Color(0xFF00E5FF), Color(0xFF8E2DE2)]),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Icon(Icons.science_rounded, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("🧪 LINK TESTER & CDN DIAGNOSTICS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5)),
+                          SizedBox(height: 3),
+                          Text("Auto-extracts 1 unique random link per CDN from database for playback & download verification.", style: TextStyle(color: Colors.white60, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Action & Stats Row
+                Row(
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _testerScanning ? null : _scanDatabaseCdns,
+                      icon: _testerScanning
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                          : const Icon(Icons.refresh_rounded, size: 18),
+                      label: Text(_testerScanning ? "Scanning DB..." : "Scan Database", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.cyanAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _buildTesterStatChip("Total CDNs", "${_testerCdns.length}", Colors.cyanAccent),
+                            const SizedBox(width: 8),
+                            _buildTesterStatChip("Working", "$workingCount", Colors.greenAccent),
+                            const SizedBox(width: 8),
+                            _buildTesterStatChip("Failed", "$failedCount", Colors.redAccent),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Search & Filter Bar
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141722),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: TextField(
+                    controller: _testerSearchCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: "Search host (streamtape, dropmms, dood)...",
+                      hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
+                      prefixIcon: const Icon(Icons.search_rounded, color: Colors.cyanAccent, size: 18),
+                      suffixIcon: _testerSearchCtrl.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear_rounded, color: Colors.white54, size: 16),
+                              onPressed: () {
+                                _testerSearchCtrl.clear();
+                                setState(() {});
+                              },
+                            )
+                          : null,
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Filter Chips
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildTesterFilterChip('all', 'All (${_testerCdns.length})'),
+                const SizedBox(width: 6),
+                _buildTesterFilterChip('working', 'Working ($workingCount)'),
+                const SizedBox(width: 6),
+                _buildTesterFilterChip('failed', 'Failed ($failedCount)'),
+                const SizedBox(width: 6),
+                _buildTesterFilterChip('movie', 'Movies Only'),
+                const SizedBox(width: 6),
+                _buildTesterFilterChip('series', 'Series Only'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // CDN Cards List
+          if (_testerScanning)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Column(
+                  children: [
+                    CircularProgressIndicator(color: Colors.cyanAccent),
+                    SizedBox(height: 14),
+                    Text("Scanning database for unique CDN hosts...", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  ],
+                ),
+              ),
+            )
+          else if (filtered.isEmpty)
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(30),
+                child: Column(
+                  children: [
+                    const Icon(Icons.search_off_rounded, color: Colors.white24, size: 50),
+                    const SizedBox(height: 12),
+                    Text(_testerCdns.isEmpty ? "No CDNs scanned yet. Tap Scan Database above." : "No CDN hosts match your search filter.", style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                  ],
+                ),
+              ),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filtered.length,
+              itemBuilder: (context, index) {
+                final cdn = filtered[index];
+                final host = (cdn['host'] ?? 'Unknown Host').toString();
+                final title = (cdn['sample_title'] ?? 'Untitled Sample').toString();
+                final url = (cdn['url'] ?? '').toString();
+                final count = cdn['total_count'] ?? 1;
+                final isMovie = cdn['item_type'] == 'movie';
+                final quality = (cdn['quality'] ?? '720p').toString();
+                final color = _getCdnColor(host);
+                final icon = _getCdnIcon(host);
+                final status = _testerStatus[host];
+                final statusMsg = _testerStatusMsg[host];
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151926),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: status == 'working'
+                          ? Colors.greenAccent.withValues(alpha: 0.8)
+                          : (status == 'failed' ? Colors.redAccent.withValues(alpha: 0.8) : Colors.white12),
+                      width: status != null ? 1.4 : 1.0,
+                    ),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 3)),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Top Row: Host Badge & Occurrences
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: color, width: 0.9),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(icon, color: color, size: 14),
+                                const SizedBox(width: 6),
+                                Text(
+                                  host.toUpperCase(),
+                                  style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              "$count in DB",
+                              style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: isMovie ? Colors.blueAccent.withValues(alpha: 0.15) : Colors.purpleAccent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              isMovie ? "🎬 MOVIE" : "📺 SERIES",
+                              style: TextStyle(color: isMovie ? Colors.blueAccent : Colors.purpleAccent, fontSize: 9.5, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Sample Title & Quality
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.movie_outlined, color: Colors.white38, size: 15),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amberAccent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(quality, style: const TextStyle(color: Colors.amberAccent, fontSize: 9.5, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      // URL Box with Copy Button
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0D1017),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.link_rounded, color: Colors.cyanAccent, size: 14),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                url,
+                                style: const TextStyle(color: Colors.white54, fontSize: 10.5, fontFamily: 'monospace'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () {
+                                Clipboard.setData(ClipboardData(text: url));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text("Copied $host link!"), duration: const Duration(seconds: 1)),
+                                );
+                              },
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.copy_rounded, color: Colors.cyanAccent, size: 14),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Status message if checked
+                      if (statusMsg != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(
+                              status == 'working'
+                                  ? Icons.check_circle_rounded
+                                  : (status == 'failed' ? Icons.error_outline_rounded : Icons.sync_rounded),
+                              color: status == 'working'
+                                  ? Colors.greenAccent
+                                  : (status == 'failed' ? Colors.redAccent : Colors.orangeAccent),
+                              size: 13,
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                statusMsg,
+                                style: TextStyle(
+                                  color: status == 'working'
+                                      ? Colors.greenAccent
+                                      : (status == 'failed' ? Colors.redAccent : Colors.orangeAccent),
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+
+                      // Action Buttons Row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () => _testPlayCdn(cdn),
+                              icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                              label: const Text("Test Play", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1E2638),
+                                foregroundColor: Colors.cyanAccent,
+                                elevation: 0,
+                                side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () => _testDownloadCdn(cdn),
+                              icon: const Icon(Icons.download_rounded, size: 16),
+                              label: const Text("Test Download", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1E2638),
+                                foregroundColor: Colors.greenAccent,
+                                elevation: 0,
+                                side: const BorderSide(color: Colors.greenAccent, width: 0.8),
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTesterStatChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text("$label: ", style: const TextStyle(color: Colors.white70, fontSize: 11)),
+          Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 11.5)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTesterFilterChip(String key, String label) {
+    final isSelected = _testerFilter == key;
+    return GestureDetector(
+      onTap: () => setState(() => _testerFilter = key),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.cyanAccent.withValues(alpha: 0.2) : const Color(0xFF141722),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSelected ? Colors.cyanAccent : Colors.white12),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.cyanAccent : Colors.white60,
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
 }
 
 class _GrantVipDialog extends StatefulWidget {
@@ -15856,6 +16838,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
   late TextEditingController _captionCtrl;
   final _skymoviesSearchCtrl = TextEditingController();
   final _uncutSearchCtrl = TextEditingController();
+  final _directStreamLinkCtrl = TextEditingController();
 
   Uint8List? _posterBytes;
   Uint8List? _collageBytes;
@@ -16495,6 +17478,8 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                           _tabBtn(3, "🌐 Web Grabber", Colors.cyanAccent),
                           const SizedBox(width: 6),
                           _tabBtn(4, "🌐 Maal Network", Colors.greenAccent),
+                          const SizedBox(width: 6),
+                          _tabBtn(5, "⚡ Direct Stream / Link", Colors.pinkAccent),
                         ],
                       ),
                     ),
@@ -16982,6 +17967,176 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                   },
                                 ),
                               ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ] else if (_tab == 5) ...[
+                      // Direct Stream / Video Upload Tab
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141722),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.pinkAccent.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.bolt_rounded, color: Colors.pinkAccent, size: 16),
+                                SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    "⚡ Direct Stream & Video Upload (Streamtape, DropMMS, Vidara, MP4)",
+                                    style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _directStreamLinkCtrl,
+                              style: const TextStyle(color: Colors.white, fontSize: 11),
+                              decoration: InputDecoration(
+                                hintText: "Paste Streamtape, Vidara, DropMMS, or direct MP4 URL...",
+                                hintStyle: const TextStyle(color: Colors.white30, fontSize: 10.5),
+                                prefixIcon: const Icon(Icons.link_rounded, color: Colors.pinkAccent, size: 16),
+                                filled: true,
+                                fillColor: const Color(0xFF0D1017),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: () {
+                                      final url = _directStreamLinkCtrl.text.trim();
+                                      if (url.isNotEmpty) {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => VideoPlayerScreen(
+                                              videoUrl: url,
+                                              videoTitle: widget.title,
+                                            ),
+                                          ),
+                                        );
+                                      } else {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("Paste a video link first"), backgroundColor: Colors.orange),
+                                        );
+                                      }
+                                    },
+                                    icon: const Icon(Icons.play_circle_fill_rounded, size: 15),
+                                    label: const Text("Preview Video", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1E2638),
+                                      foregroundColor: Colors.pinkAccent,
+                                      side: const BorderSide(color: Colors.pinkAccent, width: 0.8),
+                                      padding: const EdgeInsets.symmetric(vertical: 8),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: _openWebImageGrabber,
+                                    icon: const Icon(Icons.photo_library_rounded, size: 15),
+                                    label: const Text("Grab Scenes", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF1E2638),
+                                      foregroundColor: Colors.cyanAccent,
+                                      side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                      padding: const EdgeInsets.symmetric(vertical: 8),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            // Direct Telegram Native Video Upload Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: _isBroadcasting ? null : () async {
+                                  final url = _directStreamLinkCtrl.text.trim();
+                                  final botToken = widget.botTokenCtrl.text.trim();
+                                  final channelId = widget.channelIdCtrl.text.trim();
+                                  if (botToken.isEmpty || channelId.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Bot token and Channel ID required in App Settings"), backgroundColor: Colors.orange),
+                                    );
+                                    return;
+                                  }
+                                  if (url.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Paste stream video URL above to upload to Telegram"), backgroundColor: Colors.orange),
+                                    );
+                                    return;
+                                  }
+
+                                  setState(() => _isBroadcasting = true);
+                                  try {
+                                    final res = await http.post(
+                                      Uri.parse('${ApiConfig.adminUrl}?action=telegram_extractor_upload'),
+                                      headers: {'Content-Type': 'application/json'},
+                                      body: jsonEncode({
+                                        'bot_token': botToken,
+                                        'channel_id': channelId,
+                                        'title': widget.title,
+                                        'caption': _captionCtrl.text.trim(),
+                                        'video_url': url,
+                                        'image_urls': _selectedScreenshotUrls.toList(),
+                                        'upload_photos': true,
+                                        'upload_video': true,
+                                      }),
+                                    ).timeout(const Duration(seconds: 180));
+
+                                    final data = jsonDecode(res.body);
+
+                                    if (mounted) {
+                                      setState(() => _isBroadcasting = false);
+                                      final ok = data['status'] == 'success';
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(ok ? "✈️ Native video & post uploaded to Telegram!" : "Upload failed: ${data['message'] ?? data['data']?['video_error'] ?? 'Error'}"),
+                                          backgroundColor: ok ? Colors.green : Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      setState(() => _isBroadcasting = false);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text("Upload error: $e"), backgroundColor: Colors.red),
+                                      );
+                                    }
+                                  }
+                                },
+                                icon: const Icon(Icons.send_rounded, color: Colors.white, size: 16),
+                                label: const Text("🚀 UPLOAD NATIVE VIDEO TO TELEGRAM CHANNEL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF229ED9),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              "ℹ️ Note: Standard Telegram Bot API limit is 50MB per video. If video exceeds 50MB, use the Broadcast Post button below to publish the High-Res scene collage album with the deep link.",
+                              style: TextStyle(color: Colors.white38, fontSize: 9.5),
+                            ),
+                            if (_availableScreenshots.isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text("Select Screenshots for Collage:", style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 6),
+                              _buildScreenshotGrid(),
                             ],
                           ],
                         ),
@@ -18348,3 +19503,4 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
     );
   }
 }
+

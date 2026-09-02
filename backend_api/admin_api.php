@@ -324,7 +324,15 @@ function get_domain_check_headers($url) {
                strpos($low, '9redmovies') !== false || strpos($low, 'hotbazi') !== false) {
         $referer = 'https://aagmaal.mba/';
         $extraHeaders = ['Origin: https://aagmaal.mba'];
-    } else if (strpos($low, 'maal') !== false || strpos($low, 'uffmaal') !== false || strpos($low, 'azmaal') !== false || strpos($low, 'bmaal') !== false || strpos($low, 'pmaal') !== false || strpos($low, 'hmaal') !== false) {
+    } else if (strpos($low, 'bmaal') !== false || strpos($low, 'azmaal') !== false) {
+        $referer = 'https://bmaal.io/';
+        $extraHeaders = ['Origin: https://bmaal.io'];
+        $headOnly = true;
+    } else if (strpos($low, 'wowmaal') !== false || strpos($low, 'ivdo.cc') !== false || strpos($low, 'ivdo') !== false) {
+        $referer = 'https://wowmaal.net/';
+        $extraHeaders = ['Origin: https://wowmaal.net'];
+        $headOnly = true;
+    } else if (strpos($low, 'maal') !== false || strpos($low, 'uffmaal') !== false || strpos($low, 'pmaal') !== false || strpos($low, 'hmaal') !== false) {
         $referer = 'https://uffmaal.com/';
         $extraHeaders = ['Origin: https://uffmaal.com'];
         $headOnly = true;
@@ -450,6 +458,8 @@ function http_health_check($url, $timeout = 8) {
                           strpos($low, 'uncut') !== false || strpos($low, 'hdmaal') !== false ||
                           strpos($low, 'aagmaal') !== false || strpos($low, 'uncutmaal') !== false ||
                           strpos($low, 'uffmaal') !== false || strpos($low, 'azmaal') !== false ||
+                          strpos($low, 'bmaal') !== false || strpos($low, 'wowmaal') !== false ||
+                          strpos($low, 'ivdo') !== false || strpos($low, 'maalcdn') !== false ||
                           strpos($low, 'pmaal') !== false);
         if ($isBlockedHost) return ["ok" => true, "code" => $code, "direct" => $url];
     }
@@ -684,6 +694,8 @@ function batch_health_check($links, $timeout = 8) {
                                   strpos($low, 'aagmaal') !== false || strpos($low, 'uncutmaal') !== false ||
                                   strpos($low, 'maal') !== false || strpos($low, 'uffmaal') !== false ||
                                   strpos($low, 'azmaal') !== false || strpos($low, 'bmaal') !== false ||
+                                  strpos($low, 'wowmaal') !== false || strpos($low, 'ivdo') !== false ||
+                                  strpos($low, 'maalcdn') !== false || strpos($low, 'tube279') !== false ||
                                   strpos($low, 'pmaal') !== false || strpos($low, 'hmaal') !== false ||
                                   strpos($low, 'ixifile') !== false || strpos($low, 'skymovies') !== false ||
                                   strpos($low, 'luluvdo') !== false || strpos($low, 'streamtape') !== false ||
@@ -722,22 +734,15 @@ function safe_count($pdo, $sql) {
 function check_and_do_weekly_reset($pdo) {
     try {
         @$pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (`key` VARCHAR(100) NOT NULL PRIMARY KEY, `value` TEXT NOT NULL DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    } catch (Exception $e) { return; }
-    try {
-        $row = @$pdo->query("SELECT `value` FROM app_settings WHERE `key` = 'last_weekly_reset'")->fetchColumn();
-        $lastReset = $row ? @strtotime($row) : 0;
-        $now = time();
-        $todayStr = date('Y-m-d', $now);
-        $lastResetStr = $lastReset ? date('Y-m-d', $lastReset) : '';
-        // Fire on Monday (N=1) AND only once per day (lastReset date != today)
-        if (date('N', $now) == 1 && $lastResetStr !== $todayStr) {
+        $currentWeekMonday = date('Y-m-d', strtotime('monday this week'));
+        $stmt = $pdo->prepare("SELECT `value` FROM app_settings WHERE `key` = 'last_weekly_reset_monday'");
+        $stmt->execute();
+        $lastResetMonday = $stmt->fetchColumn();
+
+        if (!$lastResetMonday || $lastResetMonday !== $currentWeekMonday) {
             @$pdo->exec("UPDATE movies SET weekly_views = 0");
             @$pdo->exec("UPDATE web_series SET weekly_views = 0");
-            @$pdo->exec("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset', " . $pdo->quote($todayStr) . ")");
-        }
-        // Safety: if last_weekly_reset was never set (first run), seed it so reset fires next Monday
-        if (!$row) {
-            @$pdo->exec("INSERT IGNORE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset', '2000-01-01')");
+            @$pdo->prepare("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset_monday', ?)")->execute([$currentWeekMonday]);
         }
     } catch (Exception $e) {}
 }
@@ -1900,12 +1905,33 @@ if ($action === 'add_content') {
 // 7g2. LOG CONTENT VIEW (feeds trending)
 //
 if ($action === 'log_view') {
+    check_and_do_weekly_reset($pdo);
     $user_id = trim($input['user_id'] ?? '');
     $content_id = intval($input['content_id'] ?? 0);
     $content_type = intval($input['content_type'] ?? 0);
     if ($content_id <= 0) json_response(false, [], "Content ID required");
-    $pdo->prepare("INSERT INTO view_log (user_id, content_id, content_type, date, time) VALUES (?, ?, ?, ?, ?)")
-        ->execute([$user_id, $content_id, $content_type, date('m-d-Y'), date('h:i:s a')]);
+
+    try {
+        if ($content_type == 1) {
+            $pdo->prepare("UPDATE movies SET views = IFNULL(views, 0) + 1, weekly_views = IFNULL(weekly_views, 0) + 1 WHERE id = ?")->execute([$content_id]);
+        } else if ($content_type == 2) {
+            $pdo->prepare("UPDATE web_series SET views = IFNULL(views, 0) + 1, weekly_views = IFNULL(weekly_views, 0) + 1 WHERE id = ?")->execute([$content_id]);
+        }
+    } catch (Exception $e) {}
+
+    try {
+        @$pdo->exec("CREATE TABLE IF NOT EXISTS view_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id TEXT,
+            content_id INT,
+            content_type INT,
+            date VARCHAR(20),
+            time VARCHAR(20)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $pdo->prepare("INSERT INTO view_log (user_id, content_id, content_type, date, time) VALUES (?, ?, ?, ?, ?)")
+            ->execute([$user_id, $content_id, $content_type, date('m-d-Y'), date('h:i:s a')]);
+    } catch (Exception $e) {}
+
     json_response(true, [], "View logged");
 }
 
@@ -2106,7 +2132,7 @@ if ($action === 'reset_scan') {
         $stmtM->execute([$ott, $ott, $ott]);
         $totalM = intval($stmtM->fetchColumn());
 
-        $stmtE = $pdo->prepare("SELECT COUNT(*) FROM episode_play_links epl JOIN web_series s ON epl.series_id = s.id WHERE epl.status = 1 AND (FIND_IN_SET(?, s.genres) OR FIND_IN_SET(?, s.networks) OR s.ott_name = ?)");
+        $stmtE = $pdo->prepare("SELECT COUNT(*) FROM episode_play_links epl JOIN web_series_episoade ep ON ep.id = epl.episode_id JOIN web_series_seasons ss ON ss.id = ep.season_id JOIN web_series s ON s.id = ss.web_series_id WHERE epl.status = 1 AND (FIND_IN_SET(?, s.genres) OR FIND_IN_SET(?, s.networks) OR s.ott_name = ?)");
         $stmtE->execute([$ott, $ott, $ott]);
         $totalE = intval($stmtE->fetchColumn());
     } else {
@@ -2236,7 +2262,7 @@ if ($action === 'scan_episode_links') {
 
     // Keyset pagination (resume from last id)
     if (!empty($ott) && $ott !== 'All') {
-        $stmt = $pdo->prepare("SELECT epl.id, epl.episode_id, epl.url, epl.name FROM episode_play_links epl JOIN web_series s ON epl.series_id = s.id WHERE epl.status = 1 AND (FIND_IN_SET(?, s.genres) OR FIND_IN_SET(?, s.networks) OR s.ott_name = ?) AND epl.id > ? ORDER BY epl.id ASC LIMIT ?");
+        $stmt = $pdo->prepare("SELECT epl.id, epl.episode_id, epl.url, epl.name FROM episode_play_links epl JOIN web_series_episoade ep ON ep.id = epl.episode_id JOIN web_series_seasons ss ON ss.id = ep.season_id JOIN web_series s ON s.id = ss.web_series_id WHERE epl.status = 1 AND (FIND_IN_SET(?, s.genres) OR FIND_IN_SET(?, s.networks) OR s.ott_name = ?) AND epl.id > ? ORDER BY epl.id ASC LIMIT ?");
         $stmt->execute([$ott, $ott, $ott, $lastId, $limit]);
     } else {
         $stmt = $pdo->prepare("SELECT id, episode_id, url, name FROM episode_play_links WHERE status = 1 AND id > $lastId ORDER BY id ASC LIMIT $limit");
@@ -5220,6 +5246,298 @@ if ($action === 'get_fly_mode_analytics') {
     ], 'Fly Mode analytics fetched');
 }
 
+//
+// 🧪 LINK TESTER — SCAN DATABASE FOR UNIQUE CDNS & HOSTS
+//
+if ($action === 'scan_database_unique_cdns') {
+    $cdns = [];
+
+    // Helper to extract clean domain/host name
+    $extract_host = function($url) {
+        if (empty($url)) return '';
+        $url = trim($url);
+        if (preg_match('/(?:streamtape|tapepops|tapepop|advtpe|streamtp|s-tpe|tpead|tpe\.com|streamta|tapecom|tape\.gg|stp\.gg|tapemax|tapehost|streamtape\.xyz|streamtape\.net|streamtape\.to|streamtape\.click|tpes\.|tape\.xyz|tpe\.xyz|streamtape\.top|streamtapp|stape)/i', $url)) {
+            return 'streamtape.com';
+        }
+        if (preg_match('/(?:dropmms|droplink|merivo|vidara)/i', $url)) {
+            return 'dropmms.co';
+        }
+        if (preg_match('/(?:doodstream|dood\.|ds2play|d-stream|doodp)/i', $url)) {
+            return 'doodstream.com';
+        }
+        if (preg_match('/(?:gofile\.io)/i', $url)) {
+            return 'gofile.io';
+        }
+        if (preg_match('/(?:mp4upload\.com)/i', $url)) {
+            return 'mp4upload.com';
+        }
+        if (preg_match('/(?:drive\.google\.com)/i', $url)) {
+            return 'drive.google.com';
+        }
+        if (preg_match('/(?:vidguard|vgfplayer|vguard)/i', $url)) {
+            return 'vidguard.to';
+        }
+        $host = strtolower(parse_url($url, PHP_URL_HOST) ?: '');
+        $host = preg_replace('/^www\./i', '', $host);
+        return $host ?: 'direct_stream';
+    };
+
+    // 1. Scan Movie Play Links
+    try {
+        $stmt = $pdo->query("SELECT mpl.id, mpl.movie_id AS content_id, mpl.name AS link_name, mpl.quality, mpl.url, mpl.type, m.name AS title, 'movie' AS item_type FROM movie_play_links mpl JOIN movies m ON m.id = mpl.movie_id WHERE mpl.url IS NOT NULL AND mpl.url != '' ORDER BY RAND()");
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $url = trim($row['url']);
+            $host = $extract_host($url);
+            if (empty($host)) continue;
+
+            if (!isset($cdns[$host])) {
+                $cdns[$host] = [
+                    'host'         => $host,
+                    'sample_title' => $row['title'],
+                    'content_id'   => intval($row['content_id']),
+                    'item_type'    => 'movie',
+                    'url'          => $url,
+                    'quality'      => $row['quality'] ?: '720p',
+                    'link_name'    => $row['link_name'] ?: 'Play Link',
+                    'total_count'  => 1,
+                ];
+            } else {
+                $cdns[$host]['total_count']++;
+            }
+        }
+    } catch (Exception $e) {}
+
+    // 2. Scan Episode Play Links
+    try {
+        $stmt = $pdo->query("SELECT epl.id, epl.episode_id AS content_id, epl.name AS link_name, epl.quality, epl.url, epl.type, CONCAT(ws.name, ' - ', IFNULL(ep.Episoad_Name, ep.name)) AS title, 'series' AS item_type FROM episode_play_links epl JOIN web_series_episoade ep ON ep.id = epl.episode_id JOIN web_series_seasons wss ON wss.id = ep.season_id JOIN web_series ws ON ws.id = wss.web_series_id WHERE epl.url IS NOT NULL AND epl.url != '' ORDER BY RAND()");
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $url = trim($row['url']);
+            $host = $extract_host($url);
+            if (empty($host)) continue;
+
+            if (!isset($cdns[$host])) {
+                $cdns[$host] = [
+                    'host'         => $host,
+                    'sample_title' => $row['title'],
+                    'content_id'   => intval($row['content_id']),
+                    'item_type'    => 'series',
+                    'url'          => $url,
+                    'quality'      => $row['quality'] ?: '720p',
+                    'link_name'    => $row['link_name'] ?: 'Episode Link',
+                    'total_count'  => 1,
+                ];
+            } else {
+                $cdns[$host]['total_count']++;
+            }
+        }
+    } catch (Exception $e) {}
+
+    // Sort by count descending
+    $list = array_values($cdns);
+    usort($list, function($a, $b) {
+        return ($b['total_count'] <=> $a['total_count']);
+    });
+
+    json_response(true, ['cdns' => $list, 'total_cdns' => count($list)], count($list) . " unique CDNs discovered");
+}
+
+//
+// ⚡ AAGMAAL.BZ EXTRACTOR CINEMA (CATALOG & DETAILS)
+//
+if ($action === 'fetch_aagmaalbz_catalog') {
+    $q = trim($input['query'] ?? $_POST['query'] ?? '');
+    $page = intval($input['page'] ?? $_POST['page'] ?? 1);
+    if ($page < 1) $page = 1;
+
+    $domain = 'https://aagmaal.bz';
+    try {
+        $st = $pdo->prepare("SELECT svalue FROM app_settings WHERE skey = 'aagmaal_bz_domain'");
+        $st->execute();
+        $dVal = trim($st->fetchColumn() ?: '');
+        if (!empty($dVal)) {
+            $domain = rtrim($dVal, '/');
+        }
+    } catch (Exception $e) {}
+
+    $url = "$domain/page/$page/";
+    if (!empty($q)) {
+        $url = "$domain/page/$page/?s=" . urlencode($q);
+    }
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    $items = [];
+    $seen = [];
+    if ($html) {
+        // Pattern 1: AAGMaal.bz custom post cards
+        preg_match_all('/<a[^>]+href=["\'](https?:\/\/[^"\']+)["\'][^>]*>(.*?)<\/a>/is', $html, $all_links, PREG_SET_ORDER);
+        foreach ($all_links as $al) {
+            $href = trim($al[1]);
+            $inner = $al[2];
+            if (isset($seen[$href])) continue;
+            if (preg_match('/(?:\/category\/|\/tag\/|\/author\/|\/page\/|\/contact|\/dmca|\/privacy|sample-page|\/updated\/|\/today\/|facebook|twitter|reddit|telegram|wa\.me)/i', $href)) continue;
+            if (preg_match('/<img[^>]+(?:src|data-src|data-lazy-src)=["\']([^"\']+)["\']/i', $inner, $im)) {
+                $seen[$href] = true;
+                $poster = trim($im[1]);
+                $title = '';
+                if (preg_match('/<[^>]*class=["\'][^"\']*(?:title|heading|name)[^"\']*["\'][^>]*>(.*?)<\//is', $inner, $tm)) {
+                    $title = trim(html_entity_decode(strip_tags($tm[1])));
+                } elseif (preg_match('/title=["\']([^"\']+)["\']/i', $inner, $tm)) {
+                    $title = trim(html_entity_decode($tm[1]));
+                } elseif (preg_match('/alt=["\']([^"\']+)["\']/i', $inner, $tm)) {
+                    $title = trim(html_entity_decode($tm[1]));
+                }
+                if (empty($title)) {
+                    $pPath = trim(parse_url($href, PHP_URL_PATH) ?: '', '/');
+                    $title = ucwords(str_replace('-', ' ', $pPath));
+                }
+                $items[] = [
+                    'id'        => (string)count($items),
+                    'title'     => $title,
+                    'page_url'  => $href,
+                    'poster'    => $poster,
+                    'source'    => 'AAGMaal.bz',
+                ];
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items, 'page' => $page, 'query' => $q], count($items) . " items fetched");
+}
+
+if ($action === 'extract_aagmaalbz_details') {
+    $page_url = trim($input['page_url'] ?? $_POST['page_url'] ?? '');
+    if (empty($page_url)) json_response(false, [], "Page URL required");
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $page_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    if (!$html) {
+        json_response(false, [], "Failed to fetch post page");
+    }
+
+    // Title
+    $title = '';
+    if (preg_match('/<h1[^>]*class=["\'][^"\']*entry-title[^"\']*["\'][^>]*>(.*?)<\/h1>/is', $html, $tm)) {
+        $title = trim(html_entity_decode(strip_tags($tm[1])));
+    } elseif (preg_match('/<meta[^>]+itemprop=["\']name["\'][^>]+content=["\']([^"\']+)["\']/i', $html, $tm)) {
+        $title = trim(html_entity_decode($tm[1]));
+    }
+
+    // Poster
+    $poster = '';
+    if (preg_match('/<meta[^>]+itemprop=["\']thumbnailUrl["\'][^>]+content=["\']([^"\']+)["\']/i', $html, $pm)) {
+        $poster = trim($pm[1]);
+    } elseif (preg_match('/<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']/i', $html, $pm)) {
+        $poster = trim($pm[1]);
+    } elseif (preg_match('/<img[^>]+(?:data-src|src)=["\']([^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)["\']/i', $html, $pm)) {
+        $poster = trim($pm[1]);
+    }
+
+    // Stream Links & Iframes
+    $play_links = [];
+    $seen = [];
+
+    // 1. Check itemprop embedURL
+    if (preg_match('/<meta[^>]+itemprop=["\']embedURL["\'][^>]+content=["\']([^"\']+)["\']/i', $html, $em)) {
+        $src = trim($em[1]);
+        if (!empty($src)) {
+            $seen[$src] = true;
+            $hostName = parse_url($src, PHP_URL_HOST) ?: 'Player';
+            $play_links[] = [
+                'name'    => "Main Player ($hostName)",
+                'quality' => '1080p FHD',
+                'url'     => $src,
+                'type'    => 'Stream Embed / Direct',
+            ];
+        }
+    }
+
+    // 2. Check Iframes
+    preg_match_all('/<iframe[^>]+src=["\']([^"\']+)["\']/i', $html, $iframes);
+    if (!empty($iframes[1])) {
+        foreach ($iframes[1] as $idx => $src) {
+            $src = trim($src);
+            if (strpos($src, '//') === 0) $src = 'https:' . $src;
+            if (!isset($seen[$src])) {
+                $seen[$src] = true;
+                $hostName = parse_url($src, PHP_URL_HOST) ?: 'Player';
+                $play_links[] = [
+                    'name'    => "Stream " . (count($play_links) + 1) . " ($hostName)",
+                    'quality' => '720p HD',
+                    'url'     => $src,
+                    'type'    => 'Stream Embed / Direct',
+                ];
+            }
+        }
+    }
+
+    // 3. Check tracking-url / download buttons
+    if (preg_match('/<a[^>]+id=["\']tracking-url["\'][^>]+href=["\']([^"\']+)["\']/i', $html, $dm)) {
+        $dUrl = trim($dm[1]);
+        if (!empty($dUrl) && !isset($seen[$dUrl])) {
+            $seen[$dUrl] = true;
+            $play_links[] = [
+                'name'    => 'Fast Download Link',
+                'quality' => '1080p FHD',
+                'url'     => $dUrl,
+                'type'    => 'Direct Download Server',
+            ];
+        }
+    }
+
+    // 4. Check all <a> stream/download links
+    preg_match_all('/<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)<\/a>/is', $html, $aLinks, PREG_SET_ORDER);
+    foreach ($aLinks as $al) {
+        $href = trim($al[1]);
+        $text = trim(html_entity_decode(strip_tags($al[2])));
+        if (empty($href) || strpos($href, 'javascript:') === 0 || strpos($href, '#') === 0) continue;
+        if (preg_match('/(?:streamtape|tpead|advtpe|tapepops|luluvdo|playmogo|cdn1|strcloud|dood|tube279|dropmms|gofile|mp4upload|vidguard|drive\.google|fastcdn|hubcloud|mega\.nz|pixeldrain|vidspeeds)/i', $href)) {
+            if (!isset($seen[$href])) {
+                $seen[$href] = true;
+                $hostName = parse_url($href, PHP_URL_HOST) ?: 'Mirror';
+                $play_links[] = [
+                    'name'    => (!empty($text) && strlen($text) < 40) ? $text : "Server " . (count($play_links) + 1) . " ($hostName)",
+                    'quality' => '720p',
+                    'url'     => $href,
+                    'type'    => 'Streamtape / Mirror Link',
+                ];
+            }
+        }
+    }
+
+    $stream_url = !empty($play_links) ? $play_links[0]['url'] : '';
+
+    json_response(true, [
+        'title'      => $title,
+        'poster'     => $poster,
+        'stream_url' => $stream_url,
+        'play_links' => $play_links,
+        'page_url'   => $page_url,
+    ], count($play_links) . " stream links extracted");
+}
+
 if ($action === 'telegram_extractor_upload') {
     ini_set('display_errors', 0);
     ignore_user_abort(true);
@@ -5448,8 +5766,170 @@ if ($action === 'telegram_extractor_upload') {
     json_response(true, $results, 'Telegram Broadcast Process Completed');
 }
 
+// Search across Maal Network sites
+if ($action === 'search_maal_network') {
+    $query = $input['query'] ?? $_GET['query'] ?? $_POST['query'] ?? '';
+    $domains = $input['domains'] ?? $_POST['domains'] ?? ['bmaal.net', 'wowmaal.net', 'uffmaal.com'];
+    if (is_string($domains)) {
+        $domains = array_filter(array_map('trim', explode(',', $domains)));
+    }
+    if (empty($query)) {
+        json_response(false, ['items' => []], 'Query parameter is required');
+    }
+
+    $items = [];
+    foreach ($domains as $d) {
+        $d = trim($d);
+        if (empty($d)) continue;
+        $url = "https://{$d}/?s=" . urlencode($query);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 6,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTPHEADER     => [
+                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Referer: https://' . $d . '/',
+            ],
+        ]);
+        $html = curl_exec($ch);
+        curl_close($ch);
+        if (!$html) continue;
+
+        // 1. Articles (e.g. BMaal, UffMaal)
+        if (preg_match_all('/<article[^>]*>.*?<a\s+href="([^"]+)"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>.*?(?:<h[1-6][^>]*>(.*?)</h[1-6]>|title="([^"]+)").*?</article>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach (array_slice($matches, 0, 15) as $m) {
+                $rawTitle = !empty($m[3]) ? $m[3] : (!empty($m[4]) ? $m[4] : '');
+                $cleanTitle = html_entity_decode(trim(strip_tags($rawTitle)));
+                $href = $m[1];
+                $poster = $m[2];
+                if (empty($href) || empty($cleanTitle)) continue;
+                $items[] = [
+                    'title'       => $cleanTitle,
+                    'page_url'    => strpos($href, 'http') === 0 ? $href : "https://{$d}{$href}",
+                    'poster'      => strpos($poster, 'http') === 0 ? $poster : "https://{$d}{$poster}",
+                    'site_domain' => $d,
+                ];
+            }
+        }
+
+        // 2. Post-card layout (e.g. WOWMaal, NewMaal)
+        if (preg_match_all('/<a\b[^>]+href="([^"]+)"[^>]*class="[^"]*post-card[^"]*"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>.*?<h[1-6][^>]*class="[^"]*post-card-title[^"]*"[^>]*>(.*?)</h[1-6]>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach (array_slice($matches, 0, 15) as $m) {
+                $cleanTitle = html_entity_decode(trim(strip_tags($m[3])));
+                $href = $m[1];
+                $poster = $m[2];
+                if (empty($href) || empty($cleanTitle)) continue;
+                $items[] = [
+                    'title'       => $cleanTitle,
+                    'page_url'    => strpos($href, 'http') === 0 ? $href : "https://{$d}{$href}",
+                    'poster'      => strpos($poster, 'http') === 0 ? $poster : "https://{$d}{$poster}",
+                    'site_domain' => $d,
+                ];
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items, 'total' => count($items)], 'Search completed');
+}
+
+// Extract episode stream and details from a Maal Network post
+if ($action === 'extract_maal_network_episode') {
+    $page_url = $input['page_url'] ?? $_GET['page_url'] ?? $_POST['page_url'] ?? '';
+    if (empty($page_url)) {
+        json_response(false, [], 'page_url parameter is required');
+    }
+
+    $parsed = parse_url($page_url);
+    $domain = $parsed['host'] ?? '';
+    $scheme = $parsed['scheme'] ?? 'https';
+    $base_url = "{$scheme}://{$domain}";
+
+    $ch = curl_init($page_url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTPHEADER     => [
+            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer: ' . $base_url . '/',
+        ],
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    if (!$html) {
+        json_response(false, [], 'Failed to fetch episode page');
+    }
+
+    $stream_url = '';
+    $poster = '';
+    $images = [];
+
+    // 1. JSON-LD embedUrl
+    if (preg_match('/"embedUrl"\s*:\s*"([^"]+)"/i', $html, $m)) {
+        $stream_url = html_entity_decode($m[1]);
+    }
+
+    // 2. <source src="...">
+    if (empty($stream_url) && preg_match('/<source[^>]+src=["\x27]([^"\x27]+\.(?:mp4|m3u8)[^"\x27]*)["\x27]/i', $html, $m)) {
+        $stream_url = html_entity_decode($m[1]);
+    }
+
+    // 3. <video src="...">
+    if (empty($stream_url) && preg_match('/<video[^>]+src=["\x27]([^"\x27]+\.(?:mp4|m3u8)[^"\x27]*)["\x27]/i', $html, $m)) {
+        $stream_url = html_entity_decode($m[1]);
+    }
+
+    // 4. file: "..." (JWPlayer style)
+    if (empty($stream_url) && preg_match('/file\s*:\s*["\x27]([^"\x27]+\.(?:mp4|m3u8)[^"\x27]*)["\x27]/i', $html, $m)) {
+        $stream_url = html_entity_decode($m[1]);
+    }
+
+    // 5. Iframe embed
+    if (empty($stream_url) && preg_match('/<iframe[^>]+src=["\x27]([^"\x27]+)["\x27]/i', $html, $m)) {
+        $iframeSrc = html_entity_decode($m[1]);
+        if (strpos($iframeSrc, 'cdn.') !== false || strpos($iframeSrc, 'player.') !== false || strpos($iframeSrc, 'ivdo.cc') !== false || strpos($iframeSrc, '/embed/') !== false) {
+            $stream_url = $iframeSrc;
+        }
+    }
+
+    // Poster
+    if (preg_match('/<meta[^>]+property=["\x27]og:image["\x27][^>]+content=["\x27]([^"\x27]+)["\x27]/i', $html, $m)) {
+        $poster = $m[1];
+    } elseif (preg_match('/poster=["\x27]([^"\x27]+\.(?:jpg|jpeg|png|webp)[^"\x27]*)["\x27]/i', $html, $m)) {
+        $poster = $m[1];
+    }
+
+    // Title
+    $title = '';
+    if (preg_match('/<h1[^>]*>(.*?)<\/h1>/is', $html, $m)) {
+        $title = html_entity_decode(trim(strip_tags($m[1])));
+    }
+
+    // Gallery images
+    if (preg_match_all('/<img[^>]+src=["\x27]([^"\x27]+\.(?:jpg|jpeg|png|webp)[^"\x27]*)["\x27]/i', $html, $matches)) {
+        foreach ($matches[1] as $img) {
+            if (strpos($img, 'logo') !== false || strpos($img, 'icon') !== false) continue;
+            $images[] = strpos($img, 'http') === 0 ? $img : "{$base_url}/" . ltrim($img, '/');
+            if (count($images) >= 10) break;
+        }
+    }
+
+    json_response(true, [
+        'stream_url' => $stream_url,
+        'poster'     => $poster,
+        'title'      => $title,
+        'images'     => $images,
+        'referer'    => $base_url . '/',
+    ], 'Episode details extracted');
+}
+
 // Fallback for unknown or missing action
 json_response(false, [], 'Unknown or unhandled action: ' . $action);
+
 
 
 

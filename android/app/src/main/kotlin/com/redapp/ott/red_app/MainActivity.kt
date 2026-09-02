@@ -2,7 +2,9 @@ package com.redapp.ott.red_app
 
 import android.app.PictureInPictureParams
 import android.content.ContentValues
+import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Rational
@@ -15,9 +17,40 @@ import java.io.FileInputStream
 class MainActivity : FlutterActivity() {
     private val PIP_CHANNEL = "com.red.app/pip"
     private val SAVE_CHANNEL = "com.red.app/save"
+    private val DEEPLINK_CHANNEL = "com.red.app/deeplink"
+    private val STEALTH_CHANNEL = "com.red.app/stealth"
+
+    private var initialDeepLink: String? = null
+    private var deepLinkChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        intent?.dataString?.let { link ->
+            initialDeepLink = link
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.dataString?.let { link ->
+            deepLinkChannel?.invokeMethod("onLink", link)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        deepLinkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEEPLINK_CHANNEL)
+        deepLinkChannel?.setMethodCallHandler { call, result ->
+            if (call.method == "getInitialLink") {
+                val link = initialDeepLink
+                initialDeepLink = null
+                result.success(link)
+            } else {
+                result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PIP_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "enterPip") {
@@ -46,9 +79,52 @@ class MainActivity : FlutterActivity() {
                 "saveToMovies" -> {
                     val path = call.argument<String>("path") ?: ""
                     val name = call.argument<String>("name") ?: "video.mp4"
-                    result.success(saveToMediaStore(path, name, "video/mp4", Environment.DIRECTORY_MOVIES))
+                    val mime = call.argument<String>("mime") ?: "video/mp4"
+                    result.success(saveToMediaStore(path, name, mime, Environment.DIRECTORY_MOVIES))
                 }
                 else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, STEALTH_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "setStealthLauncher") {
+                val enable = call.argument<Boolean>("enabled") ?: false
+                try {
+                    val pkg = packageName
+                    val pm = packageManager
+                    val mainAlias = android.content.ComponentName(pkg, "$pkg.MainActivityAlias")
+                    val stealthAlias = android.content.ComponentName(pkg, "$pkg.StealthNotesAlias")
+
+                    if (enable) {
+                        pm.setComponentEnabledSetting(
+                            stealthAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP
+                        )
+                        pm.setComponentEnabledSetting(
+                            mainAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP
+                        )
+                    } else {
+                        pm.setComponentEnabledSetting(
+                            mainAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP
+                        )
+                        pm.setComponentEnabledSetting(
+                            stealthAlias,
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                            android.content.pm.PackageManager.DONT_KILL_APP
+                        )
+                    }
+                    result.success(true)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    result.success(false)
+                }
+            } else {
+                result.notImplemented()
             }
         }
     }

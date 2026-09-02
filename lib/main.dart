@@ -8,6 +8,8 @@ import 'services/api_service.dart';
 import 'services/dns_proxy.dart';
 import 'services/streamtape_service.dart';
 import 'services/deep_link_service.dart';
+import 'services/stealth_service.dart';
+import 'screens/stealth_notes_screen.dart';
 import 'themes/theme_manager.dart';
 import 'screens/auth/login_register_screen.dart';
 import 'screens/splash_screen.dart';
@@ -61,16 +63,20 @@ void main() async {
   // Initialize Deep Link Service for redapp:// custom scheme
   DeepLinkService.init(navigatorKey);
 
+  // Check if Stealth Note Camouflage is active
+  final isStealth = await StealthService.isStealthModeEnabled();
+
   runApp(
     ChangeNotifierProvider<DetailsThemeManager>.value(
       value: themeManager,
-      child: const RedApp(),
+      child: RedApp(isStealth: isStealth),
     ),
   );
 }
 
 class RedApp extends StatelessWidget {
-  const RedApp({Key? key}) : super(key: key);
+  final bool isStealth;
+  const RedApp({Key? key, this.isStealth = false}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +95,7 @@ class RedApp extends StatelessWidget {
               surface: AppColors.surface,
             ),
           ),
-          home: const SplashScreen(),
+          home: isStealth ? const StealthNotesScreen() : const SplashScreen(),
           navigatorKey: navigatorKey,
         );
       },

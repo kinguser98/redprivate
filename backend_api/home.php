@@ -16,22 +16,23 @@ function safeQuery($pdo, $sql, $params = []) {
 // 0. Automatic Monday Weekly Views Reset
 function check_and_do_weekly_reset($pdo) {
     try {
+        @$pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (`key` VARCHAR(100) NOT NULL PRIMARY KEY, `value` TEXT NOT NULL DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $hasM = $pdo->query("SHOW COLUMNS FROM movies LIKE 'weekly_views'")->fetch();
         if (!$hasM) $pdo->exec("ALTER TABLE movies ADD COLUMN weekly_views INT NOT NULL DEFAULT 0");
 
         $hasS = $pdo->query("SHOW COLUMNS FROM web_series LIKE 'weekly_views'")->fetch();
         if (!$hasS) $pdo->exec("ALTER TABLE web_series ADD COLUMN weekly_views INT NOT NULL DEFAULT 0");
 
-        // Monday of current week (e.g., '2026-08-17')
+        // Monday of current week (e.g., '2026-08-31')
         $currentMonday = date('Y-m-d', strtotime('monday this week'));
-        $stmt = $pdo->prepare("SELECT svalue FROM app_settings WHERE skey = 'last_weekly_reset_monday'");
+        $stmt = $pdo->prepare("SELECT `value` FROM app_settings WHERE `key` = 'last_weekly_reset_monday'");
         $stmt->execute();
         $lastReset = $stmt->fetchColumn();
 
         if (!$lastReset || $lastReset !== $currentMonday) {
             $pdo->exec("UPDATE movies SET weekly_views = 0");
             $pdo->exec("UPDATE web_series SET weekly_views = 0");
-            $pdo->prepare("REPLACE INTO app_settings (skey, svalue) VALUES ('last_weekly_reset_monday', ?)")->execute([$currentMonday]);
+            $pdo->prepare("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset_monday', ?)")->execute([$currentMonday]);
         }
     } catch (Exception $e) {}
 }

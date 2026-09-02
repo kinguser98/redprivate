@@ -9,6 +9,7 @@ import 'downloads_screen.dart';
 import 'edit_profile_screen.dart';
 import 'favorites_screen.dart';
 import 'subscription_details_screen.dart';
+import '../services/stealth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -385,6 +386,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               },
             ),
 
+            const SizedBox(height: 20),
+
+            // --- Stealth Note App Camouflage Mode ---
+            const _StealthModeSettingsCard(),
+
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -534,6 +540,284 @@ class _DeviceInfoCardState extends State<_DeviceInfoCard> {
             ),
             child: const Text('THIS DEVICE', style: TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StealthModeSettingsCard extends StatefulWidget {
+  const _StealthModeSettingsCard({Key? key}) : super(key: key);
+
+  @override
+  State<_StealthModeSettingsCard> createState() => _StealthModeSettingsCardState();
+}
+
+class _StealthModeSettingsCardState extends State<_StealthModeSettingsCard> {
+  bool _enabled = false;
+  String _pin = StealthService.defaultPin;
+  bool _isSwitching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStealthSettings();
+  }
+
+  Future<void> _loadStealthSettings() async {
+    final enabled = await StealthService.isStealthModeEnabled();
+    final pin = await StealthService.getSecretPin();
+    if (mounted) {
+      setState(() {
+        _enabled = enabled;
+        _pin = pin;
+      });
+    }
+  }
+
+  Future<void> _toggleStealth(bool value) async {
+    setState(() => _isSwitching = true);
+    final success = await StealthService.setStealthMode(value);
+    if (!mounted) return;
+    setState(() {
+      _enabled = value;
+      _isSwitching = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          value
+              ? "Stealth Disguise Activated! App icon and name changed to 'Quick Notes'."
+              : "Stealth Disguise Disabled. Normal app icon restored.",
+        ),
+        backgroundColor: value ? Colors.amber.shade800 : Colors.green,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showChangePinDialog() {
+    final ctrl = TextEditingController(text: _pin);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1F28),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.pin_rounded, color: Colors.amber, size: 22),
+            SizedBox(width: 10),
+            Text("Set 3-Digit Secret PIN", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Enter a 3-digit PIN to instantly unlock the Cinema app from the Notes disguise search bar:",
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 3,
+              style: const TextStyle(color: Colors.white, fontSize: 20, letterSpacing: 8, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                counterText: '',
+                filled: true,
+                fillColor: const Color(0xFF14151C),
+                hintText: '777',
+                hintStyle: const TextStyle(color: Colors.white24, letterSpacing: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newPin = ctrl.text.trim();
+              if (newPin.length == 3 && int.tryParse(newPin) != null) {
+                await StealthService.setSecretPin(newPin);
+                if (mounted) {
+                  setState(() => _pin = newPin);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("Secret PIN updated to $newPin"),
+                      backgroundColor: Colors.amber.shade800,
+                    ),
+                  );
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please enter a valid 3-digit number (e.g. 777)")),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade700,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text("Save PIN", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _enabled ? Colors.amber.withOpacity(0.4) : Colors.white.withOpacity(0.08),
+          width: _enabled ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _enabled ? Colors.amber.withOpacity(0.15) : Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _enabled ? Icons.visibility_off_rounded : Icons.lock_outline_rounded,
+                  color: _enabled ? Colors.amber : Colors.white70,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          "Stealth Note Disguise",
+                          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        if (_enabled)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                            ),
+                            child: const Text(
+                              "ACTIVE",
+                              style: TextStyle(color: Colors.amber, fontSize: 9, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _enabled
+                          ? "Disguised as 'Quick Notes' with working notepad"
+                          : "Camouflage app as a working notepad app",
+                      style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isSwitching)
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
+                )
+              else
+                Switch(
+                  value: _enabled,
+                  onChanged: _toggleStealth,
+                  activeColor: Colors.amber,
+                  activeTrackColor: Colors.amber.withOpacity(0.3),
+                ),
+            ],
+          ),
+          if (_enabled) ...[
+            const SizedBox(height: 14),
+            const Divider(color: Colors.white10, height: 1),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.key_rounded, color: Colors.amber, size: 18),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "Secret 3-Digit PIN",
+                          style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          "Current PIN: $_pin",
+                          style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                OutlinedButton(
+                  onPressed: _showChangePinDialog,
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.amber.withOpacity(0.5)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text("Change PIN", style: TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline_rounded, color: Colors.white.withOpacity(0.5), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "To unlock: Type '$_pin' into the Notes search bar or tap the 'Notes' title 3 times.",
+                      style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

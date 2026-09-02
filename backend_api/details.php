@@ -1,14 +1,33 @@
 <?php
 require_once "config.php";
 
+function check_and_do_weekly_reset($pdo) {
+    try {
+        @$pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (`key` VARCHAR(100) NOT NULL PRIMARY KEY, `value` TEXT NOT NULL DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $currentWeekMonday = date('Y-m-d', strtotime('monday this week'));
+        $stmt = $pdo->prepare("SELECT `value` FROM app_settings WHERE `key` = 'last_weekly_reset_monday'");
+        $stmt->execute();
+        $lastResetMonday = $stmt->fetchColumn();
+
+        if (!$lastResetMonday || $lastResetMonday !== $currentWeekMonday) {
+            @$pdo->exec("UPDATE movies SET weekly_views = 0");
+            @$pdo->exec("UPDATE web_series SET weekly_views = 0");
+            @$pdo->prepare("REPLACE INTO app_settings (`key`, `value`) VALUES ('last_weekly_reset_monday', ?)")->execute([$currentWeekMonday]);
+        }
+    } catch (Exception $e) {}
+}
+
+check_and_do_weekly_reset($pdo);
+
 $id = intval($_GET['id'] ?? 0);
-$type = $_GET['type'] ?? 'movie';
+$type = strtolower(trim($_GET['type'] ?? 'movie'));
+$isSeries = ($type === 'series' || $type === '2' || $type === 'web_series' || $type === 'webseries');
 
 if ($id <= 0) {
     json_response(false, [], "Invalid content ID");
 }
 
-if ($type === 'movie') {
+if (!$isSeries) {
     // Real-time live view counter increment
     try {
         $pdo->prepare("UPDATE movies SET views = IFNULL(views, 0) + 1, weekly_views = IFNULL(weekly_views, 0) + 1 WHERE id = ?")->execute([$id]);
@@ -110,7 +129,7 @@ if ($type === 'movie') {
         "ott_id" => $ottId,
         "related" => $related,
     ], "Movie details fetched");
-} else if ($type === 'series') {
+} else {
     // Real-time live view counter increment
     try {
         $pdo->prepare("UPDATE web_series SET views = IFNULL(views, 0) + 1, weekly_views = IFNULL(weekly_views, 0) + 1 WHERE id = ?")->execute([$id]);

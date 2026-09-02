@@ -51,6 +51,10 @@ class MovieModel {
     this.ottId,
   });
 
+  bool get isWebSeries => itemType == 'series' || itemType == '2' || itemType == 'web_series' || itemType == 'webseries';
+  String get genre => genres.isNotEmpty ? genres.join(', ') : '';
+  String get networkName => (ottName != null && ottName!.isNotEmpty) ? ottName! : (genres.isNotEmpty ? genres.first : '');
+
   static String _cleanTag(dynamic raw) {
     if (raw == null) return 'HD';
     String s = raw.toString().trim();
@@ -254,10 +258,10 @@ class EpisodeModel {
         [];
     return EpisodeModel(
       id: int.tryParse(json['id'].toString()) ?? 0,
-      name: json['Episoade_Name'] ?? 'Episode',
-      description: json['episoade_description'] ?? '',
-      image: json['episoade_image'] ?? '',
-      episodeOrder: int.tryParse(json['episoade_order'].toString()) ?? 1,
+      name: json['Episoade_Name'] ?? json['name'] ?? 'Episode',
+      description: json['episoade_description'] ?? json['description'] ?? '',
+      image: json['episoade_image'] ?? json['image'] ?? '',
+      episodeOrder: int.tryParse((json['episoade_order'] ?? json['episode_order'] ?? '1').toString()) ?? 1,
       playLinks: links,
     );
   }

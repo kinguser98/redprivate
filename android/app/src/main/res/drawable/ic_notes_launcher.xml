@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background Circle/Squircle -->
+    <path
+        android:fillColor="#1E2028"
+        android:pathData="M54,4 C26.386,4 4,26.386 4,54 C4,81.614 26.386,104 54,104 C81.614,104 104,81.614 104,54 C104,26.386 81.614,4 54,4 Z" />
+    <!-- Yellow / Amber accent pad -->
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M32,24 L76,24 C79.314,24 82,26.686 82,30 L82,78 C82,81.314 79.314,84 76,84 L32,84 C28.686,84 26,81.314 26,78 L26,30 C26,26.686 28.686,24 32,24 Z" />
+    <!-- Note inner paper -->
+    <path
+        android:fillColor="#FFF8E1"
+        android:pathData="M34,28 L74,28 C76.209,28 78,29.791 78,32 L78,76 C78,78.209 76.209,80 74,80 L34,80 C31.791,80 30,78.209 30,76 L30,32 C30,29.791 31.791,28 34,28 Z" />
+    <!-- Top Clip / Binder -->
+    <path
+        android:fillColor="#FFA000"
+        android:pathData="M44,22 L64,22 C65.657,22 67,23.343 67,25 L67,30 C67,31.657 65.657,33 64,33 L44,33 C42.343,33 41,31.657 41,30 L41,25 C41,23.343 42.343,22 44,22 Z" />
+    <!-- Note Lines -->
+    <path
+        android:fillColor="#FFCA28"
+        android:pathData="M38,42 L70,42 C71.105,42 72,42.895 72,44 C72,45.105 71.105,46 70,46 L38,46 C36.895,46 36,45.105 36,44 C36,42.895 36.895,42 38,42 Z" />
+    <path
+        android:fillColor="#FFCA28"
+        android:pathData="M38,52 L70,52 C71.105,52 72,52.895 72,54 C72,55.105 71.105,56 70,56 L38,56 C36.895,56 36,55.105 36,54 C36,52.895 36.895,52 38,52 Z" />
+    <path
+        android:fillColor="#FFCA28"
+        android:pathData="M38,62 L58,62 C59.105,62 60,62.895 60,64 C60,65.105 59.105,66 58,66 L38,66 C36.895,66 36,65.105 36,64 C36,62.895 36.895,62 38,62 Z" />
+</vector>
