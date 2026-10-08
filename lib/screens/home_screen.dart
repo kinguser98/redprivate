@@ -1342,7 +1342,6 @@ class _HomeScreenState extends State<HomeScreen> {
               final item = _castData[index];
               final String name = item['name'] ?? 'Cast';
               final String logoUrl = item['logo'] ?? '';
-              final int netId = int.tryParse(item['id']?.toString() ?? '0') ?? 0;
               return GestureDetector(
                 onTap: () {
                   Navigator.push(
@@ -1350,7 +1349,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     MaterialPageRoute(
                       builder: (_) => AllMoviesSeriesScreen(
                         initialSearch: name,
-                        initialNetworkId: netId,
                         title: name,
                       ),
                     ),

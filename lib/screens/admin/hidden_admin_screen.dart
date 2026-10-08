@@ -23,6 +23,9 @@ import '../../services/skymovies_scraper.dart';
 import '../../services/uffmaal_scraper.dart';
 import '../../services/maal_network_scraper.dart';
 import '../../services/telegram_collage_helper.dart';
+import '../../services/movies07prime_scraper.dart';
+import '../../services/filmywap_scraper.dart';
+import '../../services/hotullu_mastiwala_scraper.dart';
 import '../dropmms_browser_screen.dart';
 import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -40,6 +43,17 @@ class HiddenAdminScreen extends StatefulWidget {
 class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   int _selectedIndex = 0;
   String _deadFilter = 'all';
+
+  // ── Dead Poster Diagnostic Studio State ──
+  List<Map<String, dynamic>> _deadPostersList = [];
+  bool _scanningPosters = false;
+  double _scanPosterProgress = 0.0;
+  String _scanPosterStatus = '';
+  String _deadPosterTypeFilter = 'all'; // 'all', 'movie', 'series'
+  String _deadPosterOttFilter = 'All';
+  String _deadPosterSearchQuery = '';
+  DateTime? _lastPosterScanDate;
+  bool _deadPostersCacheLoaded = false;
 
   final List<String> _navLabels = [
     'Studio Overview',
@@ -554,9 +568,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   // Upload any image URL to our server, saving it named after the movie/series
-  Future<String?> _uploadImageUrlToServer(String rawUrl, {String? customTitle, bool showNotification = true}) async {
+  Future<String?> _uploadImageUrlToServer(
+    String rawUrl, {
+    String? base64Data,
+    Uint8List? rawBytes,
+    String? customTitle,
+    bool showNotification = true,
+  }) async {
     final url = rawUrl.trim();
-    if (url.isEmpty) return null;
+    if (url.isEmpty && (base64Data == null || base64Data.isEmpty) && rawBytes == null) return null;
     if (url.contains('goprivate.fun/api/uploads')) return url;
 
     final title = (customTitle != null && customTitle.isNotEmpty)
@@ -571,7 +591,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               children: [
                 SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
                 SizedBox(width: 12),
-                Text("Uploading image to server..."),
+                Text("Uploading poster to server..."),
               ],
             ),
             duration: Duration(seconds: 15),
@@ -580,31 +600,95 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         );
       }
 
-      final res = await _adminPhpApi('upload_image', {
-        'image_url': url,
-        'title': title,
-      });
+      Uint8List? imageBytes = rawBytes;
 
-      if (mounted && showNotification) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      // Case A: Base64 data provided (from InAppWebView canvas or blob extraction)
+      if (imageBytes == null && base64Data != null && base64Data.isNotEmpty) {
+        try {
+          final cleanBase64 = base64Data.contains(',') ? base64Data.split(',').last : base64Data;
+          imageBytes = base64Decode(cleanBase64.replaceAll(RegExp(r'\s+'), ''));
+        } catch (e) {
+          debugPrint("Base64 decode error: $e");
+        }
       }
 
-      if (res['status'] == 'success' && res['data']?['url'] != null) {
-        final serverUrl = res['data']['url'].toString();
-        if (showNotification && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Image uploaded to server successfully!"), backgroundColor: Colors.green, duration: Duration(seconds: 2)),
-          );
-        }
-        return serverUrl;
-      } else {
-        if (showNotification && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Upload error: ${res['message'] ?? 'Failed'}"), backgroundColor: Colors.red),
-          );
-        }
-        return null;
+      // Case B: Raw URL is a data:image URI
+      if (imageBytes == null && url.startsWith('data:image')) {
+        try {
+          final cleanBase64 = url.split(',').last;
+          imageBytes = base64Decode(cleanBase64.replaceAll(RegExp(r'\s+'), ''));
+        } catch (_) {}
       }
+
+      // Case C: Download bytes directly on device with browser headers
+      if (imageBytes == null && url.startsWith('http')) {
+        try {
+          final imgRes = await http.get(Uri.parse(url), headers: {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
+            'Referer': url.contains('movies07') ? 'https://movies07prime.com/' : 'https://www.google.com/',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          }).timeout(const Duration(seconds: 15));
+          if (imgRes.statusCode == 200 && imgRes.bodyBytes.isNotEmpty) {
+            imageBytes = imgRes.bodyBytes;
+          }
+        } catch (_) {}
+      }
+
+      // Upload binary bytes directly as multipart POST to admin_api.php
+      if (imageBytes != null && imageBytes.isNotEmpty) {
+        try {
+          final request = http.MultipartRequest("POST", Uri.parse(ApiConfig.adminUrl));
+          request.fields['action'] = 'upload_image';
+          request.fields['title'] = title;
+          request.files.add(http.MultipartFile.fromBytes(
+            'image',
+            imageBytes,
+            filename: 'poster.webp',
+          ));
+          final streamed = await request.send().timeout(const Duration(seconds: 40));
+          final res = await http.Response.fromStream(streamed);
+          final raw = res.body.trim();
+          if (raw.startsWith('{') && raw.endsWith('}')) {
+            final decoded = json.decode(raw);
+            if (decoded['status'] == 'success' && decoded['data']?['url'] != null) {
+              final serverUrl = decoded['data']['url'].toString();
+              if (showNotification && mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Poster uploaded to server successfully!"), backgroundColor: Colors.green, duration: Duration(seconds: 2)),
+                );
+              }
+              return serverUrl;
+            }
+          }
+        } catch (e) {
+          debugPrint("Multipart upload failed: $e");
+        }
+      }
+
+      // Fallback: server-side image_url download
+      if (url.startsWith('http')) {
+        final res = await _adminPhpApi('upload_image', {
+          'image_url': url,
+          'title': title,
+        });
+
+        if (mounted && showNotification) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        }
+
+        if (res['status'] == 'success' && res['data']?['url'] != null) {
+          final serverUrl = res['data']['url'].toString();
+          if (showNotification && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Poster uploaded to server successfully!"), backgroundColor: Colors.green, duration: Duration(seconds: 2)),
+            );
+          }
+          return serverUrl;
+        }
+      }
+
+      return url;
     } catch (e) {
       if (showNotification && mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -612,7 +696,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           SnackBar(content: Text("Upload error: $e"), backgroundColor: Colors.red),
         );
       }
-      return null;
+      return url;
     }
   }
 
@@ -874,7 +958,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       'name': title,
       'description': _addDescCtrl.text.trim(),
       'poster': _addPosterUrlCtrl.text.trim(),
-      'banner': _addThumbUrlCtrl.text.trim(),
+      'banner': _addPosterUrlCtrl.text.trim(),
       'release_date': _addReleaseDateCtrl.text.trim(),
       'runtime': _addRuntimeCtrl.text.trim(),
       'custom_tag': _addCustomTag,
@@ -919,7 +1003,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'name': title,
         'description': _addDescCtrl.text.trim(),
         'poster': _addPosterUrlCtrl.text.trim(),
-        'banner': _addThumbUrlCtrl.text.trim(),
+        'banner': _addPosterUrlCtrl.text.trim(),
         'release_date': _addReleaseDateCtrl.text.trim(),
         'custom_tag': _addCustomTag,
         'genres': _selectedOttGenreIds.join(','),
@@ -955,7 +1039,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'name': title,
         'description': _addDescCtrl.text.trim(),
         'poster': _addPosterUrlCtrl.text.trim(),
-        'banner': _addThumbUrlCtrl.text.trim(),
+        'banner': _addPosterUrlCtrl.text.trim(),
         'release_date': _addReleaseDateCtrl.text.trim(),
         'runtime': _addRuntimeCtrl.text.trim(),
         'youtube_trailer': _addTrailerCtrl.text.trim(),
@@ -6424,6 +6508,851 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   // 9. DEAD LINKS SCANNER VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 🖼️ DEAD POSTER DIAGNOSTIC STUDIO (Health Scanner & 1-Tap Auto-Fixer)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  Future<void> _loadDeadPostersFromCache() async {
+    if (_deadPostersCacheLoaded) return;
+    _deadPostersCacheLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawJson = prefs.getString('admin_dead_posters_cache');
+      final dateStr = prefs.getString('admin_dead_posters_last_scan');
+      if (dateStr != null && dateStr.isNotEmpty) {
+        _lastPosterScanDate = DateTime.tryParse(dateStr);
+      }
+      if (rawJson != null && rawJson.isNotEmpty) {
+        final decoded = jsonDecode(rawJson) as List;
+        setState(() {
+          _deadPostersList = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveDeadPostersCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('admin_dead_posters_cache', jsonEncode(_deadPostersList));
+      if (_lastPosterScanDate != null) {
+        await prefs.setString('admin_dead_posters_last_scan', _lastPosterScanDate!.toIso8601String());
+      }
+    } catch (_) {}
+  }
+
+  String _getOttNameForItem(dynamic item) {
+    if (item == null) return 'General';
+    final genresField = (item is Map ? (item['genres'] ?? '') : '').toString();
+    if (genresField.isEmpty) return 'General';
+    final parts = genresField.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    if (parts.isEmpty) return 'General';
+
+    for (final p in parts) {
+      for (final g in _genres) {
+        if (g is Map) {
+          final gid = (g['id'] ?? '').toString();
+          final gname = (g['name'] ?? '').toString();
+          if (gid == p || gname.toLowerCase() == p.toLowerCase()) {
+            if (gname.isNotEmpty) return gname;
+          }
+        }
+      }
+      for (final og in _ottGenres) {
+        if (og is Map) {
+          final ogid = (og['id'] ?? '').toString();
+          final ogname = (og['name'] ?? '').toString();
+          if (ogid == p || ogname.toLowerCase() == p.toLowerCase()) {
+            if (ogname.isNotEmpty) return ogname;
+          }
+        }
+      }
+    }
+    return parts.first;
+  }
+
+  Future<void> _startPosterScan() async {
+    if (_scanningPosters) return;
+
+    setState(() {
+      _scanningPosters = true;
+      _scanPosterProgress = 0.0;
+      _scanPosterStatus = "Fetching latest catalog...";
+    });
+
+    try {
+      if (_movies.isEmpty) await _loadMovies();
+      if (_series.isEmpty) await _loadSeries();
+      if (_genres.isEmpty) await _loadGenresNetworks();
+
+      final List<Map<String, dynamic>> allItems = [];
+      for (final m in _movies) {
+        if (m is Map) {
+          final item = Map<String, dynamic>.from(m);
+          item['_itemType'] = 'movie';
+          allItems.add(item);
+        }
+      }
+      for (final s in _series) {
+        if (s is Map) {
+          final item = Map<String, dynamic>.from(s);
+          item['_itemType'] = 'series';
+          allItems.add(item);
+        }
+      }
+
+      if (allItems.isEmpty) {
+        setState(() {
+          _scanningPosters = false;
+          _scanPosterStatus = "No items in catalog to scan.";
+        });
+        return;
+      }
+
+      final List<Map<String, dynamic>> detectedDead = [];
+      final total = allItems.length;
+      int processed = 0;
+
+      setState(() {
+        _scanPosterStatus = "Scanning 0/$total posters...";
+      });
+
+      // Scan in concurrent batches of 15 for fast performance
+      final int batchSize = 15;
+      for (int i = 0; i < total; i += batchSize) {
+        final batch = allItems.sublist(i, (i + batchSize > total) ? total : i + batchSize);
+
+        await Future.wait(batch.map((item) async {
+          final poster = (item['poster'] ?? '').toString().trim();
+          final type = (item['_itemType'] ?? 'movie').toString();
+          final title = (item['name'] ?? item['title'] ?? 'Untitled').toString();
+          final ottName = _getOttNameForItem(item);
+
+          if (poster.isEmpty) {
+            detectedDead.add({
+              'id': item['id'],
+              'name': title,
+              'type': type,
+              'poster': poster,
+              'genres': item['genres'] ?? '',
+              'ottName': ottName,
+              'rawItem': item,
+              'deadReason': 'Empty Poster URL',
+              'statusCode': 0,
+            });
+            return;
+          }
+
+          if (!poster.startsWith('http://') && !poster.startsWith('https://')) {
+            detectedDead.add({
+              'id': item['id'],
+              'name': title,
+              'type': type,
+              'poster': poster,
+              'genres': item['genres'] ?? '',
+              'ottName': ottName,
+              'rawItem': item,
+              'deadReason': 'Invalid URL Format',
+              'statusCode': 0,
+            });
+            return;
+          }
+
+          // Test URL connectivity
+          try {
+            final res = await http.head(Uri.parse(poster), headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Referer': poster.contains('movies07') ? 'https://movies07prime.com/' : 'https://www.google.com/',
+            }).timeout(const Duration(seconds: 4));
+
+            if (res.statusCode == 404 || res.statusCode == 410) {
+              detectedDead.add({
+                'id': item['id'],
+                'name': title,
+                'type': type,
+                'poster': poster,
+                'genres': item['genres'] ?? '',
+                'ottName': ottName,
+                'rawItem': item,
+                'deadReason': '404 Link Deleted / Not Found',
+                'statusCode': res.statusCode,
+              });
+            } else if (res.statusCode >= 500) {
+              detectedDead.add({
+                'id': item['id'],
+                'name': title,
+                'type': type,
+                'poster': poster,
+                'genres': item['genres'] ?? '',
+                'ottName': ottName,
+                'rawItem': item,
+                'deadReason': 'Server Error ${res.statusCode}',
+                'statusCode': res.statusCode,
+              });
+            }
+          } catch (e) {
+            // If HEAD failed or timed out, attempt GET range 0-100
+            try {
+              final getRes = await http.get(Uri.parse(poster), headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Range': 'bytes=0-100',
+              }).timeout(const Duration(seconds: 4));
+
+              if (getRes.statusCode == 404 || getRes.statusCode == 410) {
+                detectedDead.add({
+                  'id': item['id'],
+                  'name': title,
+                  'type': type,
+                  'poster': poster,
+                  'genres': item['genres'] ?? '',
+                  'ottName': ottName,
+                  'rawItem': item,
+                  'deadReason': '404 Link Deleted / Not Found',
+                  'statusCode': getRes.statusCode,
+                });
+              } else if (getRes.statusCode >= 500) {
+                detectedDead.add({
+                  'id': item['id'],
+                  'name': title,
+                  'type': type,
+                  'poster': poster,
+                  'genres': item['genres'] ?? '',
+                  'ottName': ottName,
+                  'rawItem': item,
+                  'deadReason': 'Host Offline (${getRes.statusCode})',
+                  'statusCode': getRes.statusCode,
+                });
+              }
+            } catch (_) {
+              detectedDead.add({
+                'id': item['id'],
+                'name': title,
+                'type': type,
+                'poster': poster,
+                'genres': item['genres'] ?? '',
+                'ottName': ottName,
+                'rawItem': item,
+                'deadReason': 'Host Unreachable / Broken Link',
+                'statusCode': 0,
+              });
+            }
+          }
+        }));
+
+        processed += batch.length;
+        if (mounted) {
+          setState(() {
+            _scanPosterProgress = processed / total;
+            _scanPosterStatus = "Scanning $processed/$total posters... (${detectedDead.length} dead detected)";
+          });
+        }
+      }
+
+      setState(() {
+        _deadPostersList = detectedDead;
+        _lastPosterScanDate = DateTime.now();
+        _scanPosterStatus = "Scan finished: Found ${detectedDead.length} dead posters out of $total items.";
+      });
+
+      await _saveDeadPostersCache();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(detectedDead.isEmpty
+                ? "🎉 Great news! All posters in your catalog are healthy!"
+                : "⚠️ Scan complete: Found ${detectedDead.length} items with broken posters."),
+            backgroundColor: detectedDead.isEmpty ? Colors.green : Colors.amber.shade900,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Scan error: $e");
+      if (mounted) {
+        setState(() {
+          _scanPosterStatus = "Scan encountered an issue: $e";
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _scanningPosters = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _updateItemPosterDirect(Map<String, dynamic> deadEntry, String newPosterUrl) async {
+    final type = (deadEntry['type'] ?? 'movie').toString();
+    final id = deadEntry['id'];
+    final rawItem = deadEntry['rawItem'] is Map ? Map<String, dynamic>.from(deadEntry['rawItem']) : <String, dynamic>{};
+    final action = type == 'movie' ? 'edit_movie' : 'edit_series';
+
+    final payload = Map<String, dynamic>.from(rawItem);
+    payload['id'] = id;
+    payload['name'] = deadEntry['name'] ?? rawItem['name'] ?? '';
+    payload['poster'] = newPosterUrl;
+    payload['banner'] = newPosterUrl;
+
+    final res = await _adminPhpApi(action, payload);
+
+    if (res['status'] == 'success') {
+      setState(() {
+        if (type == 'movie') {
+          final idx = _movies.indexWhere((m) => m['id'] == id);
+          if (idx >= 0) {
+            _movies[idx]['poster'] = newPosterUrl;
+            _movies[idx]['banner'] = newPosterUrl;
+          }
+        } else {
+          final idx = _series.indexWhere((s) => s['id'] == id);
+          if (idx >= 0) {
+            _series[idx]['poster'] = newPosterUrl;
+            _series[idx]['banner'] = newPosterUrl;
+          }
+        }
+        _deadPostersList.removeWhere((d) => d['id'] == id && d['type'] == type);
+      });
+
+      await _saveDeadPostersCache();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("✅ Poster updated & saved for \"${deadEntry['name']}\"!"),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to update poster: ${res['message'] ?? 'Unknown error'}"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showDirectPastePosterDialog(Map<String, dynamic> item) {
+    final ctrl = TextEditingController(text: item['poster'] ?? '');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.white12)),
+        title: Row(
+          children: const [
+            Icon(Icons.edit_rounded, color: Colors.cyanAccent, size: 20),
+            SizedBox(width: 8),
+            Text("Paste / Edit Poster URL", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Update poster link for: \"${item['name']}\"", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                labelText: "Poster URL (Image)",
+                labelStyle: const TextStyle(color: Colors.cyanAccent, fontSize: 12),
+                hintText: "https://...",
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                prefixIcon: const Icon(Icons.link_rounded, color: Colors.cyanAccent, size: 18),
+                filled: true,
+                fillColor: const Color(0xFF0F121C),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newUrl = ctrl.text.trim();
+              if (newUrl.isNotEmpty) {
+                Navigator.pop(ctx);
+                await _updateItemPosterDirect(item, newUrl);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black),
+            child: const Text("Save Poster", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeadPostersStudioView() {
+    _loadDeadPostersFromCache();
+
+    final query = _deadPosterSearchQuery.trim().toLowerCase();
+    final ottFilter = _deadPosterOttFilter;
+    final typeFilter = _deadPosterTypeFilter;
+
+    // Filter items
+    final filtered = _deadPostersList.where((item) {
+      if (typeFilter != 'all' && item['type'] != typeFilter) return false;
+      if (query.isNotEmpty && !(item['name'] ?? '').toString().toLowerCase().contains(query)) return false;
+      if (ottFilter != 'All') {
+        final itemOtt = (item['ottName'] ?? _getOttNameForItem(item)).toString().toLowerCase();
+        if (!itemOtt.contains(ottFilter.toLowerCase())) return false;
+      }
+      return true;
+    }).toList();
+
+    // Extract unique OTT list from dead items
+    final Set<String> ottSet = {'All'};
+    for (final item in _deadPostersList) {
+      final name = (item['ottName'] ?? _getOttNameForItem(item)).toString();
+      if (name.isNotEmpty) ottSet.add(name);
+    }
+    final ottList = ottSet.toList();
+
+    final totalDead = _deadPostersList.length;
+    final totalMovies = _movies.length;
+    final totalSeries = _series.length;
+    final totalCatalog = totalMovies + totalSeries;
+    final healthyCount = totalCatalog > totalDead ? totalCatalog - totalDead : 0;
+    final healthPercent = totalCatalog > 0 ? ((healthyCount / totalCatalog) * 100).toStringAsFixed(1) : '100';
+
+    return Column(
+      children: [
+        // ── Top Header Hero Banner ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF24141E), Color(0xFF141722)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.redAccent.withOpacity(0.35)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.broken_image_rounded, color: Colors.redAccent, size: 22),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("Dead Poster Diagnostic Studio",
+                              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                          Text(
+                            _lastPosterScanDate != null
+                                ? "Last Scanned: ${_lastPosterScanDate!.day}/${_lastPosterScanDate!.month}/${_lastPosterScanDate!.year} ${_lastPosterScanDate!.hour.toString().padLeft(2, '0')}:${_lastPosterScanDate!.minute.toString().padLeft(2, '0')}"
+                                : "No full scan performed yet.",
+                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _scanningPosters ? null : _startPosterScan,
+                      icon: _scanningPosters
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.radar_rounded, size: 16),
+                      label: Text(_scanningPosters ? "SCANNING..." : "SCAN POSTERS",
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFE50914),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Stats row (Scrollable so it never overflows)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 14),
+                            const SizedBox(width: 5),
+                            Text("$totalDead Dead Posters",
+                                style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.greenAccent.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.check_circle_outline_rounded, color: Colors.greenAccent, size: 14),
+                            const SizedBox(width: 5),
+                            Text("$healthyCount Healthy",
+                                style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.cyanAccent.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.cyanAccent.withOpacity(0.3)),
+                        ),
+                        child: Text("$healthPercent% Health Rate",
+                            style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Live Scan Progress Bar
+                if (_scanningPosters) ...[
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: _scanPosterProgress > 0 ? _scanPosterProgress : null,
+                      backgroundColor: Colors.white12,
+                      color: Colors.redAccent,
+                      minHeight: 6,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(_scanPosterStatus, style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                ],
+              ],
+            ),
+          ),
+        ),
+
+        // ── Controls: Search Bar & Type Filter ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(
+            children: [
+              // Search Box
+              Expanded(
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161B22),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: TextField(
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: "Search broken poster title...",
+                      hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                      prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 16),
+                      suffixIcon: _deadPosterSearchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, color: Colors.white38, size: 16),
+                              onPressed: () => setState(() => _deadPosterSearchQuery = ''),
+                            )
+                          : null,
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    onChanged: (val) => setState(() => _deadPosterSearchQuery = val),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+
+              // Type Selector (All / Movie / Series)
+              Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161B22),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: DropdownButton<String>(
+                  value: _deadPosterTypeFilter,
+                  dropdownColor: const Color(0xFF161B22),
+                  underline: const SizedBox(),
+                  style: const TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text("All Types")),
+                    DropdownMenuItem(value: 'movie', child: Text("Movies Only")),
+                    DropdownMenuItem(value: 'series', child: Text("Web Series Only")),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) setState(() => _deadPosterTypeFilter = val);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // ── OTT Horizontal Filter Chips ──
+        if (ottList.length > 1) ...[
+          Container(
+            height: 36,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: ottList.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (context, idx) {
+                final ott = ottList[idx];
+                final isSelected = _deadPosterOttFilter == ott;
+                final count = ott == 'All'
+                    ? _deadPostersList.length
+                    : _deadPostersList.where((d) => (d['ottName'] ?? '').toString().toLowerCase().contains(ott.toLowerCase())).length;
+
+                return ChoiceChip(
+                  label: Text("$ott ($count)"),
+                  selected: isSelected,
+                  selectedColor: Colors.amberAccent.withOpacity(0.2),
+                  backgroundColor: const Color(0xFF161B22),
+                  labelStyle: TextStyle(
+                    color: isSelected ? Colors.amberAccent : Colors.white60,
+                    fontSize: 11,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  ),
+                  side: BorderSide(color: isSelected ? Colors.amberAccent : Colors.white12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onSelected: (_) => setState(() => _deadPosterOttFilter = ott),
+                );
+              },
+            ),
+          ),
+        ],
+
+        // ── Results List ──
+        Expanded(
+          child: filtered.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _deadPostersList.isEmpty ? Icons.verified_rounded : Icons.search_off_rounded,
+                          color: _deadPostersList.isEmpty ? Colors.greenAccent : Colors.white24,
+                          size: 50,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          _deadPostersList.isEmpty
+                              ? "No Dead Posters Detected!"
+                              : "No broken posters match your filters.",
+                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _deadPostersList.isEmpty
+                              ? "Tap 'SCAN POSTERS' above to run a fresh diagnostic on all titles."
+                              : "Try clearing search or changing OTT/Type filters.",
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 24),
+                  itemCount: filtered.length,
+                  itemBuilder: (context, idx) {
+                    final item = filtered[idx];
+                    final title = item['name'] ?? 'Untitled';
+                    final poster = (item['poster'] ?? '').toString();
+                    final type = (item['type'] ?? 'movie').toString();
+                    final ottName = item['ottName'] ?? _getOttNameForItem(item);
+                    final reason = item['deadReason'] ?? 'Broken Link';
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141722),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Thumbnail Preview Box
+                          Container(
+                            width: 60,
+                            height: 90,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F121C),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: poster.isNotEmpty && poster.startsWith('http')
+                                ? CachedNetworkImage(
+                                    imageUrl: poster,
+                                    fit: BoxFit.cover,
+                                    errorWidget: (_, __, ___) => const Center(
+                                      child: Icon(Icons.broken_image_rounded, color: Colors.redAccent, size: 24),
+                                    ),
+                                  )
+                                : const Center(
+                                    child: Icon(Icons.image_not_supported_rounded, color: Colors.white24, size: 24),
+                                  ),
+                          ),
+                          const SizedBox(width: 12),
+
+                          // Details & Fix Buttons
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Title
+                                Text(
+                                  title,
+                                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 5),
+
+                                // Badges: Type + OTT + Error Reason
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: type == 'movie' ? Colors.blueAccent.withOpacity(0.2) : Colors.purpleAccent.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: type == 'movie' ? Colors.blueAccent : Colors.purpleAccent, width: 0.6),
+                                      ),
+                                      child: Text(
+                                        type == 'movie' ? "MOVIE" : "SERIES",
+                                        style: TextStyle(
+                                          color: type == 'movie' ? Colors.blueAccent : Colors.purpleAccent,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.amberAccent.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        ottName,
+                                        style: const TextStyle(color: Colors.amberAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.redAccent.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        reason,
+                                        style: const TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+
+                                // Action Buttons Row
+                                Row(
+                                  children: [
+                                    // 1-Tap Search & Fix Button
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () {
+                                          _showImageSearchDialog(
+                                            defaultTitle: title,
+                                            onSelected: (newPosterUrl) async {
+                                              await _updateItemPosterDirect(item, newPosterUrl);
+                                            },
+                                          );
+                                        },
+                                        icon: const Icon(Icons.image_search_rounded, size: 14),
+                                        label: const Text("FIND & FIX POSTER", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.cyanAccent,
+                                          foregroundColor: Colors.black,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+
+                                    // Quick Paste URL / Edit
+                                    IconButton(
+                                      tooltip: "Paste URL / Direct Edit",
+                                      icon: const Icon(Icons.link_rounded, color: Colors.white70, size: 20),
+                                      onPressed: () => _showDirectPastePosterDialog(item),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+
   Widget _buildDeadScannerView() {
     if (_parkedMovies.isEmpty && _parkedSeries.isEmpty && !_parkedLoading) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -7729,7 +8658,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
             _addThumbUrlCtrl.text = imageUrl;
           });
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Poster and Banner uploaded successfully!"), backgroundColor: Colors.green),
+            const SnackBar(content: Text("Poster uploaded to server successfully!"), backgroundColor: Colors.green),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -7749,23 +8678,79 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+  Future<void> _show07PrimeDomainDialog({VoidCallback? onSaved}) async {
+    final currentDomain = await Movies07PrimeScraper.getDomain();
+    final ctrl = TextEditingController(text: currentDomain);
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.white12)),
+        title: Row(
+          children: const [
+            Icon(Icons.movie_filter_rounded, color: Colors.amberAccent, size: 20),
+            SizedBox(width: 8),
+            Text("07Prime Domain / Mirror", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Configure Movies07Prime domain/mirror. When the website domain changes, update it here.",
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                labelText: "Domain URL",
+                labelStyle: const TextStyle(color: Colors.amberAccent, fontSize: 12),
+                hintText: "https://movies07prime.com",
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                prefixIcon: const Icon(Icons.link_rounded, color: Colors.amberAccent, size: 18),
+                filled: true,
+                fillColor: const Color(0xFF0F121C),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final d = ctrl.text.trim();
+              if (d.isNotEmpty) {
+                await Movies07PrimeScraper.saveDomain(d);
+              }
+              Navigator.pop(ctx);
+              if (onSaved != null) onSaved();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amberAccent, foregroundColor: Colors.black),
+            child: const Text("Save Domain", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showImageSearchDialog({Function(String)? onSelected, String defaultTitle = ''}) {
     final initialQuery = defaultTitle.trim().isNotEmpty ? defaultTitle.trim() : _addTitleCtrl.text.trim();
     final searchCtrl = TextEditingController(text: initialQuery);
     List<String> foundImages = [];
-    List<String> hdmove99Images = [];
-    List<String> skymoviesImages = [];
     bool isSearchingServer = false;
-    bool isSearchingHdmove99 = false;
-    bool isSearchingSkymovies = false; // kept for state compat; tab removed
     String? serverError;
-    String? hdmove99Error;
-    String? skymoviesError;
     List<String> googleImages = [];
     bool isSearchingGoogle = false;
     String? googleError;
-    int activeTab = 0; // 0 = Google Images, 1 = Bing + DDG, 2 = HDMove99
-    // (Sky Movies tab removed — not returning results)
+    int activeTab = 0; // 0 = Google Images, 1 = Bing + DDG, 2 = 07Prime
 
     showDialog(
       context: context,
@@ -7774,12 +8759,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           builder: (dialogContext, dialogSetState) {
 
             Future<void> runGoogleSearch() async {
-              // Google tab uses WebView — no async fetch needed,
-              // but we trigger a dialogSetState so the WebView rebuilds with the new query.
               dialogSetState(() {
                 isSearchingGoogle = false;
                 googleError = null;
-                googleImages = []; // unused for WebView tab
+                googleImages = [];
               });
             }
 
@@ -7814,94 +8797,79 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               }
             }
 
-            Future<void> runHdmove99Search() async {
-              if (isSearchingHdmove99) return;
-              dialogSetState(() {
-                isSearchingHdmove99 = true;
-                hdmove99Error = null;
-                hdmove99Images = [];
-              });
-              try {
-                final q = searchCtrl.text.trim();
-                final res = await _adminPhpApi('search_hdmove99_catalog', {'query': q});
-                if (dialogContext.mounted) {
-                  dialogSetState(() {
-                    isSearchingHdmove99 = false;
-                    if (res['status'] == 'success' && res['data']?['items'] != null) {
-                      final items = res['data']['items'] as List;
-                      hdmove99Images = items
-                          .map((e) => (e['poster'] ?? '').toString())
-                          .where((p) => p.isNotEmpty)
-                          .toList();
-                      if (hdmove99Images.isEmpty) hdmove99Error = 'No posters found on HDMove99.';
-                    } else {
-                      hdmove99Error = res['message'] ?? 'No posters found';
-                    }
-                  });
-                }
-              } catch (e) {
-                if (dialogContext.mounted) {
-                  dialogSetState(() {
-                    isSearchingHdmove99 = false;
-                    hdmove99Error = 'HDMove99 search failed: ${e.toString().split('\n').first}';
-                  });
-                }
-              }
-            }
+            Future<void> importAndUpload(String posterUrl, {String? base64Data, String? title}) async {
+              showDialog(
+                context: dialogContext,
+                barrierDismissible: false,
+                builder: (progCtx) => Dialog(
+                  backgroundColor: const Color(0xFF10141F),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(color: Colors.cyanAccent),
+                        SizedBox(height: 16),
+                        Text("Uploading Poster to Server...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        SizedBox(height: 6),
+                        Text("Downloading & hosting directly on your private server", textAlign: TextAlign.center, style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                ),
+              );
 
-            Future<void> runSkymoviesSearch() async {
-              if (isSearchingSkymovies) return;
-              dialogSetState(() {
-                isSearchingSkymovies = true;
-                skymoviesError = null;
-                skymoviesImages = [];
-              });
+              String finalPoster = posterUrl;
+
               try {
-                final q = searchCtrl.text.trim();
-                final res = await _adminPhpApi('search_skymovies_catalog', {'query': q});
-                if (dialogContext.mounted) {
-                  dialogSetState(() {
-                    isSearchingSkymovies = false;
-                    if (res['status'] == 'success' && res['data']?['items'] != null) {
-                      final items = res['data']['items'] as List;
-                      skymoviesImages = items
-                          .map((e) => (e['poster'] ?? '').toString())
-                          .where((p) => p.isNotEmpty)
-                          .toList();
-                      if (skymoviesImages.isEmpty) skymoviesError = 'No posters found on SKY.';
-                    } else {
-                      skymoviesError = res['message'] ?? 'No posters found';
-                    }
-                  });
+                final uploaded = await _uploadImageUrlToServer(
+                  posterUrl,
+                  base64Data: base64Data,
+                  customTitle: title ?? searchCtrl.text.trim(),
+                  showNotification: false,
+                );
+                if (uploaded != null && uploaded.isNotEmpty) {
+                  finalPoster = uploaded;
                 }
-              } catch (e) {
-                if (dialogContext.mounted) {
-                  dialogSetState(() {
-                    isSearchingSkymovies = false;
-                    skymoviesError = 'SKY search failed: ${e.toString().split('\n').first}';
-                  });
-                }
+              } catch (_) {}
+
+              if (dialogContext.mounted) Navigator.pop(dialogContext); // close progress dialog
+              if (dialogContext.mounted) Navigator.pop(ctx); // close search dialog
+
+              if (onSelected != null) {
+                onSelected(finalPoster);
+              } else {
+                setState(() {
+                  _addPosterUrlCtrl.text = finalPoster;
+                  _addThumbUrlCtrl.text = finalPoster;
+                });
               }
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("✅ Poster uploaded and saved to server!"),
+                  backgroundColor: Colors.green,
+                ),
+              );
             }
 
             void runSearch() {
               if (activeTab == 0) runGoogleSearch();
               else if (activeTab == 1) runServerSearch();
-              else runHdmove99Search(); // tab 2 = HDMove99 (SKY removed)
             }
 
             // Auto-trigger search on open if title is filled
-            if (googleImages.isEmpty && foundImages.isEmpty && hdmove99Images.isEmpty &&
-                !isSearchingGoogle && !isSearchingServer && !isSearchingHdmove99 &&
-                googleError == null && serverError == null && hdmove99Error == null &&
+            if (googleImages.isEmpty && foundImages.isEmpty &&
+                !isSearchingGoogle && !isSearchingServer &&
+                googleError == null && serverError == null &&
                 searchCtrl.text.trim().isNotEmpty) {
               WidgetsBinding.instance.addPostFrameCallback((_) => runSearch());
             }
 
-            final currentImages = activeTab == 0 ? googleImages : (activeTab == 1 ? foundImages : hdmove99Images);
-            final isSearching = activeTab == 0 ? isSearchingGoogle : (activeTab == 1 ? isSearchingServer : isSearchingHdmove99);
-            final searchError = activeTab == 0 ? googleError : (activeTab == 1 ? serverError : hdmove99Error);
-
+            final currentImages = activeTab == 0 ? googleImages : foundImages;
+            final isSearching = activeTab == 0 ? isSearchingGoogle : isSearchingServer;
+            final searchError = activeTab == 0 ? googleError : serverError;
 
             return Dialog(
               backgroundColor: const Color(0xFF0D1117),
@@ -7916,7 +8884,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ── Header ──
+                    // Header
                     Row(
                       children: [
                         Container(
@@ -7940,7 +8908,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // ── Search Bar ──
+                    // Search Bar
                     Row(
                       children: [
                         Expanded(
@@ -7981,7 +8949,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // ── Source Tabs (Google Images, Bing+DDG, HDMove99) ──
+                    // Source Tabs (Google Images, Bing+DDG, 07Prime)
                     Container(
                       height: 36,
                       decoration: BoxDecoration(
@@ -8042,25 +9010,29 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               ),
                             ),
                           ),
-                          // HDMove99 tab
+                          // Movies07Prime tab
                           Expanded(
                             child: GestureDetector(
-                              onTap: () {
-                                dialogSetState(() => activeTab = 2);
-                                if (hdmove99Images.isEmpty && !isSearchingHdmove99 && searchCtrl.text.isNotEmpty) runHdmove99Search();
-                              },
+                              onTap: () => dialogSetState(() => activeTab = 2),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: activeTab == 2 ? Colors.greenAccent.withOpacity(0.18) : Colors.transparent,
+                                  color: activeTab == 2 ? Colors.amberAccent.withOpacity(0.18) : Colors.transparent,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 alignment: Alignment.center,
-                                child: Text(
-                                  'HD${hdmove99Images.isNotEmpty ? " (${hdmove99Images.length})" : ""}',
-                                  style: TextStyle(
-                                    color: activeTab == 2 ? Colors.greenAccent : Colors.white54,
-                                    fontSize: 11, fontWeight: FontWeight.w600,
-                                  ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.movie_filter_rounded, size: 13, color: activeTab == 2 ? Colors.amberAccent : Colors.white54),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '07Prime',
+                                      style: TextStyle(
+                                        color: activeTab == 2 ? Colors.amberAccent : Colors.white54,
+                                        fontSize: 11, fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
@@ -8070,10 +9042,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // ── Results ──
+                    // Results
                     Expanded(
                       child: activeTab == 0
-                          // ── Google Images WebView ──
                           ? _GoogleImagesWebView(
                               query: searchCtrl.text.trim(),
                               ottHint: _selectedOttGenreIds.isNotEmpty && _ottGenres.isNotEmpty
@@ -8094,108 +9065,118 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                 Navigator.pop(ctx);
                               },
                             )
+                          : activeTab == 2
+                          ? _Movies07PrimeWebView(
+                              query: searchCtrl.text.trim(),
+                              onChangeDomain: () => _show07PrimeDomainDialog(onSaved: () {
+                                dialogSetState(() {});
+                              }),
+                              onPosterSelected: (posterUrl, {base64Data, title}) {
+                                importAndUpload(posterUrl, base64Data: base64Data, title: title);
+                              },
+                            )
                           : isSearching
                           ? const Center(child: CircularProgressIndicator(color: Colors.cyanAccent))
                           : searchError != null
-                              ? Center(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 32),
-                                      const SizedBox(height: 8),
-                                      Text(searchError!, textAlign: TextAlign.center,
-                                          style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                                      const SizedBox(height: 12),
-                                      TextButton.icon(
-                                        onPressed: runSearch,
-                                        icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.cyanAccent),
-                                        label: const Text('Retry Search', style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
-                                      ),
-                                    ],
+                          ? Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 32),
+                                  const SizedBox(height: 8),
+                                  Text(searchError!, textAlign: TextAlign.center,
+                                      style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                                  const SizedBox(height: 12),
+                                  TextButton.icon(
+                                    onPressed: runSearch,
+                                    icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.cyanAccent),
+                                    label: const Text('Retry Search', style: TextStyle(color: Colors.cyanAccent, fontSize: 12)),
                                   ),
-                                )
-                              : currentImages.isEmpty
-                                  ? const Center(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.image_not_supported_rounded, color: Colors.white24, size: 40),
-                                          SizedBox(height: 8),
-                                          Text('Enter a title and tap Search to find posters.',
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(color: Colors.white38, fontSize: 12)),
-                                        ],
-                                      ),
-                                    )
-                                  : GridView.builder(
-                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 3,
-                                        childAspectRatio: 0.67,
-                                        crossAxisSpacing: 8,
-                                        mainAxisSpacing: 8,
-                                      ),
-                                      itemCount: currentImages.length,
-                                      itemBuilder: (context, idx) {
-                                        final imgUrl = currentImages[idx];
-                                        return GestureDetector(
-                                          onTap: () {
-                                            if (onSelected != null) {
-                                              onSelected(imgUrl);
-                                            } else {
-                                              setState(() {
-                                                _addPosterUrlCtrl.text = imgUrl;
-                                                _addThumbUrlCtrl.text = imgUrl;
-                                              });
-                                            }
-                                            Navigator.pop(ctx);
-                                          },
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              borderRadius: BorderRadius.circular(10),
-                                              border: Border.all(color: Colors.white10),
-                                            ),
-                                            clipBehavior: Clip.antiAlias,
-                                            child: Stack(
-                                              fit: StackFit.expand,
-                                              children: [
-                                                CachedNetworkImage(
-                                                  imageUrl: imgUrl,
-                                                  fit: BoxFit.cover,
-                                                  placeholder: (context, url) => Container(
-                                                    color: Colors.white.withOpacity(0.04),
-                                                    child: const Center(
-                                                      child: CircularProgressIndicator(
-                                                          strokeWidth: 1.5, color: Colors.white24)),
-                                                  ),
-                                                  errorWidget: (context, url, error) => Container(
-                                                    color: Colors.white.withOpacity(0.04),
-                                                    child: const Center(
-                                                      child: Icon(Icons.broken_image_rounded,
-                                                          color: Colors.white24, size: 20)),
-                                                  ),
-                                                ),
-                                                Positioned(
-                                                  bottom: 0, left: 0, right: 0,
-                                                  child: Container(
-                                                    height: 30,
-                                                    decoration: BoxDecoration(
-                                                      gradient: LinearGradient(
-                                                        begin: Alignment.bottomCenter,
-                                                        end: Alignment.topCenter,
-                                                        colors: [Colors.black.withOpacity(0.7), Colors.transparent],
-                                                      ),
-                                                    ),
-                                                    alignment: Alignment.center,
-                                                    child: const Icon(Icons.add_circle_rounded,
-                                                        color: Colors.white70, size: 18),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                ],
+                              ),
+                            )
+                          : currentImages.isEmpty
+                          ? const Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.image_not_supported_rounded, color: Colors.white24, size: 40),
+                                  SizedBox(height: 8),
+                                  Text('Enter a title and tap Search to find posters.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: Colors.white38, fontSize: 12)),
+                                ],
+                              ),
+                            )
+                          : GridView.builder(
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3,
+                                childAspectRatio: 0.67,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                              ),
+                              itemCount: currentImages.length,
+                              itemBuilder: (context, idx) {
+                                final imgUrl = currentImages[idx];
+                                return GestureDetector(
+                                  onTap: () {
+                                    if (onSelected != null) {
+                                      onSelected(imgUrl);
+                                    } else {
+                                      setState(() {
+                                        _addPosterUrlCtrl.text = imgUrl;
+                                        _addThumbUrlCtrl.text = imgUrl;
+                                      });
+                                    }
+                                    Navigator.pop(ctx);
+                                  },
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: Colors.white10),
                                     ),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        CachedNetworkImage(
+                                          imageUrl: imgUrl,
+                                          fit: BoxFit.cover,
+                                          placeholder: (context, url) => Container(
+                                            color: Colors.white.withOpacity(0.04),
+                                            child: const Center(
+                                              child: CircularProgressIndicator(
+                                                  strokeWidth: 1.5, color: Colors.white24)),
+                                          ),
+                                          errorWidget: (context, url, error) => Container(
+                                            color: Colors.white.withOpacity(0.04),
+                                            child: const Center(
+                                              child: Icon(Icons.broken_image_rounded,
+                                                  color: Colors.white24, size: 20)),
+                                          ),
+                                        ),
+                                        Positioned(
+                                          bottom: 0, left: 0, right: 0,
+                                          child: Container(
+                                            height: 30,
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.bottomCenter,
+                                                end: Alignment.topCenter,
+                                                colors: [Colors.black.withOpacity(0.7), Colors.transparent],
+                                              ),
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: const Icon(Icons.add_circle_rounded,
+                                                color: Colors.white70, size: 18),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                     ),
                   ],
                 ),
@@ -8207,7 +9188,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
   }
 
-  /// Direct client-side image search using DuckDuckGo API (no server needed).
+    /// Direct client-side image search using DuckDuckGo API (no server needed).
 
   // ── 18. SkyMoviesHD Auto Importer View ──
   Widget _buildSkymoviesImporterView() {
@@ -9714,7 +10695,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
-    int tab = 0; // 0 = Maal Network, 1 = HDMaal, 2 = UFFMaal, 3 = Uncut, 4 = HDMove99, 5 = SKY
+    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
     bool isSearching = false;
     bool isExtracting = false;
     List<dynamic> searchResults = [];
@@ -9737,7 +10718,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   errorText = null;
                 });
 
-                // Server-side resolver for Luluvdo / LuluStream URLs (auto-detected by URL)
+                // 1. Server-side resolver for Luluvdo / LuluStream URLs
                 if (q.contains('luluvdo') || q.contains('lulustream') || q.contains('lulucdn')) {
                   final serverRes = await _adminPhpApi('resolve_server_stream', {'url': q});
                   if (!dialogCtx.mounted) return;
@@ -9748,10 +10729,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       onLinkSelected(streamUrl);
                       Navigator.pop(ctx);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Luluvdo stream resolved & extracted!"),
-                          backgroundColor: Colors.green,
-                        ),
+                        const SnackBar(content: Text("Luluvdo stream resolved & extracted!"), backgroundColor: Colors.green),
                       );
                       return;
                     }
@@ -9760,43 +10738,80 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   return;
                 }
 
-                // Maal Network / multi-domain client & server extraction
-                if (tab == 0 || MaalNetworkScraper.matchesAny(q)) {
-                  final clientDetails = await MaalNetworkScraper.fetchEpisodeDetails(q);
-                  if (clientDetails != null && (clientDetails.streamUrl ?? '').isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
-                    onLinkSelected(clientDetails.streamUrl!, posterUrl: clientDetails.poster);
+                // 2. Streamtape direct resolver
+                if (q.contains('streamtape') || q.contains('strtape') || q.contains('stape')) {
+                  final stUrl = await StreamtapeService.getDirectStreamUrl(q);
+                  if (!dialogCtx.mounted) return;
+                  dialogSetState(() => isExtracting = false);
+                  if (stUrl != null && stUrl.isNotEmpty) {
+                    onLinkSelected(stUrl);
                     Navigator.pop(ctx);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(clientDetails.poster != null ? "Extracted stream link & poster!" : "Extracted stream link!"),
-                        backgroundColor: Colors.green,
-                      ),
+                      const SnackBar(content: Text("Streamtape direct stream resolved!"), backgroundColor: Colors.green),
                     );
                     return;
                   }
-                  final res = await _adminPhpApi('extract_maal_network_episode', {'page_url': q});
-                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                    final streamUrl = res['data']['stream_url'].toString().trim();
-                    if (streamUrl.isNotEmpty) {
+                }
+
+                // 3. DropMMS topic URL
+                if (q.contains('dropmms') || tab == 8) {
+                  final d = await DropmmsService.fetchTopicDetails(q);
+                  if (d != null) {
+                    String sUrl = '';
+                    if (d.videoLinks.isNotEmpty) {
+                      sUrl = d.videoLinks.first.url;
+                    } else if (d.downloadLinks.isNotEmpty) {
+                      sUrl = d.downloadLinks.first.url;
+                    }
+                    if (sUrl.isNotEmpty) {
                       if (!dialogCtx.mounted) return;
                       dialogSetState(() => isExtracting = false);
-                      final poster = (res['data']['poster'] ?? '').toString();
-                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                      onLinkSelected(sUrl, posterUrl: d.poster.isNotEmpty ? d.poster : null);
                       Navigator.pop(ctx);
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(poster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
-                          backgroundColor: Colors.green,
-                        ),
+                        const SnackBar(content: Text("DropMMS stream link & poster extracted!"), backgroundColor: Colors.green),
                       );
                       return;
                     }
                   }
                 }
 
-                // Direct UFFMaal URL client fallback
+                // 4. Uncut / Masti / Hotullu
+                if (q.contains('hotullu') || q.contains('mastiwala') || tab == 0) {
+                  final d = await HotulluMastiwalaScraper.fetchEpisodeDetails(q);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Uncut stream link & poster extracted!"), backgroundColor: Colors.green),
+                    );
+                    return;
+                  }
+                }
+
+                // 5. HDMaal URL
+                if (q.contains('hdmaal') || tab == 1) {
+                  final clientData = await _scrapeHdmaalDetails(q);
+                  if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    final streamUrl = clientData['stream_url'].toString();
+                    final poster = (clientData['poster'] ?? '').toString();
+                    onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(poster.isNotEmpty ? "Extracted HDMaal stream link & poster!" : "Extracted HDMaal stream link!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    return;
+                  }
+                }
+
+                // 6. UFFMaal URL
                 if (q.contains('uffmaal') || tab == 2) {
                   final clientData = await _scrapeUffmaalDetails(q);
                   if (clientData != null) {
@@ -9818,32 +10833,78 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   }
                 }
 
-                // Direct HDMaal URL client fallback
-                if (q.contains('hdmaal') || tab == 1) {
-                  final clientData = await _scrapeHdmaalDetails(q);
-                  if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                // 7. BMaal URL
+                if (q.contains('bmaal') || tab == 3) {
+                  final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
                     if (!dialogCtx.mounted) return;
                     dialogSetState(() => isExtracting = false);
-                    final streamUrl = clientData['stream_url'].toString();
-                    final poster = (clientData['poster'] ?? '').toString();
-                    onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
                     Navigator.pop(ctx);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(poster.isNotEmpty ? "Extracted HDMaal stream link & poster!" : "Extracted HDMaal stream link!"),
-                        backgroundColor: Colors.green,
-                      ),
+                      const SnackBar(content: Text("BMaal stream link & poster extracted!"), backgroundColor: Colors.green),
                     );
                     return;
                   }
                 }
 
-                String extractAction = 'extract_maal_network_episode';
+                // 8. AagMaal URL
+                if (q.contains('aagmaal') || tab == 4) {
+                  final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("AagMaal stream link & poster extracted!"), backgroundColor: Colors.green),
+                    );
+                    return;
+                  }
+                }
+
+                // 9. Maal Network URL (WOWMaal, NewMaal, HMaal, etc.)
+                final isMaalNet = MaalNetworkScraper.allSites.any((s) => q.contains(s['domain']!));
+                if (isMaalNet || tab == 5) {
+                  final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                    if (!dialogCtx.mounted) return;
+                    dialogSetState(() => isExtracting = false);
+                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Maal Network stream link & poster extracted!"), backgroundColor: Colors.green),
+                    );
+                    return;
+                  }
+                }
+
+                // 10. Skymovies direct URL
+                if (q.contains('skymovies') || tab == 6) {
+                  final res = await _adminPhpApi('extract_skymovies_details', {'page_url': q});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    final streamUrl = res['data']['stream_url'].toString().trim();
+                    final poster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                    if (streamUrl.isNotEmpty) {
+                      if (!dialogCtx.mounted) return;
+                      dialogSetState(() => isExtracting = false);
+                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("SkyMovies stream link & poster extracted!"), backgroundColor: Colors.green),
+                      );
+                      return;
+                    }
+                  }
+                }
+
+                // Generic Server-side Fallback
+                String extractAction = 'extract_uncutmasti_details';
                 if (tab == 1) extractAction = 'extract_hdmaal_details';
                 if (tab == 2) extractAction = 'extract_uffmaal_details';
-                if (tab == 3) extractAction = 'extract_uncutmasti_details';
-                if (tab == 4) extractAction = 'extract_hdmove99_details';
-                if (tab == 5) extractAction = 'extract_skymovies_details';
+                if (tab == 3 || tab == 4 || tab == 5) extractAction = 'extract_maal_network_episode';
+                if (tab == 6) extractAction = 'extract_skymovies_details';
+                if (tab == 7) extractAction = 'extract_hdmove99_details';
 
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
@@ -9866,7 +10927,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     return;
                   }
                 }
-                dialogSetState(() => errorText = res['message'] ?? "No video stream link found");
+                dialogSetState(() => errorText = res['message'] ?? "No video stream link found on this URL");
                 return;
               }
 
@@ -9879,49 +10940,115 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
               List<dynamic> items = [];
 
-              if (tab == 0) {
-                // Maal Network: Multi-site search across all 56 network sites
-                final results = await MaalNetworkScraper.search(q);
-                items = results.map((r) => {
-                  'title': r.title,
-                  'page_url': r.pageUrl,
-                  'poster': r.poster,
-                  'site_name': r.siteName,
-                  'site_domain': r.siteDomain,
-                }).toList();
-              } else if (tab == 1) {
-                // HDMaal search: instant client scraper first
-                items = await _scrapeHdmaalSearch(q);
-                if (items.isEmpty) {
-                  final res = await _adminPhpApi('search_hdmaal_catalog', {'query': q});
+              try {
+                if (tab == 0) {
+                  // Uncut / Masti (Hotullu + Mastiwala)
+                  final r1 = await HotulluMastiwalaScraper.search(q, 'hotullu');
+                  final r2 = await HotulluMastiwalaScraper.search(q, 'mastiwala');
+                  items = [...r1, ...r2].map((r) => {
+                    'title': '[${r.source.toUpperCase()}] ${r.title}',
+                    'page_url': r.pageUrl,
+                    'poster': r.poster,
+                  }).toList();
+                  if (items.isEmpty) {
+                    final sRes = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
+                    if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                      items = sRes['data']['items'];
+                    }
+                  }
+                } else if (tab == 1) {
+                  // HDMaal search
+                  items = await _scrapeHdmaalSearch(q);
+                  if (items.isEmpty) {
+                    final res = await _adminPhpApi('search_hdmaal_catalog', {'query': q});
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      items = res['data']['items'];
+                    }
+                  }
+                } else if (tab == 2) {
+                  // UFFMaal search
+                  final res = await UffmaalScraper.search(q, 'uffmaal', customBase: _uffmaalDomainCtrl.text.trim());
+                  items = res.map((r) => {'title': r.title, 'page_url': r.pageUrl, 'poster': r.poster}).toList();
+                  if (items.isEmpty) {
+                    final sRes = await _adminPhpApi('search_uffmaal_catalog', {'query': q});
+                    if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                      items = sRes['data']['items'];
+                    }
+                  }
+                } else if (tab == 3) {
+                  // BMaal search
+                  final res = await MaalNetworkScraper.search(q, siteDomains: ['bmaal.net']);
+                  items = res.map((r) => {
+                    'title': r.title,
+                    'page_url': r.pageUrl,
+                    'poster': r.poster,
+                    'site_name': 'BMaal',
+                  }).toList();
+                } else if (tab == 4) {
+                  // AagMaal search
+                  final res = await MaalNetworkScraper.search(q, siteDomains: ['aagmaal.hot', 'aagmaal.mba', 'aagmaals.org']);
+                  items = res.map((r) => {
+                    'title': r.title,
+                    'page_url': r.pageUrl,
+                    'poster': r.poster,
+                    'site_name': 'AagMaal',
+                  }).toList();
+                } else if (tab == 5) {
+                  // Maal Network (56+ Sites) search
+                  final res = await MaalNetworkScraper.search(q);
+                  items = res.map((r) => {
+                    'title': '[${r.siteName}] ${r.title}',
+                    'page_url': r.pageUrl,
+                    'poster': r.poster,
+                    'site_name': r.siteName,
+                  }).toList();
+                } else if (tab == 6) {
+                  // SkyMoviesHD search
+                  final res = await SkymoviesScraper.search(q);
+                  items = res.map((r) => {
+                    'title': r.title,
+                    'page_url': r.pageUrl,
+                    'poster': r.poster,
+                  }).toList();
+                  if (items.isEmpty) {
+                    final sRes = await _adminPhpApi('search_skymovies_catalog', {'query': q});
+                    if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                      items = sRes['data']['items'];
+                    }
+                  }
+                } else if (tab == 7) {
+                  // HDMove99 search
+                  final res = await _adminPhpApi('search_hdmove99_catalog', {'query': q});
                   if (res['status'] == 'success' && res['data']?['items'] != null) {
                     items = res['data']['items'];
                   }
+                } else if (tab == 8) {
+                  // DropMMS catalog search
+                  final res = await DropmmsService.fetchCatalog(query: q);
+                  items = res.map((r) => {
+                    'title': r.title,
+                    'page_url': r.topicUrl,
+                    'poster': r.poster,
+                  }).toList();
                 }
-              } else if (tab == 2) {
-                // UFFMaal search: instant client scraper
-                items = await _scrapeUffmaalCatalog(query: q);
-              } else {
-                String searchAction = 'search_uncutmasti_catalog';
-                if (tab == 4) searchAction = 'search_hdmove99_catalog';
-                if (tab == 5) searchAction = 'search_skymovies_catalog';
-                final res = await _adminPhpApi(searchAction, {'query': q});
-                if (res['status'] == 'success' && res['data']?['items'] != null) {
-                  items = res['data']['items'];
-                }
+              } catch (e) {
+                errorText = "Search error: $e";
               }
 
               if (!dialogCtx.mounted) return;
               dialogSetState(() {
                 isSearching = false;
                 searchResults = items;
-                if (items.isEmpty) {
-                  errorText = "No items matched your query.";
+                if (items.isEmpty && errorText == null) {
+                  errorText = "No results found for '$q'. Try another keyword or paste URL.";
                 }
               });
             }
 
-            Future<void> extractFromPage(String pageUrl) async {
+            Future<void> selectItem(dynamic item) async {
+              final pageUrl = (item is Map ? (item['page_url'] ?? item['url'] ?? '') : '').toString();
+              if (pageUrl.isEmpty) return;
+
               dialogSetState(() {
                 isExtracting = true;
                 errorText = null;
@@ -9930,59 +11057,87 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               String? streamUrl;
               String? extractedPoster;
 
-              if (tab == 0 || MaalNetworkScraper.matchesAny(pageUrl)) {
-                // Maal Network: instant client extraction + server fallback
-                final clientData = await MaalNetworkScraper.fetchEpisodeDetails(pageUrl);
-                if (clientData != null && (clientData.streamUrl ?? '').isNotEmpty) {
-                  streamUrl = clientData.streamUrl;
-                  extractedPoster = clientData.poster;
-                } else {
-                  final res = await _adminPhpApi('extract_maal_network_episode', {'page_url': pageUrl});
-                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                    streamUrl = res['data']['stream_url'].toString().trim();
-                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+              try {
+                if (tab == 0) {
+                  // Uncut / Masti
+                  final d = await HotulluMastiwalaScraper.fetchEpisodeDetails(pageUrl);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                    streamUrl = d.streamUrl;
+                    extractedPoster = d.poster;
+                  } else {
+                    final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                    }
                   }
-                }
-              } else if (tab == 1) {
-
-                // HDMaal: instant client extraction
-                final clientData = await _scrapeHdmaalDetails(pageUrl);
-                if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
-                  streamUrl = clientData['stream_url'].toString();
-                  extractedPoster = (clientData['poster'] ?? '').toString();
-                } else {
-                  final res = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
-                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                    streamUrl = res['data']['stream_url'].toString().trim();
-                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
-                  }
-                }
-              } else if (tab == 2) {
-                // UFFMaal: instant client extraction
-                final clientData = await _scrapeUffmaalDetails(pageUrl);
-                if (clientData != null) {
-                  if ((clientData['stream_url'] ?? '').toString().isNotEmpty) {
-                    streamUrl = clientData['stream_url'].toString();
+                } else if (tab == 1) {
+                  // HDMaal
+                  final clientData = await _scrapeHdmaalDetails(pageUrl);
+                  if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    streamUrl = clientData['stream_url'].toString().trim();
                     extractedPoster = (clientData['poster'] ?? '').toString();
-                  } else if ((clientData['episodes'] as List<dynamic>? ?? []).isNotEmpty) {
-                    // It's a series page: extract the first episode stream
-                    final firstEp = (clientData['episodes'] as List<dynamic>).first;
-                    final epDetails = await _scrapeUffmaalDetails(firstEp['episode_url'] ?? '');
-                    if (epDetails != null && (epDetails['stream_url'] ?? '').toString().isNotEmpty) {
-                      streamUrl = epDetails['stream_url'].toString();
-                      extractedPoster = (epDetails['poster'] ?? firstEp['poster'] ?? clientData['poster'] ?? '').toString();
+                  } else {
+                    final res = await _adminPhpApi('extract_hdmaal_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                    }
+                  }
+                } else if (tab == 2) {
+                  // UFFMaal
+                  final clientData = await _scrapeUffmaalDetails(pageUrl);
+                  if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    streamUrl = clientData['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+                    extractedPoster = (clientData['poster'] ?? '').toString();
+                  } else {
+                    final res = await _adminPhpApi('extract_uffmaal_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+                      extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                    }
+                  }
+                } else if (tab == 3 || tab == 4 || tab == 5) {
+                  // BMaal, AagMaal, or Maal Network
+                  final d = await MaalNetworkScraper.fetchEpisodeDetails(pageUrl);
+                  if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                    streamUrl = d.streamUrl;
+                    extractedPoster = d.poster;
+                  } else {
+                    final res = await _adminPhpApi('extract_maal_network_episode', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      extractedPoster = (res['data']['poster'] ?? '').toString();
+                    }
+                  }
+                } else if (tab == 6) {
+                  // SkyMoviesHD
+                  final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    streamUrl = res['data']['stream_url'].toString().trim();
+                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                  }
+                } else if (tab == 7) {
+                  // HDMove99
+                  final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
+                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                    streamUrl = res['data']['stream_url'].toString().trim();
+                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                  }
+                } else if (tab == 8) {
+                  // DropMMS
+                  final d = await DropmmsService.fetchTopicDetails(pageUrl);
+                  if (d != null) {
+                    extractedPoster = d.poster;
+                    if (d.videoLinks.isNotEmpty) {
+                      streamUrl = d.videoLinks.first.url;
+                    } else if (d.downloadLinks.isNotEmpty) {
+                      streamUrl = d.downloadLinks.first.url;
                     }
                   }
                 }
-              } else {
-                String extractAction = 'extract_uncutmasti_details';
-                if (tab == 4) extractAction = 'extract_hdmove99_details';
-                if (tab == 5) extractAction = 'extract_skymovies_details';
-                final res = await _adminPhpApi(extractAction, {'page_url': pageUrl});
-                if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                  streamUrl = res['data']['stream_url'].toString().trim();
-                  extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
-                }
+              } catch (e) {
+                errorText = "Extraction error: $e";
               }
 
               if (!dialogCtx.mounted) return;
@@ -10001,7 +11156,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   ),
                 );
               } else {
-                dialogSetState(() => errorText = "No video link found on selected page.");
+                dialogSetState(() => errorText = "No video link found on selected item.");
               }
             }
 
@@ -10022,18 +11177,20 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   runSearch();
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  margin: const EdgeInsets.only(right: 4),
                   decoration: BoxDecoration(
-                    color: isSelected ? color.withOpacity(0.2) : Colors.transparent,
+                    color: isSelected ? color.withOpacity(0.25) : Colors.transparent,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: isSelected ? color : Colors.white10),
+                    border: isSelected ? Border.all(color: color.withOpacity(0.6), width: 1) : null,
                   ),
+                  alignment: Alignment.center,
                   child: Text(
                     label,
                     style: TextStyle(
                       color: isSelected ? color : Colors.white54,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 10.5,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ),
@@ -10052,26 +11209,27 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 ],
               ),
               content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.9,
+                width: MediaQuery.of(context).size.width * 0.95,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Source Tabs (Maal Network, HDMaal, UFFMaal, Uncut, HDMove99, SKY)
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
+                    // Scrollable Source Tabs (Uncut 1st, HDMaal 2nd, UFFMaal, BMaal, AagMaal, Maal Net, SkyMovies, HDMove99, DropMMS)
+                    Container(
+                      height: 36,
+                      decoration: BoxDecoration(color: const Color(0xFF161B22), borderRadius: BorderRadius.circular(10)),
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                         children: [
-                          buildTabButton(0, "🌐 Maal Net (56 Sites)", Colors.greenAccent),
-                          const SizedBox(width: 6),
+                          buildTabButton(0, "🔥 Uncut", Colors.orangeAccent),
                           buildTabButton(1, "HDMaal", Colors.purpleAccent),
-                          const SizedBox(width: 6),
                           buildTabButton(2, "UFFMaal", Colors.amberAccent),
-                          const SizedBox(width: 6),
-                          buildTabButton(3, "Uncut", Colors.orangeAccent),
-                          const SizedBox(width: 6),
-                          buildTabButton(4, "HDMove99", Colors.lightGreenAccent),
-                          const SizedBox(width: 6),
-                          buildTabButton(5, "SKY", Colors.cyanAccent),
+                          buildTabButton(3, "BMaal", Colors.redAccent),
+                          buildTabButton(4, "AagMaal", Colors.deepOrangeAccent),
+                          buildTabButton(5, "🌐 Maal Net (56+)", Colors.tealAccent),
+                          buildTabButton(6, "✨ SkyMovies", Colors.cyanAccent),
+                          buildTabButton(7, "🎥 HDMove99", Colors.lightGreenAccent),
+                          buildTabButton(8, "📦 DropMMS", Colors.indigoAccent),
                         ],
                       ),
                     ),
@@ -10085,7 +11243,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                             controller: queryCtrl,
                             style: const TextStyle(color: Colors.white, fontSize: 12),
                             decoration: InputDecoration(
-                              hintText: "Enter title or paste full episode/movie URL...",
+                              hintText: "Enter title or paste full page / stream URL...",
                               hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
                               prefixIcon: const Icon(Icons.search, color: Colors.white38, size: 16),
                               filled: true,
@@ -10115,120 +11273,59 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     if (isSearching || isExtracting) ...[
                       const Padding(
                         padding: EdgeInsets.all(16.0),
-                        child: CircularProgressIndicator(color: Colors.amberAccent),
+                        child: Center(
+                          child: Column(
+                            children: [
+                              CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                              SizedBox(height: 8),
+                              Text("Searching / Extracting direct stream...", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                            ],
+                          ),
+                        ),
                       ),
                     ] else if (errorText != null) ...[
                       Padding(
                         padding: const EdgeInsets.all(8.0),
-                        child: Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 11), textAlign: TextAlign.center),
+                        child: Text(errorText!, style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
                       ),
-                    ] else if (searchResults.isNotEmpty) ...[
-                      SizedBox(
-                        height: 240,
-                        child: ListView.builder(
+                    ],
+
+                    if (searchResults.isNotEmpty) ...[
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text("Search Results (Tap to Extract Link & Poster):", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(height: 6),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
+                        child: ListView.separated(
+                          shrinkWrap: true,
                           itemCount: searchResults.length,
-                          itemBuilder: (context, idx) {
-                            final item = searchResults[idx];
-                            final fullTitle = item['title'] ?? 'Title';
-                            final siteName = (item['site_name'] ?? item['site_domain'] ?? '').toString();
-                            return Card(
-                              color: const Color(0xFF141722),
-                              margin: const EdgeInsets.only(bottom: 6),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.white10)),
-                              child: Tooltip(
-                                message: fullTitle,
-                                child: ListTile(
-                                  dense: true,
-                                  leading: (item['poster'] ?? '').toString().isNotEmpty
-                                      ? ClipRRect(
-                                          borderRadius: BorderRadius.circular(6),
-                                          child: CachedNetworkImage(
-                                            imageUrl: item['poster'].toString(),
-                                            width: 34,
-                                            height: 34,
-                                            fit: BoxFit.cover,
-                                            errorWidget: (c, u, e) => const Icon(Icons.movie, color: Colors.white24, size: 20),
-                                          ),
-                                        )
-                                      : const Icon(Icons.movie_outlined, color: Colors.amberAccent, size: 20),
-                                  title: Text(fullTitle, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
-                                  subtitle: Row(
-                                    children: [
-                                      if (siteName.isNotEmpty) ...[
-                                        Container(
-                                          margin: const EdgeInsets.only(top: 3, right: 6),
-                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                          decoration: BoxDecoration(
-                                            color: Colors.greenAccent.withOpacity(0.12),
-                                            borderRadius: BorderRadius.circular(4),
-                                            border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 0.6),
-                                          ),
-                                          child: Text(
-                                            "🌐 $siteName",
-                                            style: const TextStyle(color: Colors.greenAccent, fontSize: 9, fontWeight: FontWeight.bold),
-                                          ),
-                                        ),
-                                      ],
-                                      const Expanded(
-                                        child: Text("Tap to extract stream", style: TextStyle(color: Colors.white38, fontSize: 9), overflow: TextOverflow.ellipsis),
-                                      ),
-                                    ],
-                                  ),
-                                  trailing: const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
-                                  onTap: () => extractFromPage(item['page_url'] ?? ''),
-                                  onLongPress: () {
-                                    final posterUrl = (item['poster'] ?? '').toString();
-                                    showDialog(
-                                      context: dialogCtx,
-                                      builder: (c) => AlertDialog(
-                                        backgroundColor: const Color(0xFF161B22),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                        title: Text(
-                                          fullTitle,
-                                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                                          maxLines: 3,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        content: SingleChildScrollView(
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (posterUrl.isNotEmpty) ...[
-                                                ClipRRect(
-                                                  borderRadius: BorderRadius.circular(10),
-                                                  child: CachedNetworkImage(
-                                                    imageUrl: posterUrl,
-                                                    height: 200,
-                                                    fit: BoxFit.cover,
-                                                    errorWidget: (c, u, e) => const SizedBox.shrink(),
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 12),
-                                              ],
-                                              SelectableText(
-                                                item['page_url'] ?? '',
-                                                style: const TextStyle(color: Colors.cyanAccent, fontSize: 11),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        actions: [
-                                          if (posterUrl.isNotEmpty)
-                                            TextButton.icon(
-                                              onPressed: () => _downloadImageToPublicDownloads(context, posterUrl, title: fullTitle),
-                                              icon: const Icon(Icons.download_rounded, color: Colors.greenAccent, size: 16),
-                                              label: const Text("DOWNLOAD POSTER", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                                            ),
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(c),
-                                            child: const Text("CLOSE", style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  },
+                          separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                          itemBuilder: (ctx, i) {
+                            final item = searchResults[i];
+                            final title = (item is Map ? (item['title'] ?? '') : item.toString()).toString();
+                            final poster = (item is Map ? (item['poster'] ?? '') : '').toString();
+                            final pageUrl = (item is Map ? (item['page_url'] ?? item['url'] ?? '') : '').toString();
+
+                            return ListTile(
+                              dense: true,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              leading: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  width: 42,
+                                  height: 56,
+                                  color: const Color(0xFF1E2430),
+                                  child: poster.isNotEmpty
+                                      ? Image.network(poster, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.movie, color: Colors.white24, size: 20))
+                                      : const Icon(Icons.movie, color: Colors.white24, size: 20),
                                 ),
                               ),
+                              title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(pageUrl, style: const TextStyle(color: Colors.white38, fontSize: 10), maxLines: 1, overflow: TextOverflow.ellipsis),
+                              trailing: const Icon(Icons.download_rounded, color: Colors.amberAccent, size: 20),
+                              onTap: () => selectItem(item),
                             );
                           },
                         ),
@@ -10244,7 +11341,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
   }
 
-  // ── Multi-Episode Batch Importer Dialog (UFFMaal / HDMaal / Uncut) ──
+  // ── Multi-Episode Batch Importer Dialog (Uncut 1st, HDMaal 2nd, UFFMaal, BMaal, AagMaal, Maal Net, SkyMovies, HDMove99, DropMMS) ──
   void _showBatchEpisodeImportDialog({
     required int seriesId,
     required String seriesTitle,
@@ -10252,23 +11349,18 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     required List<dynamic> currentEpisodes,
     required Future<void> Function() refresh,
   }) {
-    final searchCtrl = TextEditingController(text: seriesTitle.trim());
-    int tab = 0; // 0 = UFFMaal, 1 = HDMaal, 2 = Uncut, 3 = Maal Network
+    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
+    final searchCtrl = TextEditingController(text: seriesTitle);
     bool isSearching = false;
     bool isImporting = false;
-    String importStatus = '';
     double importProgress = 0.0;
+    String importStatus = '';
+    String? errorText;
     List<Map<String, dynamic>> episodeItems = [];
-    String namingMode = 'episode'; // 'episode' (Episode 1,2..), 'part' (Part 1,2..), 'original'
+    String namingMode = 'episode'; // 'episode', 'part', 'original'
     String selectedQuality = '720p';
     int startOrder = currentEpisodes.length + 1;
-    String? errorText;
-    String resultSiteFilter = 'all';
-    // Maal Network site picker (multi-select from registry)
-    List<String> maalSelectedDomains = MaalNetworkScraper.allSites
-        .where((s) => s['group'] == 'Premium')
-        .map((s) => s['domain']!)
-        .toList();
+    List<String> maalSelectedDomains = ['uffmaal.com', 'bmaal.net', 'aagmaal.hot', 'newmaal.com', 'wowmaal.net'];
 
     showDialog(
       context: context,
@@ -10314,7 +11406,33 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               try {
                 // If direct URL is pasted
                 if (q.startsWith('http://') || q.startsWith('https://')) {
-                  if (q.contains('uffmaal') || tab == 0) {
+                  if (q.contains('hotullu') || q.contains('mastiwala') || tab == 0) {
+                    final d = await HotulluMastiwalaScraper.fetchEpisodeDetails(q);
+                    if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                      episodeItems = [{
+                        'raw_title': d.title ?? 'Episode 1',
+                        'title': d.title ?? 'Episode 1',
+                        'url': q,
+                        'stream_url': d.streamUrl,
+                        'poster': (d.poster ?? '').toString(),
+                        'ep_num': _parseEpisodeNumber(d.title ?? '', q) ?? 1,
+                        'selected': true,
+                      }];
+                    }
+                  } else if (q.contains('hdmaal') || tab == 1) {
+                    final details = await _scrapeHdmaalDetails(q);
+                    if (details != null && (details['stream_url'] ?? '').toString().isNotEmpty) {
+                      episodeItems = [{
+                        'raw_title': details['title'] ?? 'Episode 1',
+                        'title': details['title'] ?? 'Episode 1',
+                        'url': q,
+                        'stream_url': details['stream_url'],
+                        'poster': (details['poster'] ?? '').toString(),
+                        'ep_num': _parseEpisodeNumber(details['title'] ?? '', q) ?? 1,
+                        'selected': true,
+                      }];
+                    }
+                  } else if (q.contains('uffmaal') || tab == 2) {
                     final details = await _scrapeUffmaalDetails(q);
                     if (details != null) {
                       final eps = (details['episodes'] as List<dynamic>? ?? []);
@@ -10344,21 +11462,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         }];
                       }
                     }
-                  } else if (q.contains('hdmaal') || tab == 1) {
-                    final details = await _scrapeHdmaalDetails(q);
-                    if (details != null && (details['stream_url'] ?? '').toString().isNotEmpty) {
-                      episodeItems = [{
-                        'raw_title': details['title'] ?? 'Episode 1',
-                        'title': details['title'] ?? 'Episode 1',
-                        'url': q,
-                        'stream_url': details['stream_url'],
-                        'poster': (details['poster'] ?? '').toString(),
-                        'ep_num': _parseEpisodeNumber(details['title'] ?? '', q) ?? 1,
-                        'selected': true,
-                      }];
-                    }
-                  } else if (tab == 3) {
-                    // Maal Network URL paste
+                  } else if (q.contains('bmaal') || tab == 3 || q.contains('aagmaal') || tab == 4 || tab == 5 || MaalNetworkScraper.allSites.any((s) => q.contains(s['domain']!))) {
                     final details = await MaalNetworkScraper.fetchEpisodeDetails(q);
                     if (details != null && (details.streamUrl ?? '').isNotEmpty) {
                       episodeItems = [{
@@ -10371,11 +11475,117 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'selected': true,
                       }];
                     }
+                  } else if (q.contains('skymovies') || tab == 6) {
+                    final res = await _adminPhpApi('search_skymovies_catalog', {'query': q});
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      final eps = res['data']['items'] as List<dynamic>;
+                      episodeItems = eps.map((e) {
+                        final titleStr = (e['title'] ?? 'Episode').toString();
+                        final urlStr = (e['page_url'] ?? '').toString();
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': (e['poster'] ?? '').toString(),
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
+                    }
+                  } else if (q.contains('dropmms') || tab == 8) {
+                    final d = await DropmmsService.fetchTopicDetails(q);
+                    if (d != null) {
+                      int epIdx = 1;
+                      episodeItems = d.videoLinks.map((vl) => {
+                        'raw_title': vl.name.isNotEmpty ? vl.name : 'Episode $epIdx',
+                        'title': vl.name.isNotEmpty ? vl.name : 'Episode $epIdx',
+                        'url': vl.url,
+                        'stream_url': vl.url,
+                        'poster': d.poster,
+                        'ep_num': epIdx++,
+                        'selected': true,
+                      }).toList();
+                    }
                   }
                 } else {
                   // Search query
                   if (tab == 0) {
-                    // UFFMaal multi-domain search & automatic series episode expansion
+                    // Uncut / Masti
+                    final r1 = await HotulluMastiwalaScraper.search(q, 'hotullu');
+                    final r2 = await HotulluMastiwalaScraper.search(q, 'mastiwala');
+                    final combined = [...r1, ...r2];
+                    if (combined.isNotEmpty) {
+                      episodeItems = combined.map((r) {
+                        final titleStr = r.title;
+                        final urlStr = r.pageUrl;
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': r.poster,
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
+                    } else {
+                      final res = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
+                      if (res['status'] == 'success' && res['data']?['items'] != null) {
+                        final items = res['data']['items'] as List<dynamic>;
+                        episodeItems = items.map((r) {
+                          final titleStr = (r['title'] ?? 'Episode').toString();
+                          final urlStr = (r['page_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (r['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
+                        }).toList();
+                      }
+                    }
+                  } else if (tab == 1) {
+                    // HDMaal
+                    final results = await _scrapeHdmaalSearch(q);
+                    if (results.isNotEmpty) {
+                      episodeItems = results.map((r) {
+                        final titleStr = (r['title'] ?? 'Episode').toString();
+                        final urlStr = (r['page_url'] ?? '').toString();
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': (r['poster'] ?? '').toString(),
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
+                    } else {
+                      final res = await _adminPhpApi('search_hdmaal_catalog', {'query': q});
+                      if (res['status'] == 'success' && res['data']?['items'] != null) {
+                        final items = res['data']['items'] as List<dynamic>;
+                        episodeItems = items.map((r) {
+                          final titleStr = (r['title'] ?? 'Episode').toString();
+                          final urlStr = (r['page_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (r['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
+                        }).toList();
+                      }
+                    }
+                  } else if (tab == 2) {
+                    // UFFMaal
                     final results = await UffmaalScraper.search(q, 'uffmaal', customBase: _uffmaalDomainCtrl.text.trim());
                     if (results.isNotEmpty) {
                       episodeItems = results.map((r) {
@@ -10391,44 +11601,63 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           'selected': true,
                         };
                       }).toList();
+                    } else {
+                      final sRes = await _adminPhpApi('search_uffmaal_catalog', {'query': q});
+                      if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                        final items = sRes['data']['items'] as List<dynamic>;
+                        episodeItems = items.map((r) {
+                          final titleStr = (r['title'] ?? 'Episode').toString();
+                          final urlStr = (r['page_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (r['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
+                        }).toList();
+                      }
                     }
-                  } else if (tab == 1) {
-                    // HDMaal
-                    final results = await _scrapeHdmaalSearch(q);
+                  } else if (tab == 3) {
+                    // BMaal
+                    final results = await MaalNetworkScraper.search(q, siteDomains: ['bmaal.net']);
                     episodeItems = results.map((r) {
-                      final titleStr = (r['title'] ?? 'Episode').toString();
-                      final urlStr = (r['page_url'] ?? '').toString();
+                      final titleStr = r.title;
+                      final urlStr = r.pageUrl;
                       final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
                       return {
                         'raw_title': titleStr,
                         'title': titleStr,
                         'url': urlStr,
-                        'poster': (r['poster'] ?? '').toString(),
+                        'poster': r.poster,
                         'ep_num': parsedNum,
                         'selected': true,
+                        'site_name': 'BMaal',
+                        'site_domain': 'bmaal.net',
                       };
                     }).toList();
-                  } else if (tab == 2) {
-                    // Uncut
-                    final res = await _adminPhpApi('search_uncutmasti_catalog', {'query': q});
-                    if (res['status'] == 'success' && res['data']?['items'] != null) {
-                      final items = res['data']['items'] as List<dynamic>;
-                      episodeItems = items.map((r) {
-                        final titleStr = (r['title'] ?? 'Episode').toString();
-                        final urlStr = (r['page_url'] ?? '').toString();
-                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
-                        return {
-                          'raw_title': titleStr,
-                          'title': titleStr,
-                          'url': urlStr,
-                          'poster': (r['poster'] ?? '').toString(),
-                          'ep_num': parsedNum,
-                          'selected': true,
-                        };
-                      }).toList();
-                    }
-                  } else if (tab == 3) {
-                    // Maal Network multi-domain search
+                  } else if (tab == 4) {
+                    // AagMaal
+                    final results = await MaalNetworkScraper.search(q, siteDomains: ['aagmaal.hot', 'aagmaal.mba', 'aagmaals.org']);
+                    episodeItems = results.map((r) {
+                      final titleStr = r.title;
+                      final urlStr = r.pageUrl;
+                      final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                      return {
+                        'raw_title': titleStr,
+                        'title': titleStr,
+                        'url': urlStr,
+                        'poster': r.poster,
+                        'ep_num': parsedNum,
+                        'selected': true,
+                        'site_name': 'AagMaal',
+                        'site_domain': 'aagmaal.hot',
+                      };
+                    }).toList();
+                  } else if (tab == 5) {
+                    // Maal Network
                     final results = await MaalNetworkScraper.search(
                       q,
                       siteDomains: maalSelectedDomains,
@@ -10448,12 +11677,82 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'site_domain': r.siteDomain,
                       };
                     }).toList();
+                  } else if (tab == 6) {
+                    // SkyMoviesHD
+                    final res = await SkymoviesScraper.search(q);
+                    if (res.isNotEmpty) {
+                      episodeItems = res.map((r) {
+                        final titleStr = r.title;
+                        final urlStr = r.pageUrl;
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': r.poster,
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
+                    } else {
+                      final sRes = await _adminPhpApi('search_skymovies_catalog', {'query': q});
+                      if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                        final items = sRes['data']['items'] as List<dynamic>;
+                        episodeItems = items.map((r) {
+                          final titleStr = (r['title'] ?? 'Episode').toString();
+                          final urlStr = (r['page_url'] ?? '').toString();
+                          final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                          return {
+                            'raw_title': titleStr,
+                            'title': titleStr,
+                            'url': urlStr,
+                            'poster': (r['poster'] ?? '').toString(),
+                            'ep_num': parsedNum,
+                            'selected': true,
+                          };
+                        }).toList();
+                      }
+                    }
+                  } else if (tab == 7) {
+                    // HDMove99
+                    final res = await _adminPhpApi('search_hdmove99_catalog', {'query': q});
+                    if (res['status'] == 'success' && res['data']?['items'] != null) {
+                      final items = res['data']['items'] as List<dynamic>;
+                      episodeItems = items.map((r) {
+                        final titleStr = (r['title'] ?? 'Episode').toString();
+                        final urlStr = (r['page_url'] ?? '').toString();
+                        final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                        return {
+                          'raw_title': titleStr,
+                          'title': titleStr,
+                          'url': urlStr,
+                          'poster': (r['poster'] ?? '').toString(),
+                          'ep_num': parsedNum,
+                          'selected': true,
+                        };
+                      }).toList();
+                    }
+                  } else if (tab == 8) {
+                    // DropMMS
+                    final res = await DropmmsService.fetchCatalog(query: q);
+                    episodeItems = res.map((r) {
+                      final titleStr = r.title;
+                      final urlStr = r.topicUrl;
+                      final parsedNum = _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                      return {
+                        'raw_title': titleStr,
+                        'title': titleStr,
+                        'url': urlStr,
+                        'poster': r.poster,
+                        'ep_num': parsedNum,
+                        'selected': true,
+                      };
+                    }).toList();
                   }
                 }
 
                 // If episode numbers found or missing, auto-sort ascending
                 if (episodeItems.isNotEmpty) {
-                  // If all ep_nums are equal or 1, assign sequential order
                   final allSame = episodeItems.every((e) => e['ep_num'] == episodeItems.first['ep_num']);
                   if (!allSame) {
                     episodeItems.sort((a, b) => ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0));
@@ -10482,7 +11781,6 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 return;
               }
 
-              // Sort selected items by assigned episode number
               selectedList.sort((a, b) => ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0));
 
               dialogSetState(() {
@@ -10518,22 +11816,16 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                 if (streamUrl.isEmpty) {
                   final pageUrl = (item['url'] ?? '').toString();
-                  if (pageUrl.contains('uffmaal') || tab == 0) {
-                    var d = await _scrapeUffmaalDetails(pageUrl);
-                    if (d == null || (d['stream_url'] ?? '').toString().isEmpty) {
-                      // Immediate 1x retry for transient network hiccups
-                      await Future.delayed(const Duration(milliseconds: 500));
-                      d = await _scrapeUffmaalDetails(pageUrl);
-                    }
-                    if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
-                      streamUrl = d['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
-                    }
-                    if (streamUrl.isEmpty) {
-                      final sRes = await _adminPhpApi('extract_uffmaal_details', {'page_url': pageUrl});
-                      if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
-                        streamUrl = sRes['data']['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
-                        if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
+                  if (tab == 0) {
+                    final d = await HotulluMastiwalaScraper.fetchEpisodeDetails(pageUrl);
+                    if (d != null && (d.streamUrl ?? '').isNotEmpty) {
+                      streamUrl = d.streamUrl!;
+                      if (poster.isEmpty) poster = d.poster ?? '';
+                    } else {
+                      final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
+                      if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                        streamUrl = res['data']['stream_url'].toString().trim();
+                        if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
                       }
                     }
                   } else if (pageUrl.contains('hdmaal') || tab == 1) {
@@ -10549,26 +11841,53 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
                       }
                     }
-                  } else if (tab == 2) {
-                    final res = await _adminPhpApi('extract_uncutmasti_details', {'page_url': pageUrl});
-                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                      streamUrl = res['data']['stream_url'].toString().trim();
-                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
+                  } else if (pageUrl.contains('uffmaal') || tab == 2) {
+                    var d = await _scrapeUffmaalDetails(pageUrl);
+                    if (d == null || (d['stream_url'] ?? '').toString().isEmpty) {
+                      await Future.delayed(const Duration(milliseconds: 500));
+                      d = await _scrapeUffmaalDetails(pageUrl);
                     }
-                  } else if (tab == 3) {
-                    // Maal Network: try client first, then server
+                    if (d != null && (d['stream_url'] ?? '').toString().isNotEmpty) {
+                      streamUrl = d['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+                      if (poster.isEmpty) poster = (d['poster'] ?? '').toString().trim();
+                    }
+                    if (streamUrl.isEmpty) {
+                      final sRes = await _adminPhpApi('extract_uffmaal_details', {'page_url': pageUrl});
+                      if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
+                        streamUrl = sRes['data']['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+                        if (poster.isEmpty) poster = (sRes['data']['poster'] ?? sRes['data']['raw_poster'] ?? '').toString().trim();
+                      }
+                    }
+                  } else if (tab == 3 || tab == 4 || tab == 5 || MaalNetworkScraper.allSites.any((s) => pageUrl.contains(s['domain']!))) {
                     final d = await MaalNetworkScraper.fetchEpisodeDetails(pageUrl);
                     if (d != null && (d.streamUrl ?? '').isNotEmpty) {
                       streamUrl = d.streamUrl!.trim();
                       if (poster.isEmpty) poster = (d.poster ?? '').trim();
                     }
-                    // Server fallback
                     if (streamUrl.isEmpty) {
                       final sRes = await _adminPhpApi('extract_maal_network_episode', {'page_url': pageUrl});
                       if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
                         streamUrl = sRes['data']['stream_url'].toString().trim();
                         if (poster.isEmpty) poster = (sRes['data']['poster'] ?? '').toString().trim();
                       }
+                    }
+                  } else if (pageUrl.contains('skymovies') || tab == 6) {
+                    final sRes = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
+                    if (sRes['status'] == 'success' && sRes['data']?['stream_url'] != null) {
+                      streamUrl = sRes['data']['stream_url'].toString().trim();
+                      if (poster.isEmpty) poster = (sRes['data']['poster'] ?? '').toString().trim();
+                    }
+                  } else if (tab == 7) {
+                    final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
+                    }
+                  } else if (tab == 8) {
+                    final d = await DropmmsService.fetchTopicDetails(pageUrl);
+                    if (d != null && d.videoLinks.isNotEmpty) {
+                      streamUrl = d.videoLinks.first.url;
+                      if (poster.isEmpty) poster = d.poster;
                     }
                   }
                 }
@@ -10590,117 +11909,111 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 importProgress = 0.7;
               });
 
-              final chunkSize = 3;
-              for (int c = 0; c < extractedItems.length; c += chunkSize) {
-                final chunk = extractedItems.sublist(c, (c + chunkSize > extractedItems.length) ? extractedItems.length : c + chunkSize);
+              final uploadedItems = <Map<String, dynamic>>[];
+              for (int i = 0; i < extractedItems.length; i += 3) {
+                final chunk = extractedItems.skip(i).take(3).toList();
                 await Future.wait(chunk.map((item) async {
-                  String poster = item['poster'] ?? '';
-                  final epName = item['epName'] ?? '';
-                  if (poster.isNotEmpty && !poster.contains('goprivate.fun/api/uploads')) {
-                    final uploadedPoster = await _uploadImageUrlToServer(
-                      poster,
-                      customTitle: '${seriesTitle}_$epName',
-                      showNotification: false,
-                    );
-                    if (uploadedPoster != null && uploadedPoster.isNotEmpty) {
-                      item['poster'] = uploadedPoster;
-                    }
+                  String finalPosterUrl = (item['poster'] ?? '').toString();
+                  if (finalPosterUrl.isNotEmpty && finalPosterUrl.startsWith('http') && !finalPosterUrl.contains('goprivate.fun/api/uploads')) {
+                    try {
+                      final upRes = await _adminPhpApi('upload_poster_from_url', {'image_url': finalPosterUrl});
+                      if (upRes['status'] == 'success' && upRes['data']?['url'] != null) {
+                        finalPosterUrl = upRes['data']['url'].toString();
+                      }
+                    } catch (_) {}
                   }
+                  uploadedItems.add({
+                    'name': item['epName'],
+                    'stream_url': item['streamUrl'],
+                    'poster': finalPosterUrl,
+                    'order': item['epOrder'],
+                  });
                 }));
                 dialogSetState(() {
-                  importProgress = 0.7 + (0.2 * ((c + chunk.length) / extractedItems.length));
+                  importProgress = 0.7 + ((i + chunk.length) / extractedItems.length) * 0.2;
                 });
               }
 
-              for (final item in extractedItems) {
-                episodesPayload.add({
-                  'name': item['epName'],
-                  'url': item['streamUrl'],
-                  'episode_image': item['poster'],
-                  'stream_type': 'MP4/MKV Direct Link',
-                  'quality': selectedQuality,
-                  'order': item['epOrder'],
-                  'play_links': [
-                    {
-                      'name': 'Server 1',
-                      'type': 'MP4/MKV Direct Link',
-                      'quality': selectedQuality,
-                      'url': item['streamUrl'],
-                    }
-                  ],
-                });
-              }
-
-              if (episodesPayload.isEmpty) {
-                dialogSetState(() {
-                  isImporting = false;
-                  errorText = "Could not extract playable streams for any selected episode. Please check links or try again.";
-                });
-                return;
-              }
-
+              // 3. Batch save all episodes into DB in ONE call
               dialogSetState(() {
-                importStatus = "Saving ${episodesPayload.length} episodes to database...";
+                importStatus = "Saving all episodes to database...";
                 importProgress = 0.95;
               });
 
-              final seasonName = (currentSeason?['Session_Name'] ?? 'Season 1').toString().trim();
-              final seasonId = currentSeason?['id'];
-              final batchRes = await _adminPhpApi('batch_add_episodes', {
-                'series_id': seriesId,
-                'season_id': seasonId,
-                'season_name': seasonName,
-                'episodes': episodesPayload,
-              });
-
-              if (batchRes['status'] == 'success') {
-                successCount = batchRes['data']?['inserted_count'] ?? episodesPayload.length;
-              } else {
-                for (final ep in episodesPayload) {
-                  final sRes = await _adminPhpApi('add_episode_link', {
+              for (final ep in uploadedItems) {
+                try {
+                  final addRes = await _adminPhpApi('add_episode', {
                     'series_id': seriesId,
-                    'season_id': seasonId,
-                    'season_name': seasonName,
+                    'season_id': currentSeason['id'] ?? currentSeason['Session_ID'] ?? 1,
                     'name': ep['name'],
-                    'url': ep['url'],
-                    'stream_type': ep['stream_type'],
-                    'episode_image': ep['episode_image'],
-                    'quality': ep['quality'],
+                    'stream_url': ep['stream_url'],
+                    'poster': ep['poster'],
                     'order': ep['order'],
-                    'play_links': ep['play_links'],
+                    'quality': selectedQuality,
                   });
-                  if (sRes['status'] == 'success') successCount++;
+                  if (addRes['status'] == 'success') {
+                    successCount++;
+                  }
+                } catch (e) {
+                  debugPrint("Error saving episode: $e");
                 }
               }
 
               if (!dialogCtx.mounted) return;
+              dialogSetState(() {
+                isImporting = false;
+                importProgress = 1.0;
+              });
+
               Navigator.pop(ctx);
               await refresh();
 
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Row(
-                    children: [
-                      const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text("Successfully imported $successCount episode(s) into $seasonName!")),
-                    ],
-                  ),
+                  content: Text("Successfully batch imported $successCount episodes into ${currentSeason?['Session_Name'] ?? 'Season'}!"),
                   backgroundColor: Colors.green,
-                  behavior: SnackBarBehavior.floating,
                 ),
               );
             }
 
-            if (searchCtrl.text.trim().isNotEmpty && !isSearching && episodeItems.isEmpty && errorText == null && !isImporting) {
-              WidgetsBinding.instance.addPostFrameCallback((_) => performSearch());
+            Widget buildBatchTabButton(int index, String label, Color color) {
+              final isSelected = tab == index;
+              return GestureDetector(
+                onTap: isImporting ? null : () {
+                  dialogSetState(() {
+                    tab = index;
+                    episodeItems = [];
+                    errorText = null;
+                  });
+                  performSearch();
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  margin: const EdgeInsets.only(right: 4),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withOpacity(0.25) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    border: isSelected ? Border.all(color: color.withOpacity(0.6), width: 1) : null,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: isSelected ? color : Colors.white54,
+                      fontSize: 10.5,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ),
+              );
             }
 
             final selectedCount = episodeItems.where((e) => e['selected'] == true).length;
 
             return Dialog(
-              backgroundColor: const Color(0xFF0F121C),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              backgroundColor: const Color(0xFF0D1117),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.white12)),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
               child: Container(
                 width: MediaQuery.of(context).size.width * 0.95,
                 height: MediaQuery.of(context).size.height * 0.88,
@@ -10740,96 +12053,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Source Tabs
+                    // Source Tabs (Uncut 1st, HDMaal 2nd, UFFMaal, BMaal, AagMaal, Maal Net, SkyMovies, HDMove99, DropMMS)
                     Container(
-                      height: 32,
-                      decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
-                      child: Row(
+                      height: 36,
+                      decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(10)),
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
                         children: [
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: isImporting ? null : () {
-                                dialogSetState(() {
-                                  tab = 0;
-                                  episodeItems = [];
-                                  errorText = null;
-                                  resultSiteFilter = 'all';
-                                });
-                                performSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: tab == 0 ? Colors.amberAccent.withOpacity(0.2) : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text("UFFMaal (Fast CDN)", style: TextStyle(color: tab == 0 ? Colors.amberAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: isImporting ? null : () {
-                                dialogSetState(() {
-                                  tab = 1;
-                                  episodeItems = [];
-                                  errorText = null;
-                                  resultSiteFilter = 'all';
-                                });
-                                performSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: tab == 1 ? Colors.purpleAccent.withOpacity(0.2) : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text("HDMaal", style: TextStyle(color: tab == 1 ? Colors.purpleAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: isImporting ? null : () {
-                                dialogSetState(() {
-                                  tab = 2;
-                                  episodeItems = [];
-                                  errorText = null;
-                                  resultSiteFilter = 'all';
-                                });
-                                performSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: tab == 2 ? Colors.orangeAccent.withOpacity(0.2) : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text("UncutMasti", style: TextStyle(color: tab == 2 ? Colors.orangeAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: isImporting ? null : () {
-                                dialogSetState(() {
-                                  tab = 3;
-                                  episodeItems = [];
-                                  errorText = null;
-                                  resultSiteFilter = 'all';
-                                });
-                                performSearch();
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: tab == 3 ? Colors.greenAccent.withOpacity(0.2) : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text("🌐 Maal Network", style: TextStyle(color: tab == 3 ? Colors.greenAccent : Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ),
+                          buildBatchTabButton(0, "🔥 Uncut", Colors.orangeAccent),
+                          buildBatchTabButton(1, "HDMaal", Colors.purpleAccent),
+                          buildBatchTabButton(2, "UFFMaal (CDN)", Colors.amberAccent),
+                          buildBatchTabButton(3, "BMaal", Colors.redAccent),
+                          buildBatchTabButton(4, "AagMaal", Colors.deepOrangeAccent),
+                          buildBatchTabButton(5, "🌐 Maal Net (56+)", Colors.tealAccent),
+                          buildBatchTabButton(6, "✨ SkyMovies", Colors.cyanAccent),
+                          buildBatchTabButton(7, "🎥 HDMove99", Colors.lightGreenAccent),
+                          buildBatchTabButton(8, "📦 DropMMS", Colors.indigoAccent),
                         ],
                       ),
                     ),
@@ -10875,69 +12115,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // Website Filter Chips if multiple sources present
-                    if (episodeItems.isNotEmpty) ...[
-                      Builder(builder: (c) {
-                        final Map<String, int> siteCounts = {};
-                        for (final ep in episodeItems) {
-                          final site = (ep['site_name'] ?? ep['site_domain'] ?? '').toString().trim();
-                          if (site.isNotEmpty) {
-                            siteCounts[site] = (siteCounts[site] ?? 0) + 1;
-                          }
-                        }
-                        if (siteCounts.length <= 1) return const SizedBox.shrink();
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                const Text("Site:", style: TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
-                                const SizedBox(width: 6),
-                                GestureDetector(
-                                  onTap: isImporting ? null : () => dialogSetState(() => resultSiteFilter = 'all'),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: resultSiteFilter == 'all' ? Colors.amberAccent.withOpacity(0.25) : const Color(0xFF1B2030),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(color: resultSiteFilter == 'all' ? Colors.amberAccent : Colors.white12),
-                                    ),
-                                    child: Text("All (${episodeItems.length})", style: TextStyle(color: resultSiteFilter == 'all' ? Colors.amberAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
-                                  ),
-                                ),
-                                ...siteCounts.entries.map((entry) {
-                                  final isSelected = resultSiteFilter == entry.key;
-                                  return Padding(
-                                    padding: const EdgeInsets.only(left: 6),
-                                    child: GestureDetector(
-                                      onTap: isImporting ? null : () => dialogSetState(() => resultSiteFilter = entry.key),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: isSelected ? Colors.greenAccent.withOpacity(0.25) : const Color(0xFF1B2030),
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(color: isSelected ? Colors.greenAccent : Colors.white12),
-                                        ),
-                                        child: Text("🌐 ${entry.key} (${entry.value})", style: TextStyle(color: isSelected ? Colors.greenAccent : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ],
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
-
                     // Naming Format, Ordering & Quality Controls
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: const Color(0xFF141722),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                        border: Border.all(color: Colors.white12),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -10995,12 +12179,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     onTap: isImporting ? null : sortEpisodesDescending,
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                      decoration: BoxDecoration(color: Colors.purpleAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                      decoration: BoxDecoration(color: Colors.pinkAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
                                       child: const Row(
                                         children: [
-                                          Icon(Icons.arrow_downward_rounded, color: Colors.purpleAccent, size: 12),
+                                          Icon(Icons.arrow_downward_rounded, color: Colors.pinkAccent, size: 12),
                                           SizedBox(width: 2),
-                                          Text("N→1", style: TextStyle(color: Colors.purpleAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                          Text("N→1", style: TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
                                         ],
                                       ),
                                     ),
@@ -11078,230 +12262,200 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // Progress Banner when importing
+                    // Progress or Results List
                     if (isImporting) ...[
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF181F30),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.amberAccent.withOpacity(0.35)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                      Expanded(
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.amberAccent.withOpacity(0.3))),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent)),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    importStatus,
-                                    style: const TextStyle(color: Colors.amberAccent, fontSize: 11.5, fontWeight: FontWeight.bold),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                const CircularProgressIndicator(strokeWidth: 3, color: Colors.amberAccent),
+                                const SizedBox(height: 16),
+                                Text(importStatus, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                                const SizedBox(height: 12),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: LinearProgressIndicator(
+                                    value: importProgress,
+                                    minHeight: 6,
+                                    backgroundColor: Colors.white12,
+                                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.amberAccent),
                                   ),
                                 ),
-                                Text(
-                                  "${(importProgress * 100).toInt()}%",
-                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                ),
+                                const SizedBox(height: 8),
+                                Text("${(importProgress * 100).toInt()}%", style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
                               ],
                             ),
-                            const SizedBox(height: 8),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: LinearProgressIndicator(
-                                value: importProgress > 0 ? importProgress : null,
-                                backgroundColor: Colors.white12,
-                                color: Colors.amberAccent,
-                                minHeight: 5,
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
-                    ],
-
-                    // Episodes List / Searching / Error Status
-                    if (isSearching) ...[
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24.0),
-                          child: CircularProgressIndicator(color: Colors.amberAccent),
+                    ] else if (isSearching) ...[
+                      const Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                              SizedBox(height: 12),
+                              Text("Searching for episodes across sources...", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                            ],
+                          ),
                         ),
                       ),
                     ] else if (errorText != null) ...[
-                      Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Text(errorText!, style: const TextStyle(color: Colors.redAccent, fontSize: 11), textAlign: TextAlign.center),
-                      ),
-                    ] else if (episodeItems.isNotEmpty) ...[
                       Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF141722),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white.withOpacity(0.06)),
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Text(errorText!, style: const TextStyle(color: Colors.orangeAccent, fontSize: 12), textAlign: TextAlign.center),
                           ),
-                          child: Builder(
-                            builder: (ctx) {
-                              final displayedEpisodes = resultSiteFilter == 'all'
-                                  ? episodeItems
-                                  : episodeItems.where((e) => (e['site_name'] ?? e['site_domain'] ?? '') == resultSiteFilter).toList();
-                              return ListView.separated(
-                                shrinkWrap: true,
-                                padding: const EdgeInsets.all(6),
-                                itemCount: displayedEpisodes.length,
-                                separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
-                                itemBuilder: (c, i) {
-                                  final ep = displayedEpisodes[i];
-                                  final isChecked = ep['selected'] == true;
-                                  final poster = (ep['poster'] ?? '').toString();
-                                  final epNum = (ep['ep_num'] as int?) ?? (i + 1);
-                                  final siteName = (ep['site_name'] ?? '').toString().trim();
-                                  final siteDomain = (ep['site_domain'] ?? '').toString().trim();
-                                  String displayName = namingMode == 'part'
-                                      ? "Part $epNum"
-                                      : (namingMode == 'episode' ? "Episode $epNum" : (ep['raw_title'] ?? ep['title'] ?? "Episode $epNum"));
-
-                                  return Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                                    child: Row(
-                                      children: [
-                                        // Checkbox
-                                        Checkbox(
-                                          value: isChecked,
-                                          activeColor: Colors.amberAccent,
-                                          checkColor: Colors.black,
-                                          visualDensity: VisualDensity.compact,
-                                          onChanged: isImporting ? null : (val) {
-                                            dialogSetState(() => ep['selected'] = val == true);
-                                          },
-                                        ),
-
-                                        // Thumbnail with long-press to download
-                                        GestureDetector(
-                                          onLongPress: poster.isNotEmpty ? () => _showImageActionSheet(context, poster, title: displayName) : null,
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(6),
-                                            child: poster.isNotEmpty
-                                                ? CachedNetworkImage(
-                                                    imageUrl: poster,
-                                                    width: 48,
-                                                    height: 34,
-                                                    fit: BoxFit.cover,
-                                                    errorWidget: (cx, u, e) => Container(
-                                                      width: 48,
-                                                      height: 34,
-                                                      color: Colors.white10,
-                                                      child: const Icon(Icons.tv, color: Colors.white24, size: 18),
-                                                    ),
-                                                  )
-                                                : Container(
-                                                    width: 48,
-                                                    height: 34,
-                                                    color: Colors.white10,
-                                                    child: const Icon(Icons.tv, color: Colors.white24, size: 18),
-                                                  ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-
-                                        // Title & raw title & Website Badge
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(displayName, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                                  ),
-                                                  if (siteName.isNotEmpty) ...[
-                                                    const SizedBox(width: 4),
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.greenAccent.withOpacity(0.15),
-                                                        borderRadius: BorderRadius.circular(4),
-                                                        border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 0.5),
-                                                      ),
-                                                      child: Text(
-                                                        siteDomain.isNotEmpty ? "$siteName • $siteDomain" : siteName,
-                                                        style: const TextStyle(color: Colors.greenAccent, fontSize: 8.5, fontWeight: FontWeight.bold),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
-                                              ),
-                                              const SizedBox(height: 2),
-                                              Text(ep['raw_title'] ?? ep['title'] ?? '', style: const TextStyle(color: Colors.white38, fontSize: 9.5), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-
-                                        // Interactive Dropdown to assign Episode Number
-                                        Container(
-                                          height: 28,
-                                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF1F2436),
-                                            borderRadius: BorderRadius.circular(8),
-                                            border: Border.all(color: Colors.amberAccent.withOpacity(0.4), width: 0.8),
-                                          ),
-                                          child: DropdownButtonHideUnderline(
-                                            child: DropdownButton<int>(
-                                              value: epNum,
-                                              dropdownColor: const Color(0xFF141722),
-                                              icon: const Icon(Icons.arrow_drop_down, color: Colors.amberAccent, size: 16),
-                                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                              items: List.generate(50, (index) => index + 1).map((n) {
-                                                return DropdownMenuItem<int>(
-                                                  value: n,
-                                                  child: Text("Ep $n", style: const TextStyle(color: Colors.white, fontSize: 11)),
-                                                );
-                                              }).toList(),
-                                              onChanged: isImporting ? null : (val) {
-                                                if (val != null) {
-                                                  dialogSetState(() {
-                                                    ep['ep_num'] = val;
-                                                  });
-                                                }
-                                              },
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              );
-                            },
+                        ),
+                      ),
+                    ] else if (episodeItems.isEmpty) ...[
+                      const Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.video_library_rounded, color: Colors.white24, size: 48),
+                              SizedBox(height: 8),
+                              Text("Search series name or paste series link above to discover all episodes automatically.", style: TextStyle(color: Colors.white38, fontSize: 11), textAlign: TextAlign.center),
+                            ],
                           ),
                         ),
                       ),
                     ] else ...[
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24.0),
-                          child: Text("Search for a series title or paste a series URL to discover episodes.", style: TextStyle(color: Colors.white38, fontSize: 11), textAlign: TextAlign.center),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: episodeItems.length,
+                          separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                          itemBuilder: (ctx, i) {
+                            final ep = episodeItems[i];
+                            final isSel = ep['selected'] == true;
+                            final poster = (ep['poster'] ?? '').toString();
+                            final epNum = (ep['ep_num'] as int?) ?? (i + 1);
+
+                            String displayName = "Episode $epNum";
+                            if (namingMode == 'part') {
+                              displayName = "Part $epNum";
+                            } else if (namingMode == 'original') {
+                              displayName = (ep['raw_title'] ?? ep['title'] ?? "Episode $epNum").toString();
+                            }
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                              child: Row(
+                                children: [
+                                  // Checkbox
+                                  Checkbox(
+                                    value: isSel,
+                                    activeColor: Colors.amberAccent,
+                                    checkColor: Colors.black,
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    onChanged: isImporting ? null : (val) => dialogSetState(() => ep['selected'] = val ?? false),
+                                  ),
+                                  const SizedBox(width: 4),
+
+                                  // Poster thumbnail
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Container(
+                                      width: 48,
+                                      height: 34,
+                                      color: const Color(0xFF1E2430),
+                                      child: poster.isNotEmpty
+                                          ? CachedNetworkImage(
+                                              imageUrl: poster,
+                                              width: 48,
+                                              height: 34,
+                                              fit: BoxFit.cover,
+                                              errorWidget: (_, __, ___) => const Icon(Icons.tv_rounded, color: Colors.white24, size: 18),
+                                            )
+                                          : const Icon(Icons.tv_rounded, color: Colors.white24, size: 18),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+
+                                  // Title & raw title
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          displayName,
+                                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          (ep['raw_title'] ?? ep['title'] ?? '').toString(),
+                                          style: const TextStyle(color: Colors.white38, fontSize: 9.5),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+
+                                  // Interactive Dropdown to assign Episode Number
+                                  Container(
+                                    height: 28,
+                                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1F2436),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.amberAccent.withOpacity(0.4), width: 0.8),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<int>(
+                                        value: (epNum > 0 && epNum <= 100) ? epNum : 1,
+                                        dropdownColor: const Color(0xFF141722),
+                                        icon: const Icon(Icons.arrow_drop_down, color: Colors.amberAccent, size: 16),
+                                        style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                        items: List.generate(100, (index) => index + 1).map((n) {
+                                          return DropdownMenuItem<int>(
+                                            value: n,
+                                            child: Text("Ep $n", style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                          );
+                                        }).toList(),
+                                        onChanged: isImporting ? null : (val) {
+                                          if (val != null) {
+                                            dialogSetState(() {
+                                              ep['ep_num'] = val;
+                                            });
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ],
 
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
 
                     // Actions
                     Row(
                       children: [
                         Expanded(
-                          child: TextButton(
+                          child: OutlinedButton(
                             onPressed: isImporting ? null : () => Navigator.pop(ctx),
-                            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
-                            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                            child: const Text("Cancel", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.white12),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -11309,9 +12463,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           flex: 2,
                           child: ElevatedButton.icon(
                             onPressed: isImporting || selectedCount == 0 ? null : runBatchImport,
-                            icon: const Icon(Icons.bolt_rounded, size: 16),
+                            icon: const Icon(Icons.file_download_done_rounded, size: 16),
                             label: Text(
-                              selectedCount > 0 ? "⚡ IMPORT ($selectedCount) EPISODES" : "Select Episodes",
+                              "Import $selectedCount Episodes",
                               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                             style: ElevatedButton.styleFrom(
@@ -19497,6 +20651,955 @@ class _GoogleImagesWebViewState extends State<_GoogleImagesWebView> {
                       style: TextStyle(color: Colors.white54, fontSize: 13)),
                 ],
               ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Movies07Prime WebView Widget (Bypasses Cloudflare & Extracts Base64 Poster)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _Movies07PrimeWebView extends StatefulWidget {
+  final String query;
+  final void Function(String posterUrl, {String? base64Data, String? title}) onPosterSelected;
+  final VoidCallback? onChangeDomain;
+
+  const _Movies07PrimeWebView({
+    Key? key,
+    required this.query,
+    required this.onPosterSelected,
+    this.onChangeDomain,
+  }) : super(key: key);
+
+  @override
+  State<_Movies07PrimeWebView> createState() => _Movies07PrimeWebViewState();
+}
+
+class _Movies07PrimeWebViewState extends State<_Movies07PrimeWebView> {
+  InAppWebViewController? _wvc;
+  bool _loading = true;
+  String _domain = 'https://movies07prime.com';
+  late TextEditingController _searchCtrl;
+  bool _autoImportEnabled = true;
+  String _statusText = 'Ready';
+  bool _hasImported = false;
+  List<Map<String, String>> _detectedPosters = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl = TextEditingController(text: widget.query);
+    _loadDomain();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadDomain() async {
+    final d = await Movies07PrimeScraper.getDomain();
+    if (mounted) {
+      setState(() => _domain = d);
+      if (_wvc != null) {
+        _performSearch(_searchCtrl.text.trim());
+      }
+    }
+  }
+
+  String _buildSearchUrl(String query) {
+    final clean = query.trim();
+    final base = _domain.endsWith('/') ? _domain.substring(0, _domain.length - 1) : _domain;
+    if (clean.isEmpty) return base;
+    return '$base/search?s=${Uri.encodeQueryComponent(clean)}';
+  }
+
+  void _performSearch(String query) {
+    if (_wvc == null) return;
+    _hasImported = false;
+    _detectedPosters.clear();
+    final clean = query.trim();
+    final url = _buildSearchUrl(clean);
+    setState(() {
+      _loading = true;
+      _statusText = clean.isNotEmpty ? 'Searching for "$clean"...' : 'Loading 07Prime...';
+    });
+    _wvc!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+  }
+
+  String _getInjectionJs(String targetQuery, bool autoImport) {
+    final cleanQ = targetQuery.replaceAll(r'\', r'\\').replaceAll("'", r"'").replaceAll('"', r'\"');
+    return '''
+    (function() {
+      window.__pinTargetQuery = "$cleanQ";
+      window.__pinAutoImport = ${autoImport ? 'true' : 'false'};
+      window.__pinIsExtracting = false;
+
+      function isValidPosterUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        var s = url.toLowerCase().trim();
+        if (s.startsWith('data:') || s.startsWith('javascript:') || s.length < 5) return false;
+        
+        var badWords = ['logo', 'icon', 'badge', 'play', 'star', 'vip', 'svg', 'site_assets', 'button', 'avatar', 'cat-logo', 'default', 'placeholder', 'transparent', 'pixel', 'banner-ad', 'recaptcha', 'cloudflare'];
+        for (var i = 0; i < badWords.length; i++) {
+          if (s.includes(badWords[i])) return false;
+        }
+        return true;
+      }
+
+      function getCleanUrl(src) {
+        if (!src || typeof src !== 'string') return '';
+        var s = src.trim();
+        if (s.startsWith('//')) {
+          s = 'https:' + s;
+        } else if (s.startsWith('/')) {
+          s = window.location.origin + s;
+        } else if (!s.startsWith('http://') && !s.startsWith('https://')) {
+          try {
+            s = new URL(s, window.location.href).href;
+          } catch(e) {}
+        }
+        return isValidPosterUrl(s) ? s : '';
+      }
+
+      function extractImgUrl(img) {
+        if (!img) return '';
+        var attrs = ['data-src', 'data-original', 'data-lazy-src', 'data-wpfc-original-src', 'data-url', 'data-poster', 'data-thumb', 'srcset', 'data-srcset', 'src'];
+        for (var i = 0; i < attrs.length; i++) {
+          var v = img.getAttribute(attrs[i]);
+          if (v) {
+            if (attrs[i] === 'srcset' || attrs[i] === 'data-srcset') {
+              var parts = v.split(',');
+              for (var p = parts.length - 1; p >= 0; p--) {
+                var candidate = parts[p].trim().split(' ')[0];
+                var c = getCleanUrl(candidate);
+                if (c) return c;
+              }
+            } else {
+              var c2 = getCleanUrl(v);
+              if (c2) return c2;
+            }
+          }
+        }
+        if (img.currentSrc) {
+          var c3 = getCleanUrl(img.currentSrc);
+          if (c3) return c3;
+        }
+        return getCleanUrl(img.src);
+      }
+
+      function isCloudflareActive() {
+        var title = (document.title || '').toLowerCase();
+        if (title.includes('just a moment') || title.includes('cloudflare') || title.includes('attention required') || title.includes('security check')) return true;
+        if (document.getElementById('challenge-stage') || document.getElementById('cf-wrapper') || (document.querySelector && (document.querySelector('.cf-browser-verification') || document.querySelector('iframe[src*="cloudflare"]')))) return true;
+        return false;
+      }
+
+      function findPosterInElement(el) {
+        if (!el) return null;
+        if (el.tagName === 'IMG') {
+          var u = extractImgUrl(el);
+          if (u) return { img: el, poster: u };
+        }
+        try {
+          var imgs = el.querySelectorAll ? el.querySelectorAll('img') : [];
+          for (var i = 0; i < imgs.length; i++) {
+            var u2 = extractImgUrl(imgs[i]);
+            if (u2) return { img: imgs[i], poster: u2 };
+          }
+        } catch(e) {}
+        return null;
+      }
+
+      function extractCardData(target) {
+        if (!target) return null;
+        try {
+          var curr = target;
+          var found = findPosterInElement(curr);
+          var card = curr;
+          for (var depth = 0; depth < 8 && curr && curr !== document.body; depth++) {
+            if (!found) {
+              found = findPosterInElement(curr);
+              if (found) card = curr;
+            }
+            if (curr.classList && (curr.classList.contains('item') || curr.classList.contains('movie-card') || curr.classList.contains('post') || curr.classList.contains('poster') || curr.classList.contains('film-poster') || curr.classList.contains('search-item'))) {
+              card = curr;
+              if (!found) found = findPosterInElement(card);
+              break;
+            }
+            curr = curr.parentElement;
+          }
+
+          if (!found || !found.poster) {
+            if (target.parentElement) {
+              found = findPosterInElement(target.parentElement);
+            }
+          }
+
+          if (!found || !found.poster) return null;
+
+          var title = '';
+          try {
+            var titleEl = card ? (card.querySelector('.entry-title, .title, h1, h2, h3, h4, .film-name, .tt, a[title], span.name') || card) : target;
+            title = titleEl ? (titleEl.getAttribute('title') || titleEl.innerText || '').trim() : '';
+          } catch(e) {}
+
+          return {
+            poster: found.poster,
+            title: title,
+            imgEl: found.img,
+            cardEl: card
+          };
+        } catch (err) {
+          return null;
+        }
+      }
+
+      async function convertImageToBase64(imgEl, fallbackUrl) {
+        try {
+          if (imgEl && imgEl.complete && (imgEl.naturalWidth > 0 || imgEl.width > 0)) {
+            var canvas = document.createElement('canvas');
+            canvas.width = imgEl.naturalWidth || imgEl.width;
+            canvas.height = imgEl.naturalHeight || imgEl.height;
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(imgEl, 0, 0);
+            var dataUrl = canvas.toDataURL('image/webp', 0.92);
+            if (dataUrl && dataUrl.length > 200) {
+              return dataUrl;
+            }
+          }
+        } catch (e) {}
+
+        try {
+          var res = await fetch(fallbackUrl);
+          var blob = await res.blob();
+          return new Promise(function(resolve) {
+            var reader = new FileReader();
+            reader.onloadend = function() { resolve(reader.result); };
+            reader.onerror = function() { resolve(null); };
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {}
+
+        return null;
+      }
+
+      function showToast(msg) {
+        try {
+          var existing = document.getElementById('__pinToast');
+          if (existing) existing.remove();
+          var toast = document.createElement('div');
+          toast.id = '__pinToast';
+          toast.innerText = msg;
+          toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#ffc107;color:#000;font-weight:bold;font-size:13px;padding:8px 16px;border-radius:24px;z-index:9999999;box-shadow:0 4px 16px rgba(0,0,0,0.6);pointer-events:none;';
+          document.body.appendChild(toast);
+          setTimeout(function() { if (toast) toast.remove(); }, 3500);
+        } catch(e) {}
+      }
+
+      async function triggerSelection(target) {
+        try {
+          if (window.__pinIsExtracting) return;
+          window.__pinIsExtracting = true;
+
+          var data = extractCardData(target);
+          if (!data || !data.poster) {
+            var allImgs = document.querySelectorAll('img');
+            for (var i = 0; i < allImgs.length; i++) {
+              var u = extractImgUrl(allImgs[i]);
+              if (u) {
+                data = { poster: u, title: document.title || '', imgEl: allImgs[i], cardEl: allImgs[i].parentElement };
+                break;
+              }
+            }
+          }
+
+          if (data && data.poster) {
+            showToast('Selected: ' + (data.title ? data.title.substring(0, 24) : 'Poster') + ' (Importing...)');
+            if (data.cardEl && data.cardEl.style) {
+              data.cardEl.style.outline = '4px solid #ffc107';
+              data.cardEl.style.boxShadow = '0 0 20px rgba(255, 193, 7, 0.9)';
+              data.cardEl.style.borderRadius = '8px';
+            }
+            if (data.imgEl && data.imgEl.style) {
+              data.imgEl.style.outline = '4px solid #ffc107';
+            }
+
+            var b64 = null;
+            try {
+              b64 = await Promise.race([
+                convertImageToBase64(data.imgEl, data.poster),
+                new Promise(function(r) { setTimeout(function() { r(null); }, 1500); })
+              ]);
+            } catch(e) {}
+
+            var payload = {
+              poster: data.poster,
+              title: data.title,
+              base64: b64 || ''
+            };
+            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+              window.flutter_inappwebview.callHandler('on07PrimePoster', JSON.stringify(payload));
+            }
+          }
+        } catch (err) {
+          console.error('triggerSelection error', err);
+        } finally {
+          setTimeout(function() { window.__pinIsExtracting = false; }, 1000);
+        }
+      }
+
+      function getAllFoundPosters() {
+        var results = [];
+        var seenUrls = {};
+
+        function addResult(posterUrl, title, imgEl, cardEl) {
+          if (!posterUrl) return;
+          var clean = getCleanUrl(posterUrl);
+          if (!clean || seenUrls[clean]) return;
+          seenUrls[clean] = true;
+
+          var finalTitle = (title || '').trim();
+          if (!finalTitle && cardEl) {
+            try {
+              var titleEl = cardEl.querySelector('.entry-title, .title, h1, h2, h3, h4, .film-name, .tt, a[title], span.name');
+              if (titleEl) finalTitle = (titleEl.getAttribute('title') || titleEl.innerText || '').trim();
+              if (!finalTitle && cardEl.innerText) finalTitle = cardEl.innerText.split('\n')[0].trim();
+            } catch(e) {}
+          }
+          if (!finalTitle && imgEl) {
+            finalTitle = (imgEl.getAttribute('alt') || imgEl.getAttribute('title') || '').trim();
+          }
+          if (!finalTitle) {
+            finalTitle = 'Result #' + (results.length + 1);
+          }
+
+          results.push({
+            poster: clean,
+            title: finalTitle
+          });
+        }
+
+        var cards = document.querySelectorAll('article, .item, .movie-card, .post, .poster, .film-poster, .ml-item, .item-video, .data, li, .search-item, [class*="thumb"], [class*="movie"], [class*="card"], [class*="video"]');
+        for (var i = 0; i < cards.length; i++) {
+          var d = extractCardData(cards[i]);
+          if (d && d.poster) {
+            addResult(d.poster, d.title, d.imgEl, cards[i]);
+          }
+        }
+
+        var allImgs = document.querySelectorAll('img');
+        for (var j = 0; j < allImgs.length; j++) {
+          var img = allImgs[j];
+          var u = extractImgUrl(img);
+          if (u) {
+            var cardParent = img.closest ? img.closest('article, .item, .movie-card, .post, .poster, .film-poster, .ml-item, .item-video, .data, li, .search-item, a') : img.parentElement;
+            addResult(u, img.getAttribute('alt') || img.getAttribute('title') || '', img, cardParent);
+          }
+        }
+
+        return results;
+      }
+
+      window.__pinExtractAllPosters = function() {
+        var list = getAllFoundPosters();
+        if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+          window.flutter_inappwebview.callHandler('on07PrimePostersFound', JSON.stringify(list));
+        }
+        return list;
+      };
+
+      if (!window.__pinClickListenerAdded) {
+        window.__pinClickListenerAdded = true;
+        document.addEventListener('click', function(e) {
+          var target = e.target;
+          var data = extractCardData(target);
+          if (!data || !data.poster) {
+            if (target.tagName === 'IMG') {
+              var u = extractImgUrl(target);
+              if (u) data = { poster: u, title: target.alt || target.title || '', imgEl: target, cardEl: target.parentElement };
+            }
+          }
+          if (data && data.poster) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            triggerSelection(target);
+            return false;
+          }
+        }, true);
+      }
+
+      function runAutoSearchEngine() {
+        if (isCloudflareActive()) {
+          window.flutter_inappwebview.callHandler('on07PrimeStatus', 'Cloudflare Verification Active. Tap "Verify you are human" if shown.');
+          return;
+        }
+
+        var currentUrl = window.location.href;
+        var cleanQ = (window.__pinTargetQuery || '').trim();
+
+        if (cleanQ && !window.__pinAutoSearched && !currentUrl.includes('/search') && !currentUrl.includes('?s=') && !currentUrl.includes('/video/') && !currentUrl.includes('/movie/')) {
+          window.__pinAutoSearched = true;
+          window.flutter_inappwebview.callHandler('on07PrimeStatus', 'Searching for "' + cleanQ + '"...');
+          var base = window.location.origin;
+          window.location.href = base + '/search?s=' + encodeURIComponent(cleanQ);
+          return;
+        }
+
+        var list = getAllFoundPosters();
+        if (list.length > 0 && window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+          window.flutter_inappwebview.callHandler('on07PrimePostersFound', JSON.stringify(list));
+        }
+
+        var cards = document.querySelectorAll('article, .item, .movie-card, .post, .poster, .film-poster, .ml-item, .item-video, .data, li, .search-item, [class*="thumb"]');
+        if (cards && cards.length > 0) {
+          var targetCard = cards[0];
+          if (cleanQ) {
+            var qLower = cleanQ.toLowerCase();
+            for (var i = 0; i < cards.length; i++) {
+              var text = (cards[i].innerText || cards[i].getAttribute('title') || '').toLowerCase();
+              if (text.includes(qLower) || qLower.includes(text.replace(/[^a-z0-9]/g, ''))) {
+                targetCard = cards[i];
+                break;
+              }
+            }
+          }
+
+          var data = extractCardData(targetCard);
+          if (data && data.poster) {
+            targetCard.style.outline = '3px solid #ffc107';
+            targetCard.style.boxShadow = '0 0 16px rgba(255, 193, 7, 0.8)';
+            targetCard.style.borderRadius = '8px';
+
+            window.flutter_inappwebview.callHandler('on07PrimeStatus', 'Found ' + list.length + ' result(s)' + (window.__pinAutoImport && list.length === 1 ? ' (Auto-Importing...)' : ''));
+            if (window.__pinAutoImport && list.length === 1 && !window.__pinAutoImported) {
+              window.__pinAutoImported = true;
+              triggerSelection(targetCard);
+            }
+          }
+        }
+      }
+
+      setTimeout(function() { runAutoSearchEngine(); }, 400);
+      setTimeout(function() { runAutoSearchEngine(); }, 1200);
+      setTimeout(function() { runAutoSearchEngine(); }, 2500);
+    })();
+    ''';
+  }
+
+  @override
+  void didUpdateWidget(_Movies07PrimeWebView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.query != widget.query) {
+      _searchCtrl.text = widget.query;
+      _performSearch(widget.query);
+    }
+  }
+
+  void _handleDataSelected(String jsonStr) {
+    try {
+      final map = jsonDecode(jsonStr);
+      final poster = (map['poster'] ?? '').toString();
+      final base64Data = (map['base64'] ?? '').toString();
+      final title = (map['title'] ?? '').toString();
+      if (poster.isNotEmpty || base64Data.isNotEmpty) {
+        if (_hasImported) return;
+        _hasImported = true;
+        widget.onPosterSelected(poster, base64Data: base64Data, title: title);
+      }
+    } catch (_) {}
+  }
+
+  void _handlePostersFound(String jsonStr) {
+    try {
+      final list = jsonDecode(jsonStr);
+      if (list is List) {
+        final parsed = list.map((e) => {
+          'poster': (e['poster'] ?? '').toString(),
+          'title': (e['title'] ?? '').toString(),
+        }).where((e) => e['poster']!.isNotEmpty).toList();
+        if (mounted && parsed.isNotEmpty) {
+          setState(() {
+            _detectedPosters = parsed;
+            _statusText = '${_detectedPosters.length} poster(s) found on page';
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _onUsePosterButtonTapped() async {
+    // 1. First attempt direct extraction from WebView
+    if (_wvc != null) {
+      final res = await _wvc!.evaluateJavascript(
+        source: 'if (window.__pinExtractAllPosters) { JSON.stringify(window.__pinExtractAllPosters()); } else { "[]"; }',
+      );
+      if (res != null && res.toString().isNotEmpty && res.toString() != 'null' && res.toString() != '[]') {
+        _handlePostersFound(res.toString());
+      }
+    }
+
+    // 2. Fallback DOM image probe if still empty
+    if (_detectedPosters.isEmpty && _wvc != null) {
+      final raw = await _wvc!.evaluateJavascript(source: '''
+        (function() {
+          var list = [];
+          var seen = {};
+          var imgs = document.querySelectorAll('img');
+          for (var i = 0; i < imgs.length; i++) {
+            var src = imgs[i].getAttribute('data-src') || imgs[i].getAttribute('data-original') || imgs[i].getAttribute('data-lazy-src') || imgs[i].src || '';
+            if (src && src.startsWith('http') && !src.includes('logo') && !src.includes('icon') && !src.includes('avatar') && !src.includes('svg')) {
+              if (!seen[src]) {
+                seen[src] = true;
+                list.push({
+                  poster: src,
+                  title: imgs[i].getAttribute('alt') || imgs[i].getAttribute('title') || ('Poster #' + (list.length + 1))
+                });
+              }
+            }
+          }
+          return JSON.stringify(list);
+        })();
+      ''');
+      if (raw != null && raw.toString().isNotEmpty && raw.toString() != 'null' && raw.toString() != '[]') {
+        _handlePostersFound(raw.toString());
+      }
+    }
+
+    if (_detectedPosters.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No posters found yet. Please wait for results or tap a movie."), duration: Duration(seconds: 2)),
+      );
+      return;
+    }
+
+    if (_detectedPosters.length == 1) {
+      final item = _detectedPosters.first;
+      _hasImported = true;
+      widget.onPosterSelected(item['poster']!, title: item['title']);
+      return;
+    }
+
+    _showPostersModal();
+  }
+
+  void _showPostersModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF10141F),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (bCtx) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(bCtx).size.height * 0.75,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.collections_rounded, color: Colors.amberAccent, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Select Poster (${_detectedPosters.length} Results)",
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                  onPressed: () => Navigator.pop(bCtx),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              "Tap on the poster you want to import directly:",
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: GridView.builder(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 0.62,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                itemCount: _detectedPosters.length,
+                itemBuilder: (context, index) {
+                  final item = _detectedPosters[index];
+                  final posterUrl = item['poster'] ?? '';
+                  final title = item['title'] ?? 'Poster #${index + 1}';
+
+                  return Material(
+                    color: const Color(0xFF191E2E),
+                    borderRadius: BorderRadius.circular(12),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.pop(bCtx);
+                        _hasImported = true;
+                        widget.onPosterSelected(posterUrl, title: title);
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Image.network(
+                                  posterUrl,
+                                  headers: const {'Referer': 'https://movies07prime.com/'},
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    color: Colors.black26,
+                                    child: const Center(
+                                      child: Icon(Icons.broken_image_rounded, color: Colors.white30, size: 32),
+                                    ),
+                                  ),
+                                  loadingBuilder: (_, child, progress) {
+                                    if (progress == null) return child;
+                                    return Container(
+                                      color: Colors.black12,
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                Positioned(
+                                  top: 6,
+                                  left: 6,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withOpacity(0.75),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      "#${index + 1}",
+                                      style: const TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 6),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amberAccent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: Colors.amberAccent.withOpacity(0.5), width: 0.8),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: const Text(
+                                    "⚡ SELECT THIS",
+                                    style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final posterCount = _detectedPosters.length;
+
+    return Stack(
+      children: [
+        Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              color: const Color(0xFF141722),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1F2433),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.amberAccent.withOpacity(0.3)),
+                          ),
+                          child: TextField(
+                            controller: _searchCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            decoration: InputDecoration(
+                              hintText: 'Search Movies07Prime...',
+                              hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                              prefixIcon: const Icon(Icons.search_rounded, color: Colors.amberAccent, size: 16),
+                              suffixIcon: _searchCtrl.text.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear, color: Colors.white38, size: 16),
+                                      onPressed: () {
+                                        _searchCtrl.clear();
+                                        setState(() {});
+                                      },
+                                    )
+                                  : null,
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            ),
+                            onSubmitted: (val) => _performSearch(val),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      ElevatedButton(
+                        onPressed: () => _performSearch(_searchCtrl.text.trim()),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amberAccent,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        ),
+                        child: const Text('Search', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: 'Configure Mirror / Domain',
+                        icon: const Icon(Icons.settings_suggest_rounded, color: Colors.amberAccent, size: 20),
+                        onPressed: widget.onChangeDomain,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      InkWell(
+                        onTap: () {
+                          setState(() => _autoImportEnabled = !_autoImportEnabled);
+                          if (_wvc != null) {
+                            _wvc!.evaluateJavascript(
+                              source: 'window.__pinAutoImport = ' + (_autoImportEnabled ? 'true' : 'false') + ';',
+                            );
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _autoImportEnabled ? Colors.amberAccent.withOpacity(0.2) : Colors.white10,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: _autoImportEnabled ? Colors.amberAccent : Colors.white24, width: 0.8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(_autoImportEnabled ? Icons.bolt_rounded : Icons.touch_app_rounded,
+                                  color: _autoImportEnabled ? Colors.amberAccent : Colors.white54, size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                _autoImportEnabled ? "Auto-Import: ON" : "Manual Select",
+                                style: TextStyle(
+                                  color: _autoImportEnabled ? Colors.amberAccent : Colors.white70,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _statusText,
+                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      InkWell(
+                        onTap: () {
+                          _hasImported = false;
+                          _detectedPosters.clear();
+                          _wvc?.reload();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.refresh_rounded, color: Colors.white54, size: 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: InAppWebView(
+                initialUrlRequest: URLRequest(url: WebUri(_buildSearchUrl(_searchCtrl.text.trim()))),
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  domStorageEnabled: true,
+                  databaseEnabled: true,
+                  userAgent: 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36',
+                  mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+                  useWideViewPort: true,
+                  loadWithOverviewMode: true,
+                  supportMultipleWindows: false,
+                ),
+                shouldOverrideUrlLoading: (controller, navigationAction) async {
+                  final uri = (navigationAction.request.url?.rawValue ?? '').toLowerCase();
+                  if (uri.contains('/login') || uri.contains('/register') || uri.contains('/membership') || uri.contains('/user/')) {
+                    return NavigationActionPolicy.CANCEL;
+                  }
+                  return NavigationActionPolicy.ALLOW;
+                },
+                onWebViewCreated: (controller) {
+                  _wvc = controller;
+                  controller.addJavaScriptHandler(
+                    handlerName: 'on07PrimePoster',
+                    callback: (args) {
+                      if (args.isNotEmpty && args[0] != null) {
+                        _handleDataSelected(args[0].toString());
+                      }
+                    },
+                  );
+                  controller.addJavaScriptHandler(
+                    handlerName: 'on07PrimePostersFound',
+                    callback: (args) {
+                      if (args.isNotEmpty && args[0] != null) {
+                        _handlePostersFound(args[0].toString());
+                      }
+                    },
+                  );
+                  controller.addJavaScriptHandler(
+                    handlerName: 'on07PrimeStatus',
+                    callback: (args) {
+                      if (args.isNotEmpty && args[0] != null && mounted) {
+                        setState(() => _statusText = args[0].toString());
+                      }
+                    },
+                  );
+                },
+                onLoadStart: (controller, url) {
+                  setState(() {
+                    _loading = true;
+                    _statusText = 'Loading ${url?.host ?? "page"}...';
+                  });
+                },
+                onLoadStop: (controller, url) async {
+                  setState(() {
+                    _loading = false;
+                    _statusText = 'Page loaded. Tap any poster or use button below.';
+                  });
+                  final js = _getInjectionJs(_searchCtrl.text.trim(), _autoImportEnabled);
+                  await controller.evaluateJavascript(source: js);
+                },
+                onProgressChanged: (controller, progress) async {
+                  if (progress >= 85) {
+                    final js = _getInjectionJs(_searchCtrl.text.trim(), _autoImportEnabled);
+                    await controller.evaluateJavascript(source: js);
+                  }
+                },
+              ),
+            ),
+            // Bottom Action Bar to guarantee 100% 1-tap extraction & Multi-poster picker
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              color: const Color(0xFF10141F),
+              child: Row(
+                children: [
+                  Icon(
+                    posterCount > 1 ? Icons.collections_rounded : Icons.touch_app_rounded,
+                    color: Colors.amberAccent,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      posterCount > 1
+                          ? "$posterCount posters found on page"
+                          : posterCount == 1
+                              ? "1 poster ready to import"
+                              : "Tap poster above or use button:",
+                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _onUsePosterButtonTapped,
+                    icon: Icon(
+                      posterCount > 1 ? Icons.grid_view_rounded : Icons.bolt_rounded,
+                      size: 16,
+                      color: Colors.black,
+                    ),
+                    label: Text(
+                      posterCount > 1
+                          ? "CHOOSE POSTER ($posterCount)"
+                          : posterCount == 1
+                              ? "USE POSTER"
+                              : "SCAN & USE",
+                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amberAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      elevation: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (_loading)
+          Positioned(
+            top: 76,
+            left: 0,
+            right: 0,
+            child: const LinearProgressIndicator(
+              minHeight: 3,
+              backgroundColor: Colors.transparent,
+              color: Colors.amberAccent,
             ),
           ),
       ],

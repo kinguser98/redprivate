@@ -1565,6 +1565,93 @@ if ($action === 'search_images') {
     json_response(true, ["images" => $urls], count($urls) . " images found");
 }
 
+if ($action === 'search_07prime') {
+    $query = $input['query'] ?? $_POST['query'] ?? '';
+    $domain = $input['domain'] ?? $_POST['domain'] ?? 'https://movies07prime.com';
+    $domain = rtrim($domain, '/');
+    if (empty($query)) {
+        json_response(false, [], "Empty query");
+    }
+
+    $items = [];
+    $search_url = "$domain/search/suggestions?s=" . urlencode($query);
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $search_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        CURLOPT_HTTPHEADER     => [
+            'Accept: application/json, text/javascript, */*; q=0.01',
+            'X-Requested-With: XMLHttpRequest',
+            "Referer: $domain/",
+        ],
+    ]);
+    $res = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code === 200 && $res && ($data = @json_decode($res, true)) && is_array($data)) {
+        foreach ($data as $row) {
+            $poster = $row['series_poster'] ?? $row['video_image_thumb'] ?? '';
+            if ($poster) {
+                if (strpos($poster, 'http') !== 0) {
+                    $poster = "$domain/" . ltrim($poster, '/');
+                }
+                $items[] = [
+                    'id' => (int)($row['id'] ?? 0),
+                    'title' => html_entity_decode($row['name'] ?? 'Untitled'),
+                    'poster' => $poster,
+                    'type' => $row['type'] ?? 'movie',
+                    'release_date' => $row['release_date'] ?? '',
+                    'url' => $row['url'] ?? '',
+                ];
+            }
+        }
+    }
+
+    // Fallback: Bing Images targeting 07prime site
+    if (empty($items)) {
+        $host = parse_url($domain, PHP_URL_HOST) ?: 'movies07prime.com';
+        $bing_q = "$query site:$host";
+        $bing_url = "https://www.bing.com/images/search?q=" . urlencode($bing_q) . "&form=HDRSC2";
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $bing_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            CURLOPT_HTTPHEADER     => ['Accept-Language: en-US,en;q=0.9'],
+        ]);
+        $html = curl_exec($ch);
+        curl_close($ch);
+        if ($html) {
+            preg_match_all('/murl&quot;:&quot;(https?:\/\/[^&]+?)&quot;/', $html, $murl_matches);
+            if (!empty($murl_matches[1])) {
+                $idx = 1000;
+                foreach ($murl_matches[1] as $img_url) {
+                    $img_url = html_entity_decode($img_url);
+                    if (filter_var($img_url, FILTER_VALIDATE_URL)) {
+                        $items[] = [
+                            'id' => $idx++,
+                            'title' => "$query (07Prime)",
+                            'poster' => $img_url,
+                            'type' => 'movie',
+                            'release_date' => '',
+                            'url' => '',
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items]);
+}
+
+
 //
 // 7d. LIST SUBSCRIPTION PLANS (auto-create table if missing)
 //
