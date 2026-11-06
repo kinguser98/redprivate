@@ -26,6 +26,7 @@ import '../../services/telegram_collage_helper.dart';
 import '../../services/movies07prime_scraper.dart';
 import '../../services/filmywap_scraper.dart';
 import '../../services/hotullu_mastiwala_scraper.dart';
+import '../../services/hdmove99_scraper.dart';
 import '../dropmms_browser_screen.dart';
 import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -1541,11 +1542,11 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     ),
                                     child: DropdownButtonHideUnderline(
                                       child: DropdownButton<String>(
-                                        value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(epStreamType) ? epStreamType : 'MP4/MKV Direct Link',
+                                        value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(epStreamType) ? epStreamType : 'MP4/MKV Direct Link',
                                         dropdownColor: const Color(0xFF141722),
                                         style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
                                         isExpanded: true,
-                                        items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                                        items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
                                           return DropdownMenuItem<String>(
                                             value: st,
                                             child: Text(st, style: const TextStyle(color: Colors.white, fontSize: 11)),
@@ -3672,7 +3673,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 // Stream Source Selector & Input
                 if (_addType == 'movie') ...[
                   DropdownButtonFormField<String>(
-                    value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(_streamType) ? _streamType : 'MP4/MKV Direct Link',
+                    value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(_streamType) ? _streamType : 'MP4/MKV Direct Link',
                     dropdownColor: const Color(0xFF161A26),
                     style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                     decoration: InputDecoration(
@@ -3682,7 +3683,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       fillColor: const Color(0xFF0F121C),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     ),
-                    items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                    items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
                       return DropdownMenuItem<String>(
                         value: st,
                         child: Text(st, style: const TextStyle(color: Colors.white)),
@@ -3760,7 +3761,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           ),
                           const SizedBox(height: 6),
                           DropdownButtonFormField<String>(
-                            value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(sType) ? sType : 'MP4/MKV Direct Link',
+                            value: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].contains(sType) ? sType : 'MP4/MKV Direct Link',
                             dropdownColor: const Color(0xFF161A26),
                             style: const TextStyle(color: Colors.white, fontSize: 12),
                             decoration: InputDecoration(
@@ -3771,7 +3772,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                             ),
-                            items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
+                            items: ['MP4/MKV Direct Link', 'Streamtape Stream', 'Luluvdo Stream', 'Vidara Stream', 'xHamster Stream', 'HLS/M3U8 Stream', 'Embed Player'].map((st) {
                               return DropdownMenuItem<String>(value: st, child: Text(st, style: const TextStyle(color: Colors.white)));
                             }).toList(),
                             onChanged: (val) {
@@ -7648,6 +7649,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       icon: Icons.tv_rounded,
       accent: Colors.purpleAccent,
       selectKey: key,
+      extraAction: IconButton(
+        icon: const Icon(Icons.playlist_add_rounded, color: Colors.amberAccent, size: 20),
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Manage Episodes',
+        onPressed: () => _openEpisodeManagerModal(s),
+      ),
       onTap: () {
         if (_deadSelectMode) {
           _toggleDeadSelect(key);
@@ -7752,6 +7759,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     required String selectKey,
     required VoidCallback onTap,
     required VoidCallback onRemove,
+    Widget? extraAction,
   }) {
     final selected = _deadSelected.contains(selectKey);
     return GestureDetector(
@@ -7802,6 +7810,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (extraAction != null) extraAction,
                   IconButton(
                     icon: const Icon(Icons.restore_rounded, color: Colors.greenAccent, size: 20),
                     visualDensity: VisualDensity.compact,
@@ -7853,6 +7862,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           _startEdit(item, type);
           setState(() => _selectedIndex = 2);
         },
+        onManageEpisodes: (item) => _openEpisodeManagerModal(item),
       ),
     );
   }
@@ -9701,11 +9711,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     );
 
     final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': item['page_url']});
+    final pageUrl = (item['page_url'] ?? '').toString();
+    final d = await Hdmove99Scraper.extractHdmove99Details(
+      pageUrl,
+      phpDetails: (res['status'] == 'success' && res['data'] != null)
+          ? Map<String, dynamic>.from(res['data'])
+          : null,
+    );
 
     if (mounted) Navigator.pop(context);
 
-    if (res['status'] == 'success' && res['data'] != null) {
-      final d = res['data'];
+    if (d.isNotEmpty) {
       final playLinks = (d['play_links'] as List<dynamic>? ?? []);
       final primaryUrl = (d['stream_url'] ?? '').toString().trim();
 
@@ -9727,14 +9743,16 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         if (mainUrl.isNotEmpty) {
           _addStreamUrlCtrl.text = mainUrl;
           // Auto-guess stream type
-          if (mainUrl.contains('lulu') || primaryUrl.contains('tnmr.org')) {
+          if (mainUrl.contains('vidara') || mainUrl.contains('merivo') || mainUrl.contains('as9u')) {
+            _streamType = 'Vidara Stream';
+          } else if (mainUrl.contains('lulu') || primaryUrl.contains('tnmr.org')) {
             _streamType = 'Luluvdo Stream';
           } else if (mainUrl.contains('streamtape') || mainUrl.contains('tpead')) {
             _streamType = 'Streamtape Stream';
           } else if (mainUrl.endsWith('.mp4') || mainUrl.endsWith('.mkv')) {
             _streamType = 'MP4/MKV Direct Link';
           } else {
-            _streamType = 'Luluvdo Stream';
+            _streamType = 'Vidara Stream';
           }
         } else {
           _addStreamUrlCtrl.clear();
@@ -9756,7 +9774,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(serverCount > 0
-              ? "HDMove99: Extracted $serverCount server link(s)! ${serverCount > 1 ? 'Multiple servers found. Review & Publish.' : 'Review & tap Publish.'}"
+              ? "HDMove99: Extracted $serverCount server(s)! Server 1: Vidara (Primary), Server 2: Luluvideo. Review & Publish."
               : "HDMove99 details extracted (No stream links found on page)."),
           backgroundColor: serverCount > 0 ? Colors.green : Colors.orange,
         ),
@@ -10690,12 +10708,101 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     }
   }
 
+  // ── Unified Video Stream Health Checker ──
+  Future<Map<String, dynamic>> _verifyStreamLink(String url) async {
+    var cleanUrl = url.trim();
+    if (cleanUrl.isEmpty) {
+      return {'live': false, 'code': 0, 'reason': 'Empty URL'};
+    }
+    if (cleanUrl.contains(' ')) {
+      cleanUrl = cleanUrl.replaceAll(' ', '%20');
+    }
+
+    // 1. Direct client probe with anti-hotlink headers and range bytes
+    try {
+      final lower = cleanUrl.toLowerCase();
+      String referer = 'https://www.google.com/';
+      if (lower.contains('uffmaal') || lower.contains('azmaal') || lower.contains('bmaal') || lower.contains('pmaal')) {
+        referer = 'https://uffmaal.com/';
+      } else if (lower.contains('hdmaal') || lower.contains('maalcdn')) {
+        referer = 'https://hdmaal.gg/';
+      } else if (lower.contains('uncut') || lower.contains('ixifile')) {
+        referer = 'https://uncutmasti.com/';
+      } else if (lower.contains('skymovies')) {
+        referer = 'https://skymovieshd.ceo/';
+      } else if (lower.contains('aagmaal')) {
+        referer = 'https://aagmaal.mba/';
+      } else if (lower.contains('streamtape') || lower.contains('advtpe')) {
+        referer = 'https://streamtape.com/';
+      } else if (lower.contains('hotullu')) {
+        referer = 'https://hotullu.cc/';
+      } else if (lower.contains('mastiwala')) {
+        referer = 'https://mastiwala.com/';
+      } else if (lower.contains('vidara') || lower.contains('merivo') || lower.contains('as9u')) {
+        referer = 'https://vidara.to/';
+      } else if (lower.contains('hdmove99')) {
+        referer = 'https://hdmove99.com/';
+      }
+
+      final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
+      final req = await client.getUrl(Uri.parse(cleanUrl)).timeout(const Duration(seconds: 7));
+      req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+      req.headers.set('Referer', referer);
+      req.headers.set('Origin', referer.replaceAll(RegExp(r'/$'), ''));
+      req.headers.set('Range', 'bytes=0-1024');
+      final resp = await req.close();
+      final statusCode = resp.statusCode;
+
+      if (statusCode == 404 || statusCode == 410) {
+        client.close();
+        return {'live': false, 'code': statusCode, 'reason': 'File not found ($statusCode)'};
+      }
+
+      // Sample a small slice of response body to detect removed signatures
+      final bodyBytes = await resp.take(1).toList();
+      client.close();
+      String bodySample = '';
+      if (bodyBytes.isNotEmpty && bodyBytes.first.isNotEmpty) {
+        bodySample = utf8.decode(bodyBytes.first.take(1024).toList(), allowMalformed: true).toLowerCase();
+      }
+
+      if (bodySample.contains('file not found') ||
+          bodySample.contains('video deleted') ||
+          bodySample.contains('video not found') ||
+          bodySample.contains('has been removed')) {
+        return {'live': false, 'code': statusCode, 'reason': 'Video removed / deleted'};
+      }
+
+      if (statusCode >= 200 && statusCode < 400) {
+        return {'live': true, 'code': statusCode, 'url': cleanUrl};
+      }
+    } catch (_) {}
+
+    // 2. Fallback to backend health check (handles Streamtape resolvers, proxies, etc.)
+    try {
+      final res = await _adminPhpApi('check_link', {'url': cleanUrl});
+      if (res['status'] == 'success') {
+        final isOk = res['data']?['ok'] == true;
+        final code = res['data']?['code'] ?? 0;
+        final direct = (res['data']?['direct'] ?? '').toString();
+        return {
+          'live': isOk,
+          'code': code,
+          'reason': isOk ? null : 'HTTP $code',
+          'url': direct.isNotEmpty ? direct : cleanUrl,
+        };
+      }
+    } catch (_) {}
+
+    return {'live': false, 'code': 0, 'reason': 'Link unreachable or timeout'};
+  }
 
   // ── Quick Link Extractor Popup (Search or Paste URL) ──
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
     int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
+    bool checkLinkBeforeImport = true;
     bool isSearching = false;
     bool isExtracting = false;
     List<dynamic> searchResults = [];
@@ -10707,6 +10814,60 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (dialogCtx, dialogSetState) {
+            Future<void> deliverExtractedLink(String rawStreamUrl, {String? posterUrl, String? successMsg}) async {
+              var finalUrl = rawStreamUrl.trim();
+              if (finalUrl.contains(' ')) {
+                finalUrl = finalUrl.replaceAll(' ', '%20');
+              }
+              if (finalUrl.isEmpty) {
+                dialogSetState(() {
+                  isExtracting = false;
+                  errorText = "No video stream link found on this URL";
+                });
+                return;
+              }
+
+              if (checkLinkBeforeImport) {
+                dialogSetState(() {
+                  isExtracting = true;
+                  errorText = "Verifying if stream link is alive...";
+                });
+
+                final check = await _verifyStreamLink(finalUrl);
+                if (!dialogCtx.mounted) return;
+                dialogSetState(() => isExtracting = false);
+
+                if (check['live'] != true) {
+                  final reason = check['reason'] ?? "HTTP ${check['code']}";
+                  dialogSetState(() {
+                    errorText = "❌ Link is DEAD ($reason). Stream cannot be played. Not imported.";
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("Link is DEAD ($reason)! Aborted import of dead video."),
+                      backgroundColor: Colors.red,
+                      duration: const Duration(seconds: 4),
+                    ),
+                  );
+                  return;
+                }
+                if (check['url'] != null && (check['url'] as String).isNotEmpty) {
+                  finalUrl = check['url'] as String;
+                }
+              }
+
+              if (!dialogCtx.mounted) return;
+              dialogSetState(() => isExtracting = false);
+              onLinkSelected(finalUrl, posterUrl: (posterUrl != null && posterUrl.isNotEmpty) ? posterUrl : null);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(successMsg ?? ((posterUrl != null && posterUrl.isNotEmpty) ? "Extracted live stream link & poster!" : "Extracted live stream link!")),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+
             Future<void> runSearch() async {
               final q = queryCtrl.text.trim();
               if (q.isEmpty) return;
@@ -10726,11 +10887,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   if (serverRes['status'] == 'success' && serverRes['data']?['stream_url'] != null) {
                     var streamUrl = serverRes['data']['stream_url'].toString().trim();
                     if (streamUrl.isNotEmpty) {
-                      onLinkSelected(streamUrl);
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Luluvdo stream resolved & extracted!"), backgroundColor: Colors.green),
-                      );
+                      await deliverExtractedLink(streamUrl, successMsg: "Luluvdo stream resolved & extracted!");
                       return;
                     }
                   }
@@ -10744,11 +10901,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   if (!dialogCtx.mounted) return;
                   dialogSetState(() => isExtracting = false);
                   if (stUrl != null && stUrl.isNotEmpty) {
-                    onLinkSelected(stUrl);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Streamtape direct stream resolved!"), backgroundColor: Colors.green),
-                    );
+                    await deliverExtractedLink(stUrl, successMsg: "Streamtape direct stream resolved!");
                     return;
                   }
                 }
@@ -10764,13 +10917,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       sUrl = d.downloadLinks.first.url;
                     }
                     if (sUrl.isNotEmpty) {
-                      if (!dialogCtx.mounted) return;
-                      dialogSetState(() => isExtracting = false);
-                      onLinkSelected(sUrl, posterUrl: d.poster.isNotEmpty ? d.poster : null);
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("DropMMS stream link & poster extracted!"), backgroundColor: Colors.green),
-                      );
+                      await deliverExtractedLink(sUrl, posterUrl: d.poster.isNotEmpty ? d.poster : null, successMsg: "DropMMS stream link & poster extracted!");
                       return;
                     }
                   }
@@ -10780,13 +10927,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (q.contains('hotullu') || q.contains('mastiwala') || tab == 0) {
                   final d = await HotulluMastiwalaScraper.fetchEpisodeDetails(q);
                   if (d != null && (d.streamUrl ?? '').isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
-                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Uncut stream link & poster extracted!"), backgroundColor: Colors.green),
-                    );
+                    await deliverExtractedLink(d.streamUrl!, posterUrl: d.poster, successMsg: "Uncut stream link & poster extracted!");
                     return;
                   }
                 }
@@ -10795,18 +10936,9 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (q.contains('hdmaal') || tab == 1) {
                   final clientData = await _scrapeHdmaalDetails(q);
                   if (clientData != null && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
                     final streamUrl = clientData['stream_url'].toString();
                     final poster = (clientData['poster'] ?? '').toString();
-                    onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(poster.isNotEmpty ? "Extracted HDMaal stream link & poster!" : "Extracted HDMaal stream link!"),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
+                    await deliverExtractedLink(streamUrl, posterUrl: poster.isNotEmpty ? poster : null, successMsg: poster.isNotEmpty ? "Extracted HDMaal stream link & poster!" : "Extracted HDMaal stream link!");
                     return;
                   }
                 }
@@ -10818,16 +10950,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     final streamUrl = (clientData['stream_url'] ?? '').toString();
                     final poster = (clientData['poster'] ?? '').toString();
                     if (streamUrl.isNotEmpty) {
-                      if (!dialogCtx.mounted) return;
-                      dialogSetState(() => isExtracting = false);
-                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(poster.isNotEmpty ? "Extracted UFFMaal stream link & poster!" : "Extracted UFFMaal stream link!"),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
+                      await deliverExtractedLink(streamUrl, posterUrl: poster.isNotEmpty ? poster : null, successMsg: poster.isNotEmpty ? "Extracted UFFMaal stream link & poster!" : "Extracted UFFMaal stream link!");
                       return;
                     }
                   }
@@ -10837,13 +10960,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (q.contains('bmaal') || tab == 3) {
                   final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
                   if (d != null && (d.streamUrl ?? '').isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
-                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("BMaal stream link & poster extracted!"), backgroundColor: Colors.green),
-                    );
+                    await deliverExtractedLink(d.streamUrl!, posterUrl: d.poster, successMsg: "BMaal stream link & poster extracted!");
                     return;
                   }
                 }
@@ -10852,13 +10969,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (q.contains('aagmaal') || tab == 4) {
                   final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
                   if (d != null && (d.streamUrl ?? '').isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
-                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("AagMaal stream link & poster extracted!"), backgroundColor: Colors.green),
-                    );
+                    await deliverExtractedLink(d.streamUrl!, posterUrl: d.poster, successMsg: "AagMaal stream link & poster extracted!");
                     return;
                   }
                 }
@@ -10868,13 +10979,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (isMaalNet || tab == 5) {
                   final d = await MaalNetworkScraper.fetchEpisodeDetails(q);
                   if (d != null && (d.streamUrl ?? '').isNotEmpty) {
-                    if (!dialogCtx.mounted) return;
-                    dialogSetState(() => isExtracting = false);
-                    onLinkSelected(d.streamUrl!, posterUrl: d.poster);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Maal Network stream link & poster extracted!"), backgroundColor: Colors.green),
-                    );
+                    await deliverExtractedLink(d.streamUrl!, posterUrl: d.poster, successMsg: "Maal Network stream link & poster extracted!");
                     return;
                   }
                 }
@@ -10886,13 +10991,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     final streamUrl = res['data']['stream_url'].toString().trim();
                     final poster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
                     if (streamUrl.isNotEmpty) {
-                      if (!dialogCtx.mounted) return;
-                      dialogSetState(() => isExtracting = false);
-                      onLinkSelected(streamUrl, posterUrl: poster.isNotEmpty ? poster : null);
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("SkyMovies stream link & poster extracted!"), backgroundColor: Colors.green),
-                      );
+                      await deliverExtractedLink(streamUrl, posterUrl: poster.isNotEmpty ? poster : null, successMsg: "SkyMovies stream link & poster extracted!");
                       return;
                     }
                   }
@@ -10909,21 +11008,27 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
                 dialogSetState(() => isExtracting = false);
-                if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                  var streamUrl = res['data']['stream_url'].toString().trim();
+
+                Map<String, dynamic> data = (res['status'] == 'success' && res['data'] != null)
+                    ? Map<String, dynamic>.from(res['data'])
+                    : {};
+
+                if (tab == 7) {
+                  final hd = await Hdmove99Scraper.extractHdmove99Details(
+                    q,
+                    phpDetails: data.isNotEmpty ? data : null,
+                  );
+                  if (hd.isNotEmpty) data = hd;
+                }
+
+                if (data['stream_url'] != null && data['stream_url'].toString().isNotEmpty) {
+                  var streamUrl = data['stream_url'].toString().trim();
                   if (streamUrl.contains(' ')) {
                     streamUrl = streamUrl.replaceAll(' ', '%20');
                   }
                   if (streamUrl.isNotEmpty) {
-                    final extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
-                    onLinkSelected(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null);
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(extractedPoster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!"),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
+                    final extractedPoster = (data['poster'] ?? data['raw_poster'] ?? '').toString();
+                    await deliverExtractedLink(streamUrl, posterUrl: extractedPoster.isNotEmpty ? extractedPoster : null, successMsg: extractedPoster.isNotEmpty ? "Extracted stream link & poster!" : "Extracted stream link!");
                     return;
                   }
                 }
@@ -11120,9 +11225,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 } else if (tab == 7) {
                   // HDMove99
                   final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
-                  if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                    streamUrl = res['data']['stream_url'].toString().trim();
-                    extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                  final d = await Hdmove99Scraper.extractHdmove99Details(
+                    pageUrl,
+                    phpDetails: (res['status'] == 'success' && res['data'] != null)
+                        ? Map<String, dynamic>.from(res['data'])
+                        : null,
+                  );
+                  if (d['stream_url'] != null && d['stream_url'].toString().isNotEmpty) {
+                    streamUrl = d['stream_url'].toString().trim();
+                    extractedPoster = (d['poster'] ?? d['raw_poster'] ?? '').toString();
                   }
                 } else if (tab == 8) {
                   // DropMMS
@@ -11144,16 +11255,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               dialogSetState(() => isExtracting = false);
 
               if (streamUrl != null && streamUrl.isNotEmpty) {
-                if (streamUrl.contains(' ')) {
-                  streamUrl = streamUrl.replaceAll(' ', '%20');
-                }
-                onLinkSelected(streamUrl, posterUrl: (extractedPoster != null && extractedPoster.isNotEmpty) ? extractedPoster : null);
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text((extractedPoster != null && extractedPoster.isNotEmpty) ? "Extracted stream link & poster!" : "Extracted stream link!"),
-                    backgroundColor: Colors.green,
-                  ),
+                await deliverExtractedLink(
+                  streamUrl,
+                  posterUrl: (extractedPoster != null && extractedPoster.isNotEmpty) ? extractedPoster : null,
+                  successMsg: (extractedPoster != null && extractedPoster.isNotEmpty) ? "Extracted live stream link & poster!" : "Extracted live stream link!",
                 );
               } else {
                 dialogSetState(() => errorText = "No video link found on selected item.");
@@ -11233,7 +11338,49 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
+
+                    // Live Link Checker Option Toggle
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161B22),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: checkLinkBeforeImport ? Colors.cyanAccent.withOpacity(0.3) : Colors.white12,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            checkLinkBeforeImport ? Icons.verified_user_rounded : Icons.gpp_maybe_rounded,
+                            color: checkLinkBeforeImport ? Colors.cyanAccent : Colors.white38,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "Verify link is live before importing",
+                              style: TextStyle(
+                                color: checkLinkBeforeImport ? Colors.white : Colors.white60,
+                                fontSize: 11,
+                                fontWeight: checkLinkBeforeImport ? FontWeight.w600 : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                          Switch(
+                            value: checkLinkBeforeImport,
+                            activeColor: Colors.cyanAccent,
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            onChanged: isSearching || isExtracting
+                                ? null
+                                : (val) => dialogSetState(() => checkLinkBeforeImport = val),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
 
                     // Search Input
                     Row(
@@ -11351,6 +11498,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }) {
     int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
     final searchCtrl = TextEditingController(text: seriesTitle);
+    bool checkLinksBeforeImport = true;
     bool isSearching = false;
     bool isImporting = false;
     double importProgress = 0.0;
@@ -11791,6 +11939,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
               final episodesPayload = <Map<String, dynamic>>[];
               int successCount = 0;
+              int deadCount = 0;
+              final skippedDeadNames = <String>[];
 
               // 1. Extract stream URLs and posters for all selected episodes
               final extractedItems = <Map<String, dynamic>>[];
@@ -11813,6 +11963,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                 String streamUrl = (item['stream_url'] ?? '').toString().trim();
                 String poster = (item['poster'] ?? '').toString().trim();
+                List<Map<String, dynamic>>? playLinks;
 
                 if (streamUrl.isEmpty) {
                   final pageUrl = (item['url'] ?? '').toString();
@@ -11879,10 +12030,20 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     }
                   } else if (tab == 7) {
                     final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
-                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
-                      streamUrl = res['data']['stream_url'].toString().trim();
-                      if (poster.isEmpty) poster = (res['data']['poster'] ?? '').toString().trim();
+                    final d = await Hdmove99Scraper.extractHdmove99Details(
+                      pageUrl,
+                      phpDetails: (res['status'] == 'success' && res['data'] != null)
+                          ? Map<String, dynamic>.from(res['data'])
+                          : null,
+                    );
+                    final pls = (d['play_links'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
+                    if (pls.isNotEmpty) {
+                      playLinks = pls;
+                      streamUrl = (pls.first['url'] ?? pls.first['resolved_url'] ?? '').toString().trim();
+                    } else if (d['stream_url'] != null && d['stream_url'].toString().isNotEmpty) {
+                      streamUrl = d['stream_url'].toString().trim();
                     }
+                    if (poster.isEmpty) poster = (d['poster'] ?? d['raw_poster'] ?? '').toString().trim();
                   } else if (tab == 8) {
                     final d = await DropmmsService.fetchTopicDetails(pageUrl);
                     if (d != null && d.videoLinks.isNotEmpty) {
@@ -11894,13 +12055,55 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
                 if (streamUrl.isNotEmpty) {
                   if (streamUrl.contains(' ')) streamUrl = streamUrl.replaceAll(' ', '%20');
+
+                  // Link verification before adding to import queue
+                  if (checkLinksBeforeImport) {
+                    dialogSetState(() {
+                      importStatus = "Verifying link health: $epName...";
+                    });
+                    final check = await _verifyStreamLink(streamUrl);
+                    if (check['live'] != true) {
+                      final reason = check['reason'] ?? "HTTP ${check['code']}";
+                      deadCount++;
+                      skippedDeadNames.add("$epName ($reason)");
+                      debugPrint("Batch import skipped dead link: $epName - $streamUrl ($reason)");
+                      continue; // Skip dead episode!
+                    }
+                    if (check['url'] != null && (check['url'] as String).isNotEmpty) {
+                      streamUrl = check['url'] as String;
+                    }
+                  }
+
                   extractedItems.add({
                     'epName': epName,
                     'streamUrl': streamUrl,
                     'poster': poster,
                     'epOrder': epOrder,
+                    'playLinks': playLinks,
                   });
                 }
+              }
+
+              if (extractedItems.isEmpty) {
+                if (!dialogCtx.mounted) return;
+                dialogSetState(() {
+                  isImporting = false;
+                  importProgress = 0.0;
+                  importStatus = '';
+                  errorText = deadCount > 0
+                      ? "All $deadCount selected episode link(s) are DEAD (${skippedDeadNames.join(', ')}). No episodes were imported."
+                      : "No stream links found for selected episodes.";
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(deadCount > 0
+                        ? "All $deadCount episode link(s) are DEAD! None imported."
+                        : "No stream links found."),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 4),
+                  ),
+                );
+                return;
               }
 
               // 2. Parallel image upload in chunks of 3 for fast, non-blocking upload
@@ -11927,6 +12130,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     'stream_url': item['streamUrl'],
                     'poster': finalPosterUrl,
                     'order': item['epOrder'],
+                    'play_links': item['playLinks'],
                   });
                 }));
                 dialogSetState(() {
@@ -11950,6 +12154,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     'poster': ep['poster'],
                     'order': ep['order'],
                     'quality': selectedQuality,
+                    if (ep['play_links'] != null && (ep['play_links'] as List).isNotEmpty)
+                      'play_links': ep['play_links'],
                   });
                   if (addRes['status'] == 'success') {
                     successCount++;
@@ -11968,10 +12174,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
               Navigator.pop(ctx);
               await refresh();
 
+              String summaryMsg = "Successfully batch imported $successCount episodes into ${currentSeason?['Session_Name'] ?? 'Season'}!";
+              if (deadCount > 0) {
+                summaryMsg += " (Skipped $deadCount dead link${deadCount > 1 ? 's' : ''})";
+              }
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text("Successfully batch imported $successCount episodes into ${currentSeason?['Session_Name'] ?? 'Season'}!"),
-                  backgroundColor: Colors.green,
+                  content: Text(summaryMsg),
+                  backgroundColor: successCount > 0 ? Colors.green : Colors.orange,
+                  duration: const Duration(seconds: 4),
                 ),
               );
             }
@@ -12255,6 +12466,41 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                     style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
                                   ),
                                 ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Icon(
+                                checkLinksBeforeImport ? Icons.verified_rounded : Icons.gpp_maybe_rounded,
+                                color: checkLinksBeforeImport ? Colors.cyanAccent : Colors.white38,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              const Text("Verify Links:", style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.bold)),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: isImporting ? null : () => dialogSetState(() => checkLinksBeforeImport = !checkLinksBeforeImport),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: checkLinksBeforeImport ? Colors.cyanAccent.withOpacity(0.18) : Colors.white12,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: checkLinksBeforeImport ? Colors.cyanAccent : Colors.white24,
+                                      width: 0.8,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    checkLinksBeforeImport ? "Active (Skip Dead)" : "Off (Import All)",
+                                    style: TextStyle(
+                                      color: checkLinksBeforeImport ? Colors.cyanAccent : Colors.white54,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ],
@@ -14276,8 +14522,14 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         }
       } else if (_cinemaSource == 4) {
         final res = await _adminPhpApi('extract_hdmove99_details', {'page_url': pageUrl});
-        if (res['status'] == 'success' && res['data'] != null) {
-          details = Map<String, dynamic>.from(res['data']);
+        final d = await Hdmove99Scraper.extractHdmove99Details(
+          pageUrl,
+          phpDetails: (res['status'] == 'success' && res['data'] != null)
+              ? Map<String, dynamic>.from(res['data'])
+              : null,
+        );
+        if (d.isNotEmpty) {
+          details = d;
         }
       } else if (_cinemaSource == 5) {
         final res = await _adminPhpApi('extract_skymovies_details', {'page_url': pageUrl});
@@ -15834,6 +16086,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         final request = http.MultipartRequest('POST', uri);
         request.fields['chat_id'] = channelId;
 
+        String photo2Name = 'collage.png';
+        if (collageBytes.length > 2 && collageBytes[0] == 0xFF && collageBytes[1] == 0xD8) {
+          photo2Name = 'screenshot.jpg';
+        }
         final mediaPayload = [
           {
             'type': 'photo',
@@ -15843,13 +16099,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           },
           {
             'type': 'photo',
-            'media': 'attach://collage.png',
+            'media': 'attach://$photo2Name',
           },
         ];
 
         request.fields['media'] = jsonEncode(mediaPayload);
         request.files.add(http.MultipartFile.fromBytes('poster.png', posterBytes, filename: 'poster.png'));
-        request.files.add(http.MultipartFile.fromBytes('collage.png', collageBytes, filename: 'collage.png'));
+        request.files.add(http.MultipartFile.fromBytes(photo2Name, collageBytes, filename: photo2Name));
 
         final streamed = await request.send().timeout(const Duration(seconds: 35));
         final response = await http.Response.fromStream(streamed);
@@ -15909,6 +16165,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           defaultTemplate: _tgCaptionTemplateCtrl.text,
           botTokenCtrl: _tgBotTokenCtrl,
           channelIdCtrl: _tgChannelIdCtrl,
+          apiCall: _adminPhpApi,
           onBroadcast: (posterB, collageB, caption) => _sendTelegramBroadcast(
             posterBytes: posterB,
             collageBytes: collageB,
@@ -17966,6 +18223,7 @@ class _TelegramBroadcastModal extends StatefulWidget {
   final String defaultTemplate;
   final TextEditingController botTokenCtrl;
   final TextEditingController channelIdCtrl;
+  final Future<Map<String, dynamic>> Function(String action, Map<String, dynamic> body)? apiCall;
   final Future<Map<String, dynamic>> Function(Uint8List posterBytes, Uint8List? collageBytes, String caption) onBroadcast;
 
   const _TelegramBroadcastModal({
@@ -17980,6 +18238,7 @@ class _TelegramBroadcastModal extends StatefulWidget {
     required this.defaultTemplate,
     required this.botTokenCtrl,
     required this.channelIdCtrl,
+    this.apiCall,
     required this.onBroadcast,
   }) : super(key: key);
 
@@ -17988,11 +18247,12 @@ class _TelegramBroadcastModal extends StatefulWidget {
 }
 
 class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
-  int _tab = 0; // 0 = Episodes, 1 = SkymoviesHD, 2 = UffMaal / HDMaal / Uncut, 3 = Web Grabber, 4 = Maal Network
+  int _tab = 0; // 0 = Episodes, 1 = SkymoviesHD, 2 = UffMaal / HDMaal / Uncut, 3 = Web Grabber, 4 = Maal Network, 5 = Direct Stream / Link, 6 = HDMove99
   late TextEditingController _captionCtrl;
   final _skymoviesSearchCtrl = TextEditingController();
   final _uncutSearchCtrl = TextEditingController();
   final _directStreamLinkCtrl = TextEditingController();
+  final _hdmove99SearchCtrl = TextEditingController();
 
   Uint8List? _posterBytes;
   Uint8List? _collageBytes;
@@ -18019,6 +18279,11 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
       .map((s) => s['domain']!)
       .toList();
 
+  // HDMove99 search state
+  bool _searchingHdmove99 = false;
+  List<Map<String, dynamic>> _hdmove99Entries = [];
+  Map<String, dynamic>? _selectedHdmove99Entry;
+
   // Screenshot Pool & Selection
   List<String> _availableScreenshots = [];
   bool _loadingScreenshots = false;
@@ -18034,6 +18299,7 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
     super.initState();
     _skymoviesSearchCtrl.text = widget.title;
     _uncutSearchCtrl.text = widget.title;
+    _hdmove99SearchCtrl.text = widget.title;
 
     if (widget.episodes != null && widget.episodes!.isNotEmpty) {
       _tab = 0; // Default to Episodes
@@ -18186,15 +18452,104 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
     });
   }
 
-  void _toggleScreenshotSelection(String url) {
+  Future<void> _searchHdmove99() async {
+    final q = _hdmove99SearchCtrl.text.trim();
+    if (q.isEmpty) return;
     setState(() {
-      if (_selectedScreenshotUrls.contains(url)) {
-        _selectedScreenshotUrls.remove(url);
-      } else {
-        if (_selectedScreenshotUrls.length >= 4) {
-          _selectedScreenshotUrls.remove(_selectedScreenshotUrls.first);
+      _searchingHdmove99 = true;
+      _hdmove99Entries = [];
+      _selectedHdmove99Entry = null;
+      _availableScreenshots = [];
+    });
+    try {
+      List<Map<String, dynamic>> results = [];
+      if (widget.apiCall != null) {
+        try {
+          final res = await widget.apiCall!('search_hdmove99_catalog', {'query': q});
+          final isSuccess = res['status'] == 'success' || res['success'] == true;
+          final rawItems = res['data']?['items'] ?? res['items'] ?? res['catalog'];
+          if (isSuccess && rawItems is List && rawItems.isNotEmpty) {
+            results = List<Map<String, dynamic>>.from(
+              rawItems.map((e) => Map<String, dynamic>.from(e as Map)),
+            );
+          }
+        } catch (_) {}
+      }
+      if (results.isEmpty) {
+        results = await Hdmove99Scraper.searchCatalog(q);
+      }
+      if (mounted) {
+        setState(() {
+          _hdmove99Entries = results;
+          _searchingHdmove99 = false;
+        });
+        if (results.isNotEmpty && _selectedHdmove99Entry == null) {
+          _selectHdmove99Entry(results.first);
         }
-        _selectedScreenshotUrls.add(url);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _searchingHdmove99 = false);
+    }
+  }
+
+  Future<void> _selectHdmove99Entry(Map<String, dynamic> entry) async {
+    setState(() {
+      _selectedHdmove99Entry = entry;
+      _loadingScreenshots = true;
+      _availableScreenshots = [];
+    });
+
+    final pageUrl = (entry['page_url'] ?? entry['url'] ?? '').toString().trim();
+    List<String> shots = [];
+
+    final shotViewUrl = (entry['screenshot_view_url'] ?? '').toString().trim();
+    if (shotViewUrl.isNotEmpty) {
+      shots = await Hdmove99Scraper.resolveUplinks24Screenshots(shotViewUrl);
+    }
+
+    if (shots.isEmpty && pageUrl.isNotEmpty) {
+      shots = await Hdmove99Scraper.fetchScreenshots(pageUrl);
+    }
+
+    if (!mounted) return;
+
+    final poster = (entry['poster'] ?? '').toString().trim();
+    final finalList = shots.isNotEmpty
+        ? shots
+        : (poster.isNotEmpty ? [poster] : <String>[]);
+
+    setState(() {
+      _loadingScreenshots = false;
+      _availableScreenshots = finalList;
+      if (finalList.isNotEmpty) {
+        // HDMove99 screenshots are already an all-in-one merged landscape scene sheet.
+        // Auto-select the first (and only) merged screenshot sheet directly!
+        _selectedScreenshotUrls.clear();
+        _selectedScreenshotUrls.add(finalList.first);
+        _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+      }
+    });
+  }
+
+  void _toggleScreenshotSelection(String url) {
+    final bool isHdmove = _tab == 6;
+    setState(() {
+      if (isHdmove) {
+        if (_selectedScreenshotUrls.contains(url)) {
+          _selectedScreenshotUrls.remove(url);
+        } else {
+          _selectedScreenshotUrls.clear();
+          _selectedScreenshotUrls.add(url);
+        }
+      } else {
+        if (_selectedScreenshotUrls.contains(url)) {
+          _selectedScreenshotUrls.remove(url);
+        } else {
+          if (_selectedScreenshotUrls.length >= 4) {
+            _selectedScreenshotUrls.remove(_selectedScreenshotUrls.first);
+          }
+          _selectedScreenshotUrls.add(url);
+        }
       }
     });
     _generateCollageFromUrls(_selectedScreenshotUrls.toList());
@@ -18469,7 +18824,33 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                             ),
                                           )
                                         : _collageBytes != null
-                                            ? Image.memory(_collageBytes!, fit: BoxFit.cover)
+                                            ? Stack(
+                                                fit: StackFit.expand,
+                                                children: [
+                                                  Image.memory(
+                                                    _collageBytes!,
+                                                    fit: _selectedScreenshotUrls.length == 1 ? BoxFit.contain : BoxFit.cover,
+                                                  ),
+                                                  if (_selectedScreenshotUrls.length == 1)
+                                                    Positioned(
+                                                      bottom: 4,
+                                                      left: 4,
+                                                      right: 4,
+                                                      child: Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black.withOpacity(0.75),
+                                                          borderRadius: BorderRadius.circular(4),
+                                                        ),
+                                                        child: const Text(
+                                                          "Landscape Screenshot",
+                                                          textAlign: TextAlign.center,
+                                                          style: TextStyle(color: Colors.amberAccent, fontSize: 8, fontWeight: FontWeight.bold),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                ],
+                                              )
                                             : Center(
                                                 child: Padding(
                                                   padding: const EdgeInsets.all(6.0),
@@ -18508,7 +18889,9 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                                 const Icon(Icons.collections_rounded, color: Colors.amberAccent, size: 13),
                                 const SizedBox(width: 5),
                                 Text(
-                                  "Selected Scenes (${_selectedScreenshotUrls.length}/4) — Tap Minus to Remove:",
+                                  _selectedScreenshotUrls.length == 1
+                                      ? "Selected Photo 2 (Landscape Screenshot Sheet):"
+                                      : "Selected Scenes (${_selectedScreenshotUrls.length}/4) — Tap Minus to Remove:",
                                   style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
                                 ),
                                 const Spacer(),
@@ -18634,6 +19017,8 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                           _tabBtn(4, "🌐 Maal Network", Colors.greenAccent),
                           const SizedBox(width: 6),
                           _tabBtn(5, "⚡ Direct Stream / Link", Colors.pinkAccent),
+                          const SizedBox(width: 6),
+                          _tabBtn(6, "🎬 HDMove99", Colors.amberAccent),
                         ],
                       ),
                     ),
@@ -19295,6 +19680,168 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
                           ],
                         ),
                       ),
+                    ] else if (_tab == 6) ...[
+                      // HDMove99 Search & Post Results
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF141722),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: TextField(
+                                controller: _hdmove99SearchCtrl,
+                                style: const TextStyle(color: Colors.white, fontSize: 11),
+                                decoration: const InputDecoration(
+                                  hintText: "Search title on HDMove99...",
+                                  hintStyle: TextStyle(color: Colors.white30, fontSize: 10.5),
+                                  prefixIcon: Icon(Icons.search_rounded, color: Colors.amberAccent, size: 16),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                ),
+                                onSubmitted: (_) => _searchHdmove99(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          ElevatedButton(
+                            onPressed: _searchingHdmove99 ? null : _searchHdmove99,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amberAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: _searchingHdmove99
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                                : const Text("Find", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+
+                      if (_hdmove99Entries.isNotEmpty) ...[
+                        Text("${_hdmove99Entries.length} Results — Tap a Card to Import Screenshots:",
+                            style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 100,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _hdmove99Entries.length,
+                            itemBuilder: (ctx, i) {
+                              final e = _hdmove99Entries[i];
+                              final pageUrl = (e['page_url'] ?? e['url'] ?? '').toString();
+                              final isSel = _selectedHdmove99Entry != null &&
+                                  (pageUrl == (_selectedHdmove99Entry!['page_url'] ?? _selectedHdmove99Entry!['url']));
+                              final poster = (e['poster'] ?? '').toString();
+                              final title = (e['title'] ?? '').toString();
+
+                              return GestureDetector(
+                                onTap: () => _selectHdmove99Entry(e),
+                                child: Container(
+                                  width: 150,
+                                  margin: const EdgeInsets.only(right: 8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF141722),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSel ? Colors.amberAccent : Colors.white12,
+                                      width: isSel ? 2 : 1,
+                                    ),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Stack(
+                                    children: [
+                                      Positioned.fill(
+                                        child: poster.isNotEmpty
+                                            ? CachedNetworkImage(
+                                                imageUrl: poster,
+                                                fit: BoxFit.cover,
+                                                errorWidget: (_, __, ___) => Container(
+                                                  color: const Color(0xFF0F121C),
+                                                  child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 28),
+                                                ),
+                                              )
+                                            : Container(
+                                                color: const Color(0xFF0F121C),
+                                                child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 28),
+                                              ),
+                                      ),
+                                      Positioned(
+                                        left: 0, right: 0, bottom: 0,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                                            ),
+                                          ),
+                                          child: Text(
+                                            title,
+                                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w600),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ] else if (!_searchingHdmove99 && _hdmove99SearchCtrl.text.trim().isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search_off_rounded, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Text("No results found on HDMove99. Try a shorter title.", style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+
+                      if (_loadingScreenshots)
+                        const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: Center(child: CircularProgressIndicator(color: Colors.amberAccent, strokeWidth: 2)),
+                        )
+                      else if (_availableScreenshots.isNotEmpty) ...[
+                        Text(
+                          _selectedScreenshotUrls.length == 1
+                              ? "HDMove99 Merged Landscape Screenshot Sheet (Ready to send as Photo 2):"
+                              : "Tap to Select Screenshot (${_selectedScreenshotUrls.length} selected):",
+                          style: const TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildScreenshotGrid(),
+                      ] else if (_selectedHdmove99Entry != null && !_loadingScreenshots) ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: const Color(0xFF141722), borderRadius: BorderRadius.circular(8)),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.broken_image_outlined, color: Colors.white38, size: 16),
+                              SizedBox(width: 8),
+                              Expanded(child: Text("No screenshots found in this HDMove99 post.", style: TextStyle(color: Colors.white38, fontSize: 10))),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
 
                     const SizedBox(height: 14),
@@ -19490,6 +20037,8 @@ class _TelegramBroadcastModalState extends State<_TelegramBroadcastModal> {
           _selectedScreenshotUrls.clear();
           _selectedScreenshotUrls.addAll(_availableScreenshots.take(4));
           _generateCollageFromUrls(_selectedScreenshotUrls.toList());
+        } else if (index == 6 && _hdmove99Entries.isEmpty && _hdmove99SearchCtrl.text.trim().isNotEmpty) {
+          _searchHdmove99();
         }
       },
       child: Container(
@@ -19571,6 +20120,7 @@ class _SeriesRepairDialog extends StatefulWidget {
   final VoidCallback onDone;
   final Function(Function(String, {String? posterUrl}), {String defaultSearchText}) showExtractor;
   final Function(Map<String, dynamic>, String) onEdit;
+  final Function(Map<String, dynamic>)? onManageEpisodes;
 
   const _SeriesRepairDialog({
     Key? key,
@@ -19579,6 +20129,7 @@ class _SeriesRepairDialog extends StatefulWidget {
     required this.onDone,
     required this.showExtractor,
     required this.onEdit,
+    this.onManageEpisodes,
   }) : super(key: key);
 
   @override
@@ -19895,6 +20446,26 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                 // Series Actions Row
                 Row(
                   children: [
+                    if (widget.onManageEpisodes != null) ...[
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () {
+                                  Navigator.pop(context);
+                                  widget.onManageEpisodes!(widget.item);
+                                },
+                          icon: const Icon(Icons.playlist_add_rounded, size: 15, color: Colors.amberAccent),
+                          label: const Text("Manage Episodes", style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w600)),
+                          style: TextButton.styleFrom(
+                            backgroundColor: Colors.amberAccent.withOpacity(0.08),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     Expanded(
                       child: TextButton.icon(
                         onPressed: _busy ? null : () {
@@ -19902,7 +20473,7 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                           widget.onEdit(widget.item, 'series');
                         },
                         icon: const Icon(Icons.edit_rounded, size: 15, color: Colors.orangeAccent),
-                        label: const Text("Edit Series Studio", style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                        label: const Text("Edit Series Studio", style: TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                         style: TextButton.styleFrom(
                           backgroundColor: Colors.orangeAccent.withOpacity(0.08),
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -19910,12 +20481,12 @@ class _SeriesRepairDialogState extends State<_SeriesRepairDialog> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: TextButton.icon(
                         onPressed: _busy ? null : _deleteSeries,
                         icon: const Icon(Icons.delete_outline_rounded, size: 15, color: Colors.redAccent),
-                        label: const Text("Delete Series", style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.w600)),
+                        label: const Text("Delete Series", style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w600)),
                         style: TextButton.styleFrom(
                           backgroundColor: Colors.redAccent.withOpacity(0.08),
                           padding: const EdgeInsets.symmetric(vertical: 12),

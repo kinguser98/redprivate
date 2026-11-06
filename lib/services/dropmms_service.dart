@@ -660,26 +660,41 @@ class DropmmsService {
       }
 
       // 2. Vidara / Merivo
-      if (lower.contains('vidara') || lower.contains('merivo')) {
+      if (lower.contains('vidara') || lower.contains('merivo') || lower.contains('as9u')) {
         final uri = Uri.parse(url);
         final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
         if (segs.isNotEmpty) {
           final filecode = segs.last;
-          final resp = await _fetchHtml(
-            'https://merivo.fit/api/stream',
-            method: 'POST',
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-              'Referer': 'https://merivo.fit/e/$filecode',
-              'Origin': 'https://merivo.fit',
-            },
-            body: {'filecode': filecode, 'device': 'android'},
-          );
+          for (final domain in ['as9u7bgh9.com', 'merivo.fit', 'vidara.to', 'vidara.so']) {
+            try {
+              final embedUrl = 'https://$domain/e/$filecode';
+              final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
+              client.connectionTimeout = const Duration(seconds: 6);
+              final getReq = await client.getUrl(Uri.parse(embedUrl));
+              getReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+              getReq.headers.set('Referer', 'https://vidara.to/');
+              final getResp = await getReq.close();
+              final cookies = <Cookie>[];
+              cookies.addAll(getResp.cookies);
+              await getResp.drain();
 
-          final json = jsonDecode(resp);
-          final streamUrl = json['streaming_url'] as String?;
-          if (streamUrl != null && streamUrl.isNotEmpty) {
-            return streamUrl;
+              final postReq = await client.postUrl(Uri.parse('https://$domain/api/stream'));
+              postReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+              postReq.headers.set('Referer', embedUrl);
+              postReq.headers.set('Origin', 'https://$domain');
+              postReq.headers.set('Content-Type', 'application/json');
+              postReq.cookies.addAll(cookies);
+              postReq.write(jsonEncode({'filecode': filecode, 'device': 'android'}));
+              final postResp = await postReq.close();
+              final bodyStr = await utf8.decodeStream(postResp);
+              client.close();
+
+              final json = jsonDecode(bodyStr);
+              final streamUrl = json['streaming_url'] as String?;
+              if (streamUrl != null && streamUrl.isNotEmpty) {
+                return streamUrl;
+              }
+            } catch (_) {}
           }
         }
       }

@@ -26,6 +26,12 @@ class TelegramCollageHelper {
         referer = 'https://iblog.ws/';
       } else if (lower.contains('imagebam')) {
         referer = 'https://www.imagebam.com/';
+      } else if (lower.contains('imgup')) {
+        referer = 'https://imgup.co/';
+      } else if (lower.contains('uplinks24')) {
+        referer = 'https://uplinks24.com/';
+      } else if (lower.contains('hdmove99')) {
+        referer = 'https://hdmove99.com/';
       }
 
       final res = await http.get(Uri.parse(clean), headers: {

@@ -304,6 +304,107 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> forgotPassword(
+      String email, String newPassword) async {
+    try {
+      final deviceId = await getDeviceId();
+      final deviceName = getDeviceName();
+      final body = 'action=forgot_password'
+          '&email=${Uri.encodeComponent(email)}'
+          '&password=${Uri.encodeComponent(newPassword)}'
+          '&device_id=${Uri.encodeComponent(deviceId)}'
+          '&device_name=${Uri.encodeComponent(deviceName)}';
+
+      // 1. Try auth.php endpoint
+      var res = await _postWithFallback(
+        ApiConfig.authUrl,
+        {'Content-Type': 'application/x-www-form-urlencoded'},
+        body,
+      );
+
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data['status'] == 'success' && data['data']?['user'] != null) {
+          return data;
+        }
+        if (data['message'] != null &&
+            data['message'].toString().contains('No account')) {
+          return data;
+        }
+        if (data['status'] != 'error' ||
+            !data['message'].toString().contains('Invalid action')) {
+          return data;
+        }
+      }
+
+      // 2. Fallback to admin_api.php endpoint
+      res = await _postWithFallback(
+        ApiConfig.adminUrl,
+        {'Content-Type': 'application/x-www-form-urlencoded'},
+        body,
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data['status'] == 'success') {
+          return data;
+        }
+        if (data['message'] != null &&
+            data['message'].toString().contains('No account')) {
+          return data;
+        }
+      }
+
+      // 3. Fallback: check list_users, match email, and edit_user
+      final listRes = await _postWithFallback(
+        ApiConfig.adminUrl,
+        {'Content-Type': 'application/x-www-form-urlencoded'},
+        'action=list_users',
+      );
+      if (listRes.statusCode == 200) {
+        final listData = json.decode(listRes.body);
+        if (listData['status'] == 'success' &&
+            listData['data']?['users'] is List) {
+          final users = listData['data']['users'] as List;
+          final normEmail = email.trim().toLowerCase();
+          final match = users.firstWhere(
+            (u) => (u['email'] ?? '').toString().trim().toLowerCase() == normEmail,
+            orElse: () => null,
+          );
+          if (match == null) {
+            return {
+              'status': 'error',
+              'message': 'No account found with this email address'
+            };
+          }
+          final uid = match['id'];
+          final editRes = await _postWithFallback(
+            ApiConfig.adminUrl,
+            {'Content-Type': 'application/x-www-form-urlencoded'},
+            'action=edit_user&user_id=$uid&password=${Uri.encodeComponent(newPassword)}',
+          );
+          if (editRes.statusCode == 200) {
+            final loginRes = await login(email, newPassword, forceLogin: true);
+            if (loginRes['status'] == 'success') return loginRes;
+            match['device_id'] = deviceId;
+            match['device_name'] = deviceName;
+            return {
+              'status': 'success',
+              'data': {'user': match},
+              'message': 'Password reset successfully'
+            };
+          }
+        }
+      }
+
+      return {
+        'status': 'error',
+        'message': 'Failed to reset password. Please check your network.'
+      };
+    } catch (e) {
+      return {'status': 'error', 'message': 'Connection error: $e'};
+    }
+  }
+
   // Log a content view (feeds trending on the home screen)
   static Future<void> logView(int contentId, String itemType) async {
     try {

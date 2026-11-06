@@ -242,14 +242,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         'Referer': referer,
         'Accept': '*/*',
         'Connection': 'keep-alive',
-        'Accept-Encoding': 'gzip, deflate, br',
+        // CRITICAL FOR AVPLAYER SEEKING: Do not request gzip/deflate on video streams!
+        // When gzip is sent, CDNs and Nginx disable Range/206 partial responses,
+        // forcing AVPlayer to stream sequentially from byte 0 and causing slow/sluggish seeking.
+        'Accept-Encoding': 'identity',
       };
       if (origin != null) {
         playHeaders['Origin'] = origin;
       }
       // Server-driven headers (from scraper resolve) override domain defaults
       widget.headers?.forEach((k, v) {
-        playHeaders[k] = v;
+        if (k.toLowerCase() != 'accept-encoding') {
+          playHeaders[k] = v;
+        }
       });
 
       final isLocal = File(playUrl).existsSync() ||
@@ -260,8 +265,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         final cleanPath = playUrl.startsWith('file://') ? playUrl.substring(7) : playUrl;
         _controller = VideoPlayerController.file(File(cleanPath));
       } else {
+        final sanitizedUrl = Uri.encodeFull(Uri.decodeFull(playUrl));
         _controller = VideoPlayerController.networkUrl(
-          Uri.parse(playUrl),
+          Uri.parse(sanitizedUrl),
           httpHeaders: playHeaders,
         );
       }
@@ -352,16 +358,39 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     if (_controller == null || !mounted) return;
     final value = _controller!.value;
 
-    if (value.hasError && !_hasRetriedRefresh) {
-      _hasRetriedRefresh = true;
-      _attemptDynamicRefresh().then((refreshed) {
-        if (refreshed && mounted) {
-          _open();
-        } else if (mounted) {
-          setState(() {
-            _hasPlaybackError = value.errorDescription ?? 'Playback error';
-          });
-        }
+    if (value.hasError) {
+      // If error occurs during seek scrubbing, do not immediately fail!
+      if (_isSeeking) {
+        debugPrint("Playback error detected while seeking: ${value.errorDescription}");
+        return;
+      }
+      if (!_hasRetriedRefresh) {
+        _hasRetriedRefresh = true;
+        _attemptDynamicRefresh().then((refreshed) {
+          if (refreshed && mounted) {
+            _open();
+          } else if (mounted) {
+            setState(() {
+              _hasPlaybackError = value.errorDescription ?? 'Playback error';
+            });
+          }
+        });
+        return;
+      } else if (mounted) {
+        setState(() {
+          _hasPlaybackError = value.errorDescription ?? 'Playback error';
+        });
+      }
+      return;
+    }
+
+    if (_isSeeking) {
+      // While seeking or waiting for AVPlayer to buffer at new target position,
+      // prevent AVPlayer's lagging position from overwriting our target seek position!
+      setState(() {
+        _duration = value.duration;
+        _playing = value.isPlaying;
+        _buffering = value.isBuffering;
       });
       return;
     }
@@ -790,20 +819,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       'Referer': referer,
       'Accept': '*/*',
       'Connection': 'keep-alive',
-      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Encoding': 'identity',
     };
     if (origin != null) {
       playHeaders['Origin'] = origin;
     }
     // Server-driven headers (from scraper resolve) override domain defaults
     widget.headers?.forEach((k, v) {
-      playHeaders[k] = v;
+      if (k.toLowerCase() != 'accept-encoding') {
+        playHeaders[k] = v;
+      }
     });
 
     // DNS-poisoned hosts (eporner) stream through the local DoH proxy.
     final playTarget = mediaForwardUrlIfNeeded(qUrl) ?? qUrl;
+    final sanitizedTarget = Uri.encodeFull(Uri.decodeFull(playTarget));
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(playTarget),
+      Uri.parse(sanitizedTarget),
       httpHeaders: playHeaders,
     );
 
@@ -959,15 +991,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     setState(() {
       _isSeeking = true;
       _buffering = true;
+      _position = clamped;
     });
 
-    await _controller!.seekTo(clamped);
+    try {
+      await _controller!.seekTo(clamped);
+    } catch (e) {
+      debugPrint("Seek relative exception: $e");
+    }
 
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future.delayed(const Duration(milliseconds: 250));
     if (mounted) {
       setState(() {
         _isSeeking = false;
-        _buffering = _controller!.value.isBuffering;
+        _dragValue = null;
+        _buffering = _controller?.value.isBuffering ?? false;
       });
     }
 
@@ -1050,18 +1088,34 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   void _seekTo(double fraction) {
     if (_duration <= Duration.zero || _controller == null) return;
     final target = Duration(milliseconds: (_duration.inMilliseconds * fraction).toInt());
+    setState(() {
+      _isSeeking = true;
+      _position = target;
+      _dragValue = fraction;
+    });
     _seekToAbsolute(target);
   }
 
   Future<void> _seekToAbsolute(Duration position) async {
     if (_controller == null) return;
-    setState(() { _isSeeking = true; _buffering = true; });
-    await _controller!.seekTo(position);
-    await Future.delayed(const Duration(milliseconds: 200));
+    setState(() {
+      _isSeeking = true;
+      _buffering = true;
+      _position = position;
+    });
+
+    try {
+      await _controller!.seekTo(position);
+    } catch (e) {
+      debugPrint("Seek absolute exception: $e");
+    }
+
+    await Future.delayed(const Duration(milliseconds: 250));
     if (mounted) {
       setState(() {
         _isSeeking = false;
-        _buffering = _controller!.value.isBuffering;
+        _dragValue = null;
+        _buffering = _controller?.value.isBuffering ?? false;
       });
     }
   }
@@ -1768,16 +1822,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                           _duration.inMilliseconds)
                                       .clamp(0.0, 1.0))
                               : 0.0,
+                          onChangeStart: (val) {
+                            setState(() {
+                              _isSeeking = true;
+                              _dragValue = val;
+                              _position = Duration(
+                                  milliseconds: (_duration.inMilliseconds * val).toInt());
+                            });
+                          },
                           onChanged: (val) {
                             setState(() {
+                              _isSeeking = true;
                               _dragValue = val;
+                              _position = Duration(
+                                  milliseconds: (_duration.inMilliseconds * val).toInt());
                             });
                           },
                           onChangeEnd: (val) {
                             _seekTo(val);
-                            setState(() {
-                              _dragValue = null;
-                            });
                           },
                         ),
                       ),

@@ -17,6 +17,7 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeIn;
   bool _isLogin = true;
+  bool _isForgotPassword = false;
 
   final _loginEmailController = TextEditingController();
   final _loginPassController = TextEditingController();
@@ -25,9 +26,15 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
   final _regEmailController = TextEditingController();
   final _regPassController = TextEditingController();
 
+  final _forgotEmailController = TextEditingController();
+  final _forgotPassController = TextEditingController();
+  final _forgotConfirmPassController = TextEditingController();
+
   bool _isLoading = false;
   bool _obscureLogin = true;
   bool _obscureReg = true;
+  bool _obscureForgot = true;
+  bool _obscureForgotConfirm = true;
   String _errorMessage = '';
 
   @override
@@ -47,16 +54,75 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
     _regNameController.dispose();
     _regEmailController.dispose();
     _regPassController.dispose();
+    _forgotEmailController.dispose();
+    _forgotPassController.dispose();
+    _forgotConfirmPassController.dispose();
     super.dispose();
   }
 
   void _switchMode(bool login) {
-    if (_isLogin == login) return;
+    if (_isLogin == login && !_isForgotPassword) return;
     setState(() {
       _isLogin = login;
+      _isForgotPassword = false;
       _errorMessage = '';
     });
     _fadeCtrl.forward(from: 0);
+  }
+
+  Future<void> _handleForgotPassword() async {
+    final email = _forgotEmailController.text.trim();
+    final pass = _forgotPassController.text.trim();
+    final confirmPass = _forgotConfirmPassController.text.trim();
+
+    if (email.isEmpty || pass.isEmpty || confirmPass.isEmpty) {
+      setState(() => _errorMessage = 'Please fill in all fields');
+      return;
+    }
+
+    if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email)) {
+      setState(() => _errorMessage = 'Please enter a valid email address');
+      return;
+    }
+
+    if (pass.length < 4) {
+      setState(() => _errorMessage = 'Password must be at least 4 characters');
+      return;
+    }
+
+    if (pass != confirmPass) {
+      setState(() => _errorMessage = 'Passwords do not match');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
+    final res = await ApiService.forgotPassword(email, pass);
+    setState(() => _isLoading = false);
+
+    if (res['status'] == 'success' && res['data']?['user'] != null) {
+      final user = UserModel.fromJson(res['data']['user']);
+      AppSession.user = user;
+      await ApiService.saveUserSession(user);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Password updated successfully! Logging you in..."),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => MainLayoutScreen(user: user)),
+      );
+    } else {
+      setState(() {
+        _errorMessage = res['message'] ?? 'Failed to update password. Check your email.';
+      });
+    }
   }
 
   Future<void> _handleLogin({bool forceLogin = false}) async {
@@ -354,33 +420,60 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
                     const SizedBox(height: 36),
 
                     // Mode switch pill
-                    Container(
-                      height: 52,
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF14141C),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _ModeButton(
-                              label: "SIGN IN",
-                              active: _isLogin,
-                              onTap: () => _switchMode(true),
+                    if (!_isForgotPassword)
+                      Container(
+                        height: 52,
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF14141C),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _ModeButton(
+                                label: "SIGN IN",
+                                active: _isLogin,
+                                onTap: () => _switchMode(true),
+                              ),
                             ),
-                          ),
-                          Expanded(
-                            child: _ModeButton(
-                              label: "CREATE ACCOUNT",
-                              active: !_isLogin,
-                              onTap: () => _switchMode(false),
+                            Expanded(
+                              child: _ModeButton(
+                                label: "CREATE ACCOUNT",
+                                active: !_isLogin,
+                                onTap: () => _switchMode(false),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        height: 52,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF14141C),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFE50914).withOpacity(0.4)),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.lock_reset_rounded, color: Color(0xFFE50914), size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              "RESET PASSWORD",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 22),
 
                     if (_errorMessage.isNotEmpty) ...[
@@ -413,34 +506,57 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
                       duration: const Duration(milliseconds: 300),
                       transitionBuilder: (child, anim) => FadeTransition(
                           opacity: anim, child: child),
-                      child: _isLogin
-                          ? _buildLoginForm()
-                          : _buildRegisterForm(),
+                      child: _isForgotPassword
+                          ? _buildForgotPasswordForm()
+                          : (_isLogin ? _buildLoginForm() : _buildRegisterForm()),
                     ),
 
                     const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          _isLogin
-                              ? "New to Red App? "
-                              : "Already have an account? ",
-                          style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-                        ),
-                        GestureDetector(
-                          onTap: () => _switchMode(!_isLogin),
-                          child: Text(
-                            _isLogin ? "Create Account" : "Sign In",
-                            style: const TextStyle(
-                              color: Color(0xFFE50914),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                    if (_isForgotPassword)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _isForgotPassword = false;
+                                _errorMessage = '';
+                              });
+                            },
+                            child: const Text(
+                              "← Back to Sign In",
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      )
+                    else
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _isLogin
+                                ? "New to Red App? "
+                                : "Already have an account? ",
+                            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+                          ),
+                          GestureDetector(
+                            onTap: () => _switchMode(!_isLogin),
+                            child: Text(
+                              _isLogin ? "Create Account" : "Sign In",
+                              style: const TextStyle(
+                                color: Color(0xFFE50914),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -466,8 +582,61 @@ class _LoginRegisterScreenState extends State<LoginRegisterScreen>
                   color: Colors.white38, size: 20),
               onPressed: () => setState(() => _obscureLogin = !_obscureLogin),
             )),
-        const SizedBox(height: 26),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerRight,
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                _isForgotPassword = true;
+                _errorMessage = '';
+                if (_loginEmailController.text.trim().isNotEmpty) {
+                  _forgotEmailController.text = _loginEmailController.text.trim();
+                }
+              });
+            },
+            child: const Text(
+              "Forgot Password?",
+              style: TextStyle(
+                color: Color(0xFFE50914),
+                fontWeight: FontWeight.bold,
+                fontSize: 12.5,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
         _buildSubmitButton("SIGN IN", Icons.login_rounded, _handleLogin),
+      ],
+    );
+  }
+
+  Widget _buildForgotPasswordForm() {
+    return Column(
+      key: const ValueKey('forgot_password'),
+      children: [
+        _buildField(_forgotEmailController, "Registered Email Address",
+            Icons.alternate_email_rounded, TextInputType.emailAddress),
+        const SizedBox(height: 14),
+        _buildField(_forgotPassController, "New Password",
+            Icons.lock_rounded, TextInputType.visiblePassword,
+            isObscure: _obscureForgot,
+            suffix: IconButton(
+              icon: Icon(_obscureForgot ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  color: Colors.white38, size: 20),
+              onPressed: () => setState(() => _obscureForgot = !_obscureForgot),
+            )),
+        const SizedBox(height: 14),
+        _buildField(_forgotConfirmPassController, "Confirm New Password",
+            Icons.lock_outline_rounded, TextInputType.visiblePassword,
+            isObscure: _obscureForgotConfirm,
+            suffix: IconButton(
+              icon: Icon(_obscureForgotConfirm ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  color: Colors.white38, size: 20),
+              onPressed: () => setState(() => _obscureForgotConfirm = !_obscureForgotConfirm),
+            )),
+        const SizedBox(height: 24),
+        _buildSubmitButton("RESET PASSWORD & ENTER APP", Icons.check_circle_outline_rounded, _handleForgotPassword),
       ],
     );
   }

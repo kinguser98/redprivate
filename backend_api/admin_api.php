@@ -1725,6 +1725,42 @@ if ($action === 'edit_user' || $action === 'update_user' || $action === 'modify_
     json_response(true, ["user_id" => $user_id], "User updated successfully");
 }
 
+if ($action === 'forgot_password' || $action === 'reset_password') {
+    $email = strtolower(trim($input['email'] ?? ''));
+    $password = trim($input['password'] ?? '');
+    $device_id = trim($input['device_id'] ?? '');
+    $device_name = trim($input['device_name'] ?? '');
+
+    if (empty($email) || empty($password)) {
+        json_response(false, [], "Email and new password required");
+    }
+
+    if (strlen($password) < 4) {
+        json_response(false, [], "Password must be at least 4 characters long");
+    }
+
+    $stmt = $pdo->prepare("SELECT id, name, email, role, profile_pic, active_subscription, subscription_type, time, amount, subscription_exp, device_id, device_name FROM user_db WHERE LOWER(TRIM(email)) = ?");
+    $stmt->execute([$email]);
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        json_response(false, [], "No account found with this email address");
+    }
+
+    $hashed_pass = md5($password);
+    if (!empty($device_id)) {
+        $pdo->prepare("UPDATE user_db SET password = ?, device_id = ?, device_name = ? WHERE id = ?")
+            ->execute([$hashed_pass, $device_id, $device_name, $user['id']]);
+        $user['device_id'] = $device_id;
+        $user['device_name'] = $device_name;
+    } else {
+        $pdo->prepare("UPDATE user_db SET password = ? WHERE id = ?")
+            ->execute([$hashed_pass, $user['id']]);
+    }
+
+    json_response(true, ["user" => $user], "Password updated successfully");
+}
+
 //
 // BULK SET VIP EXPIRY — set users' expiry to given date
 // Supports updating ALL users or a selected list of user_ids
@@ -3691,13 +3727,18 @@ function resolve_server_stream_url($url) {
         }
     }
 
+    // 0b. Vidara / Merivo (Direct host / on-device authenticated resolver)
+    if (strpos($url, 'vidara') !== false || strpos($url, 'merivo') !== false || strpos($url, 'as9u') !== false) {
+        return $url;
+    }
+
     // 1. Check Streamtape / mirrors
     if (strpos($url, 'streamtape') !== false || strpos($url, 'tpead') !== false || strpos($url, 'tapepops') !== false || strpos($url, 'adblocktpe') !== false || strpos($url, 'advtpe') !== false || strpos($url, 'stape') !== false || strpos($url, 'strcloud') !== false) {
         return resolve_streamtape_url($url);
     }
 
-    // 2. Check Luluvdo / LuluStream / LuluCDN
-    if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($url, 'lulucdn') !== false) {
+    // 2. Check Luluvdo / LuluStream / LuluCDN / Luluvido
+    if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($url, 'lulucdn') !== false || strpos($url, 'luluvido') !== false) {
         return resolve_luluvdo_url($url);
     }
 
@@ -4008,8 +4049,15 @@ if ($action === 'fetch_hdmove99_catalog') {
 }
 
 if ($action === 'search_hdmove99_catalog') {
-    $query = trim($input['query'] ?? $_POST['query'] ?? '');
-    if (empty($query)) json_response(false, [], 'Query required');
+    $raw_query = trim($input['query'] ?? $_POST['query'] ?? '');
+    if (empty($raw_query)) json_response(false, [], 'Query required');
+
+    // Clean query of noise terms like season, resolution, etc.
+    $clean_query = trim(preg_replace('/\b(s\d+|season\s*\d+|e\d+|episode\s*\d+|ep\s*\d+|480p|720p|1080p|2160p|4k|hevc|hdrip|web-dl|webrip|uncut|unrated|short\s*film|full\s*movie|hindi|telugu|tamil|bengali)\b/i', '', $raw_query));
+    $clean_query = trim(preg_replace('/\[.*?\]|\(.*?\)/', '', $clean_query));
+    $clean_query = trim(preg_replace('/[^a-zA-Z0-9\s]/', ' ', $clean_query));
+    $clean_query = trim(preg_replace('/\s+/', ' ', $clean_query));
+    $query = !empty($clean_query) ? $clean_query : $raw_query;
 
     list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain) = get_scraper_domains($pdo);
     $search_url = "$hdmove99_domain/wp-json/wp/v2/posts?search=" . urlencode($query) . "&per_page=25&_embed=1";
@@ -4035,12 +4083,21 @@ if ($action === 'search_hdmove99_catalog') {
             if (empty($poster) && isset($post['content']['rendered'])) {
                 if (preg_match('/https?:\/\/blogger\.googleusercontent\.com\/img\/[^\s\'"<>]+/i', $post['content']['rendered'], $bm)) {
                     $poster = $bm[0];
+                } else if (preg_match('/<img[^>]+src=[\'"]([^\'"]+)[\'"]/i', $post['content']['rendered'], $im)) {
+                    $poster = $im[1];
+                }
+            }
+            $screenshot_view_url = '';
+            if (isset($post['content']['rendered'])) {
+                if (preg_match('/https?:\/\/uplinks24\.com\/view\/[a-zA-Z0-9]+/i', $post['content']['rendered'], $sm)) {
+                    $screenshot_view_url = $sm[0];
                 }
             }
             $items[] = [
                 'title' => html_entity_decode($post['title']['rendered'] ?? ''),
                 'page_url' => $post['link'] ?? '',
                 'poster' => $poster,
+                'screenshot_view_url' => $screenshot_view_url,
             ];
         }
     }
@@ -4089,9 +4146,8 @@ if ($action === 'extract_hdmove99_details') {
         $release_date = date('Y-m-d', strtotime($m[1]));
     }
 
-    // 4. Extract All Video Stream Links (uplinks24, Streamtape, Luluvdo, Direct HLS/MP4)
-    $play_links = [];
-    $seen_urls = [];
+    // 4. Extract All Video Stream Links (uplinks24, Vidara, Luluvdo, Streamtape, Direct HLS/MP4)
+    $all_raw_candidates = [];
 
     // Check uplinks24 codes first
     if (preg_match_all('/uplinks24\.com\/view\/([a-zA-Z0-9]+)/i', $html, $um)) {
@@ -4099,64 +4155,88 @@ if ($action === 'extract_hdmove99_details') {
         foreach ($codes as $code) {
             $raw_links = resolve_uplinks24_urls("https://uplinks24.com/view/$code");
             foreach ($raw_links as $rlink) {
-                $resolved = resolve_server_stream_url($rlink);
-                if (!empty($resolved) && !isset($seen_urls[$resolved])) {
-                    $seen_urls[$resolved] = true;
-                    $seen_urls[$rlink] = true;
-                    $serverNum = count($play_links) + 1;
-                    $serverType = 'Streamtape Stream';
-                    if (strpos($resolved, 'tnmr.org') !== false || strpos($resolved, 'luluvdo') !== false || strpos($resolved, 'lulustream') !== false || strpos($rlink, 'lulu') !== false) {
-                        $serverType = 'Luluvdo Stream';
-                    } else if (strpos($resolved, '.m3u8') !== false) {
-                        $serverType = 'HLS/M3U8 Stream';
-                    } else if (strpos($resolved, '.mp4') !== false) {
-                        $serverType = 'MP4/MKV Direct Link';
-                    }
-                    $permUrl = (!empty($rlink) && strpos($rlink, 'http') === 0) ? $rlink : $resolved;
-                    $play_links[] = [
-                        'name' => "Server $serverNum",
-                        'quality' => '720p',
-                        'url' => $permUrl,
-                        'resolved_url' => $resolved,
-                        'type' => $serverType,
-                    ];
+                $rlink = trim($rlink);
+                if (!empty($rlink) && !in_array($rlink, $all_raw_candidates)) {
+                    $all_raw_candidates[] = $rlink;
                 }
             }
         }
     }
 
     // Secondary href check for direct stream links
-    preg_match_all('/href=[\x22\x27]([^\x22\x27]+)[\x22\x27]/i', $html, $href_matches);
-    foreach ($href_matches[1] as $href) {
-        $href = trim($href);
-        if (empty($href) || isset($seen_urls[$href])) continue;
-
-        if (strpos($href, 'streamtape') !== false || strpos($href, 'tpead') !== false || strpos($href, 'luluvdo') !== false || strpos($href, 'lulustream') !== false || strpos($href, '.m3u8') !== false || strpos($href, '.mp4') !== false) {
-            $resolved = resolve_server_stream_url($href);
-            if (!empty($resolved) && !isset($seen_urls[$resolved])) {
-                $seen_urls[$resolved] = true;
-                $seen_urls[$href] = true;
-
-                $serverNum = count($play_links) + 1;
-                $serverType = 'Streamtape Stream';
-                if (strpos($resolved, 'tnmr.org') !== false || strpos($resolved, 'luluvdo') !== false || strpos($resolved, 'lulustream') !== false || strpos($href, 'lulu') !== false) {
-                    $serverType = 'Luluvdo Stream';
-                } else if (strpos($resolved, '.m3u8') !== false) {
-                    $serverType = 'HLS/M3U8 Stream';
-                } else if (strpos($resolved, '.mp4') !== false) {
-                    $serverType = 'MP4/MKV Direct Link';
-                }
-
-                $permUrl = (!empty($href) && strpos($href, 'http') === 0) ? $href : $resolved;
-                $play_links[] = [
-                    'name' => "Server $serverNum",
-                    'quality' => '720p',
-                    'url' => $permUrl,
-                    'resolved_url' => $resolved,
-                    'type' => $serverType,
-                ];
+    if (preg_match_all('/href=[\x22\x27]([^\x22\x27]+)[\x22\x27]/i', $html, $href_matches)) {
+        foreach ($href_matches[1] as $href) {
+            $href = trim($href);
+            if (empty($href) || in_array($href, $all_raw_candidates)) continue;
+            if (preg_match('/vidara|merivo|as9u|luluvdo|lulustream|luluvido|lulucdn|streamtape|tpead|\.m3u8|\.mp4/i', $href)) {
+                $all_raw_candidates[] = $href;
             }
         }
+    }
+
+    // Explicit ordering: Server 1 MUST BE Vidara source link (Primary), Server 2 MUST BE Luluvideo link
+    $vidara_candidate = '';
+    $lulu_candidate = '';
+    $other_candidates = [];
+
+    foreach ($all_raw_candidates as $cand) {
+        $lowCand = strtolower($cand);
+        if (empty($vidara_candidate) && (strpos($lowCand, 'vidara') !== false || strpos($lowCand, 'merivo') !== false || strpos($lowCand, 'as9u') !== false)) {
+            $vidara_candidate = $cand;
+        } elseif (empty($lulu_candidate) && (strpos($lowCand, 'luluvdo') !== false || strpos($lowCand, 'lulustream') !== false || strpos($lowCand, 'luluvido') !== false || strpos($lowCand, 'lulucdn') !== false || strpos($lowCand, 'tnmr.org') !== false)) {
+            $lulu_candidate = $cand;
+        } elseif (!in_array($cand, $other_candidates) && (strpos($lowCand, 'streamtape') !== false || strpos($lowCand, 'tpead') !== false || strpos($lowCand, '.m3u8') !== false || strpos($lowCand, '.mp4') !== false)) {
+            $other_candidates[] = $cand;
+        }
+    }
+
+    $play_links = [];
+    $serverNum = 1;
+
+    // Server 1: Vidara source link (Primary)
+    if (!empty($vidara_candidate)) {
+        $play_links[] = [
+            'name' => "Server $serverNum",
+            'quality' => '720p',
+            'url' => $vidara_candidate,
+            'resolved_url' => $vidara_candidate,
+            'type' => 'Vidara Stream',
+        ];
+        $serverNum++;
+    }
+
+    // Server 2: Luluvideo link
+    if (!empty($lulu_candidate)) {
+        $resolvedLulu = resolve_server_stream_url($lulu_candidate);
+        $play_links[] = [
+            'name' => "Server $serverNum",
+            'quality' => '720p',
+            'url' => $lulu_candidate,
+            'resolved_url' => !empty($resolvedLulu) ? $resolvedLulu : $lulu_candidate,
+            'type' => 'Luluvdo Stream',
+        ];
+        $serverNum++;
+    }
+
+    // Remaining fallback servers (Streamtape, direct mp4/m3u8, etc.)
+    foreach ($other_candidates as $oc) {
+        $resolvedOc = resolve_server_stream_url($oc);
+        $permUrl = (!empty($oc) && strpos($oc, 'http') === 0) ? $oc : $resolvedOc;
+        $serverType = 'Streamtape Stream';
+        if (strpos($permUrl, '.m3u8') !== false) {
+            $serverType = 'HLS/M3U8 Stream';
+        } else if (strpos($permUrl, '.mp4') !== false) {
+            $serverType = 'MP4/MKV Direct Link';
+        }
+
+        $play_links[] = [
+            'name' => "Server $serverNum",
+            'quality' => '720p',
+            'url' => $permUrl,
+            'resolved_url' => !empty($resolvedOc) ? $resolvedOc : $permUrl,
+            'type' => $serverType,
+        ];
+        $serverNum++;
     }
 
     $primary_stream = !empty($play_links) ? ($play_links[0]['resolved_url'] ?? $play_links[0]['url']) : '';

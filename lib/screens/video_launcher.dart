@@ -4,6 +4,7 @@ import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/aagmaal_resolver.dart';
 import '../services/streamtape_service.dart';
+import '../services/dropmms_service.dart';
 import '../services/embed_resolver.dart';
 import '../services/luluvdo_resolver.dart';
 import '../services/xhamster_resolver.dart';
@@ -96,6 +97,12 @@ Future<void> playVideo(
       }
     } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
       finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
+    } else if (lowerRaw.contains('vidara') || lowerRaw.contains('merivo') || lowerRaw.contains('as9u')) {
+      // Vidara / Merivo — resolve to direct CDN stream URL
+      final resolved = await DropmmsService.resolveDirectStream(rawUrl);
+      if (resolved != null && resolved.isNotEmpty && resolved.startsWith('http')) {
+        finalUrl = resolved;
+      }
     } else if (lowerRaw.contains('playmate')) {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
@@ -200,6 +207,9 @@ Future<void> playVideo(
     } else if (lowerFinal.contains('skymovies') || lowerFinal.contains('skymovieshd')) {
       effectiveHeaders['Referer'] = 'https://skymovieshd.ceo/';
       effectiveHeaders['Origin'] = 'https://skymovieshd.ceo';
+    } else if (lowerFinal.contains('merivo') || lowerFinal.contains('vidara')) {
+      effectiveHeaders['Referer'] = 'https://vidara.so/';
+      effectiveHeaders['Origin'] = 'https://vidara.so';
     }
 
     Navigator.push(
