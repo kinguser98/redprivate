@@ -10,6 +10,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../services/streamtape_service.dart';
 import '../services/aagmaal_resolver.dart';
 import '../services/uffmaal_scraper.dart';
+import '../services/filemoon_resolver.dart';
+import '../services/luluvdo_resolver.dart';
+import '../services/dropmms_service.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/hls_quality_parser.dart';
@@ -42,6 +45,71 @@ class VideoPlayerScreen extends StatefulWidget {
   final Map<String, String>? headers;
   final List<Map<String, dynamic>>? playlist;
   final int initialEpisodeIndex;
+
+  /// Universal stream resolver: converts raw embed links (Streamtape, Filemoon, Cdntelly, Pixeldrain, Vidara, Uffmaal)
+  /// into playable .m3u8 / .mp4 streams directly on-device with matching tokens.
+  static Future<String> resolveToPlayableStream(String url, {bool forceRefresh = false}) async {
+    String playUrl = url.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+    if (playUrl.isEmpty) return playUrl;
+
+    final lower = playUrl.toLowerCase();
+
+    // Already direct media that requires no host resolution
+    if ((lower.endsWith('.mp4') || lower.endsWith('.m3u8')) &&
+        !lower.contains('streamtape') &&
+        !lower.contains('bysezoxexe') &&
+        !lower.contains('filemoon') &&
+        !lower.contains('cdntelly') &&
+        !lower.contains('luluvdo')) {
+      return playUrl;
+    }
+
+    // Pixeldrain /u/ -> direct API file URL
+    if (lower.contains('pixeldrain.com/u/')) {
+      final id = playUrl.split('/u/').last.split('?').first.split('/').first;
+      if (id.isNotEmpty) return 'https://pixeldrain.com/api/file/$id';
+    }
+
+    // Streamtape family
+    if (StreamtapeService.isStreamtapeFamily(playUrl) &&
+        !playUrl.contains('tapecontent.net') &&
+        !playUrl.contains('get_video') &&
+        !playUrl.contains('/ep?u=')) {
+      final resolved = await StreamtapeService.getDirectStreamUrl(playUrl, forceRefresh: forceRefresh);
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+    }
+
+    // Filemoon / Byse
+    if (FilemoonResolver.isFilemoonUrl(playUrl)) {
+      final resolved = await FilemoonResolver.resolveStream(playUrl, forceRefresh: forceRefresh);
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+    }
+
+    // Cdntelly / LuluStream / Luluvdo
+    if (lower.contains('cdntelly') || lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('lulucdn')) {
+      final resolved = await LuluvdoResolver.resolveOnDevice(playUrl, forceRefresh: forceRefresh);
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+    }
+
+    // Vidara / Merivo
+    if (lower.contains('vidara') || lower.contains('merivo') || lower.contains('as9u')) {
+      final resolved = await DropmmsService.resolveDirectStream(playUrl);
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+    }
+
+    // Aagmaal / Uffmaal
+    if (lower.contains('uffmaal') || lower.contains('azmaal') || lower.contains('bmaal') || lower.contains('pmaal')) {
+      final d = await UffmaalScraper.fetchUffmaalStreamAndPoster(playUrl);
+      if (d.isNotEmpty && (d['stream_url'] ?? '').toString().isNotEmpty) {
+        return d['stream_url'].toString().replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
+      }
+    } else if (AagmaalResolver.isAagmaalUrl(playUrl)) {
+      final resolved = await AagmaalResolver.resolveStream(playUrl);
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+    }
+
+    return playUrl;
+  }
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -169,23 +237,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     if (mounted) setState(() => _timeString = '$h:$m $amPm');
   }
 
-  Future<void> _open() async {
+  Future<void> _open({Duration? targetPosition}) async {
     try {
       String playUrl = _currentVideoUrl.isNotEmpty ? _currentVideoUrl : widget.videoUrl;
 
       // 1. Clean HTML entity encoding in stream URLs (e.g. &#038; -> &)
       playUrl = playUrl.replaceAll('&#038;', '&').replaceAll('&amp;', '&').trim();
 
-      // 2. If playUrl is an un-resolved Streamtape web page, resolve it first!
-      if (StreamtapeService.isStreamtapeFamily(playUrl) &&
-          !playUrl.contains('tapecontent.net') &&
-          !playUrl.contains('get_video') &&
-          !playUrl.contains('/ep?u=')) {
-        final resolved = await StreamtapeService.getDirectStreamUrl(playUrl);
-        if (resolved != null && resolved.isNotEmpty) {
-          playUrl = resolved;
-        }
-      }
+      // 2. Resolve raw embed/host URLs on-device if not already a direct stream
+      playUrl = await VideoPlayerScreen.resolveToPlayableStream(playUrl);
 
       // 3. Remove fragment #video.mp4
       if (playUrl.contains('#')) {
@@ -199,7 +259,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         playUrl += playUrl.contains('?') ? '&stream=1' : '?stream=1';
       }
 
-      // 5. DNS-poisoned hosts streamed through local DoH forwarder
+      // 5. Fix URL encoding: If URL contains raw spaces or already partially encoded characters,
+      // decode once and properly encode Full URI so ExoPlayer doesn't reject or double-encode.
+      try {
+        final decoded = Uri.decodeFull(playUrl);
+        playUrl = Uri.encodeFull(decoded);
+      } catch (_) {}
+
+      // 6. DNS-poisoned hosts streamed through local DoH forwarder (MUST run AFTER URL encoding fix
+      // so encoded query parameters inside u= are preserved and not broken by decodeFull)
       final proxied = mediaForwardUrlIfNeeded(playUrl);
       if (proxied != null) {
         playUrl = proxied;
@@ -228,9 +296,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       } else if (lowerUrl.contains('skymovies') || lowerUrl.contains('skymovieshd')) {
         referer = 'https://skymovieshd.ceo/';
         origin = 'https://skymovieshd.ceo';
-      } else if (lowerUrl.contains('tnmr.org') || lowerUrl.contains('luluvdo') || lowerUrl.contains('lulustream') || lowerUrl.contains('lulucdn')) {
-        referer = 'https://luluvdo.com/';
-        origin = 'https://luluvdo.com';
+      } else if (lowerUrl.contains('cdntelly')) {
+        referer = 'https://cdntelly.sbs/';
+        origin = 'https://cdntelly.sbs';
+      } else if (lowerUrl.contains('tnmr.org') || lowerUrl.contains('cdn-tnmr.org') || lowerUrl.contains('.tnmr.') || lowerUrl.contains('luluvdo') || lowerUrl.contains('lulustream') || lowerUrl.contains('lulucdn')) {
+        referer = 'https://cdntelly.sbs/';
+        origin = 'https://cdntelly.sbs';
+      } else if (lowerUrl.contains('sprintcdn') || lowerUrl.contains('owphbf24') || lowerUrl.contains('filemoon') || lowerUrl.contains('bysezoxexe')) {
+        referer = 'https://bysezoxexe.com/';
+        origin = 'https://bysezoxexe.com';
+      } else if (lowerUrl.contains('pixeldrain')) {
+        referer = 'https://pixeldrain.com/';
+      } else if (lowerUrl.contains('merivo') || lowerUrl.contains('vidara')) {
+        referer = 'https://merivo.fit/';
+        origin = 'https://merivo.fit';
       } else if (lowerUrl.contains('xhamster') || lowerUrl.contains('xhvid') || lowerUrl.contains('xh.video') || lowerUrl.contains('xhcdn')) {
         referer = 'https://xhamster.com/';
         origin = 'https://xhamster.com';
@@ -242,9 +321,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         'Referer': referer,
         'Accept': '*/*',
         'Connection': 'keep-alive',
-        // CRITICAL FOR AVPLAYER SEEKING: Do not request gzip/deflate on video streams!
+        // CRITICAL FOR EXOPLAYER SEEKING: Do not request gzip/deflate on video streams!
         // When gzip is sent, CDNs and Nginx disable Range/206 partial responses,
-        // forcing AVPlayer to stream sequentially from byte 0 and causing slow/sluggish seeking.
+        // causing ExoPlayer seek requests to crash with InvalidResponseCodeException or stream error.
         'Accept-Encoding': 'identity',
       };
       if (origin != null) {
@@ -261,39 +340,82 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           playUrl.startsWith('/') ||
           playUrl.startsWith('file://');
 
+      _controller?.removeListener(_onControllerUpdated);
+      try {
+        await _controller?.pause();
+      } catch (_) {}
+      await _controller?.dispose();
+      _controller = null;
+
       if (isLocal) {
         final cleanPath = playUrl.startsWith('file://') ? playUrl.substring(7) : playUrl;
         _controller = VideoPlayerController.file(File(cleanPath));
       } else {
-        final sanitizedUrl = Uri.encodeFull(Uri.decodeFull(playUrl));
         _controller = VideoPlayerController.networkUrl(
-          Uri.parse(sanitizedUrl),
+          Uri.parse(playUrl),
           httpHeaders: playHeaders,
         );
       }
 
       _controller!.addListener(_onControllerUpdated);
-      await _controller!.initialize();
-
-      // Check saved progress
-      int seekToMs = 0;
-      final savedMs = await _getSavedProgress();
-      if (savedMs > 10000) {
-        if (widget.resumeDirectly) {
-          seekToMs = savedMs;
-        } else if (mounted) {
-          final resume = await _showResumeDialog(savedMs);
-          if (resume == true) {
-            seekToMs = savedMs;
+      try {
+        await _controller!.initialize();
+      } catch (e) {
+        final isSt = StreamtapeService.isStreamtapeFamily(widget.videoUrl) ||
+            StreamtapeService.isStreamtapeFamily(playUrl) ||
+            playUrl.contains('get_video') ||
+            playUrl.contains('tapecontent');
+        if (isSt) {
+          debugPrint("Streamtape initial playback error ($e), attempting fresh resolve...");
+          final fresh = await StreamtapeService.getDirectStreamUrl(
+            widget.videoUrl.isNotEmpty ? widget.videoUrl : playUrl,
+            forceRefresh: true,
+          );
+          if (fresh != null && fresh.isNotEmpty && fresh != playUrl) {
+            playUrl = fresh;
+            _controller?.removeListener(_onControllerUpdated);
+            await _controller?.dispose();
+            _controller = VideoPlayerController.networkUrl(
+              Uri.parse(playUrl),
+              httpHeaders: playHeaders,
+            );
+            _controller!.addListener(_onControllerUpdated);
+            await _controller!.initialize();
           } else {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setInt('progress_${widget.movieId}', 0);
+            rethrow;
+          }
+        } else {
+          rethrow;
+        }
+      }
+
+      // Determine initial seek position
+      int seekToMs = 0;
+      if (targetPosition != null && targetPosition > Duration.zero) {
+        seekToMs = targetPosition.inMilliseconds;
+      } else {
+        final savedMs = await _getSavedProgress();
+        if (savedMs > 10000) {
+          if (widget.resumeDirectly) {
+            seekToMs = savedMs;
+          } else if (mounted) {
+            final resume = await _showResumeDialog(savedMs);
+            if (resume == true) {
+              seekToMs = savedMs;
+            } else {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt('progress_${widget.movieId}', 0);
+            }
           }
         }
       }
 
       if (seekToMs > 0) {
-        await _controller!.seekTo(Duration(milliseconds: seekToMs));
+        try {
+          await _controller!.seekTo(Duration(milliseconds: seekToMs));
+        } catch (e) {
+          debugPrint("Initial seek exception ignored: $e");
+        }
       }
 
       await _controller!.play();
@@ -308,12 +430,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
     } catch (e) {
       debugPrint("VideoPlayer initialization exception: $e");
-      // Auto-Recovery: If S3 presigned token expired or 403 occurred, try refreshing live stream once
+      // Auto-Recovery: Try refreshing live stream or retry once
       if (!_hasRetriedRefresh) {
         _hasRetriedRefresh = true;
         final refreshed = await _attemptDynamicRefresh();
         if (refreshed && mounted) {
-          await _open();
+          await _open(targetPosition: targetPosition);
           return;
         }
       }
@@ -339,6 +461,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         targetPageUrl = widget.videoUrl.trim();
       }
 
+      final fresh = await VideoPlayerScreen.resolveToPlayableStream(targetPageUrl, forceRefresh: true);
+      if (fresh.isNotEmpty && fresh != _currentVideoUrl) {
+        _currentVideoUrl = fresh;
+        return true;
+      }
+
       final lowerPage = targetPageUrl.toLowerCase();
       if (lowerPage.contains('uffmaal') || lowerPage.contains('azmaal') || lowerPage.contains('bmaal') || lowerPage.contains('pmaal') || _currentVideoUrl.toLowerCase().contains('bmaal') || _currentVideoUrl.toLowerCase().contains('azmaal') || _currentVideoUrl.toLowerCase().contains('uffmaal')) {
         final d = await UffmaalScraper.fetchUffmaalStreamAndPoster(targetPageUrl);
@@ -360,18 +488,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
     if (value.hasError) {
       // If error occurs during seek scrubbing, do not immediately fail!
+      // Transient socket resets on rapid range seeks can be recovered by re-seeking or re-opening.
       if (_isSeeking) {
         debugPrint("Playback error detected while seeking: ${value.errorDescription}");
         return;
       }
+
       if (!_hasRetriedRefresh) {
         _hasRetriedRefresh = true;
         _attemptDynamicRefresh().then((refreshed) {
           if (refreshed && mounted) {
-            _open();
+            _open(targetPosition: _position);
           } else if (mounted) {
-            setState(() {
-              _hasPlaybackError = value.errorDescription ?? 'Playback error';
+            // One-time self-recovery without page refresh: re-open at current position
+            _open(targetPosition: _position).catchError((_) {
+              if (mounted) {
+                setState(() {
+                  _hasPlaybackError = value.errorDescription ?? 'Playback error';
+                });
+              }
             });
           }
         });
@@ -385,8 +520,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     if (_isSeeking) {
-      // While seeking or waiting for AVPlayer to buffer at new target position,
-      // prevent AVPlayer's lagging position from overwriting our target seek position!
+      // While seeking or waiting for player buffer to settle at new target position,
+      // prevent player's lagging position from overwriting our target seek position!
       setState(() {
         _duration = value.duration;
         _playing = value.isPlaying;
@@ -444,15 +579,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _controller = null;
 
     try {
-      if (AagmaalResolver.isAagmaalUrl(rawUrl)) {
-        final resolved = await AagmaalResolver.resolveStream(rawUrl);
-        if (resolved != null && resolved.isNotEmpty) rawUrl = resolved;
-      } else if (StreamtapeService.isStreamtapeFamily(rawUrl) &&
-          !rawUrl.contains('tapecontent.net') &&
-          !rawUrl.contains('get_video')) {
-        final resolved = await StreamtapeService.getDirectStreamUrl(rawUrl);
-        if (resolved != null && resolved.isNotEmpty) rawUrl = resolved;
-      }
+      rawUrl = await VideoPlayerScreen.resolveToPlayableStream(rawUrl);
 
       _currentVideoUrl = rawUrl;
       _qualities = null;
@@ -801,14 +928,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _controller?.removeListener(_onControllerUpdated);
     await _controller?.dispose();
 
+    final lowerTarget = qUrl.toLowerCase();
     String referer = 'https://streamtape.com/';
     String? origin;
-    if (qUrl.contains('ixifile') || qUrl.contains('uncutmasti')) {
+    if (lowerTarget.contains('hdmaal') || lowerTarget.contains('maalcdn')) {
+      referer = 'https://hdmaal.gg/';
+      origin = 'https://hdmaal.gg';
+    } else if (lowerTarget.contains('maal') || lowerTarget.contains('uffmaal') || lowerTarget.contains('azmaal') || lowerTarget.contains('bmaal') || lowerTarget.contains('pmaal')) {
+      referer = 'https://uffmaal.com/';
+      origin = 'https://uffmaal.com';
+    } else if (lowerTarget.contains('ixifile') || lowerTarget.contains('uncutmasti')) {
       referer = 'https://uncutmasti.com/';
-    } else if (qUrl.contains('tnmr.org') || qUrl.contains('luluvdo') || qUrl.contains('lulustream') || qUrl.contains('lulucdn')) {
+      origin = 'https://uncutmasti.com';
+    } else if (lowerTarget.contains('tnmr.org') || lowerTarget.contains('luluvdo') || lowerTarget.contains('lulustream') || lowerTarget.contains('lulucdn')) {
       referer = 'https://luluvdo.com/';
       origin = 'https://luluvdo.com';
-    } else if (qUrl.contains('xhamster') || qUrl.contains('xhvid') || qUrl.contains('xh.video') || qUrl.contains('xhcdn')) {
+    } else if (lowerTarget.contains('xhamster') || lowerTarget.contains('xhvid') || lowerTarget.contains('xh.video') || lowerTarget.contains('xhcdn')) {
       referer = 'https://xhamster.com/';
       origin = 'https://xhamster.com';
     }
@@ -831,9 +966,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
     });
 
+    try {
+      final decoded = Uri.decodeFull(qUrl);
+      qUrl = Uri.encodeFull(decoded);
+    } catch (_) {}
+
     // DNS-poisoned hosts stream through the local DoH proxy.
-    final sanitizedUrl = Uri.encodeFull(Uri.decodeFull(qUrl));
-    final playTarget = mediaForwardUrlIfNeeded(sanitizedUrl) ?? sanitizedUrl;
+    String playTarget = mediaForwardUrlIfNeeded(qUrl) ?? qUrl;
+
     _controller = VideoPlayerController.networkUrl(
       Uri.parse(playTarget),
       httpHeaders: playHeaders,
@@ -1088,11 +1228,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   void _seekTo(double fraction) {
     if (_duration <= Duration.zero || _controller == null) return;
     final target = Duration(milliseconds: (_duration.inMilliseconds * fraction).toInt());
-    setState(() {
-      _isSeeking = true;
-      _position = target;
-      _dragValue = fraction;
-    });
     _seekToAbsolute(target);
   }
 
@@ -1839,7 +1974,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                             });
                           },
                           onChangeEnd: (val) {
-                            _seekTo(val);
+                            final target = Duration(
+                                milliseconds: (_duration.inMilliseconds * val).toInt());
+                            setState(() {
+                              _isSeeking = true;
+                              _position = target;
+                              _dragValue = val;
+                            });
+                            _seekToAbsolute(target);
                           },
                         ),
                       ),

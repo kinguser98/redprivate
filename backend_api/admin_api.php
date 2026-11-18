@@ -4336,7 +4336,7 @@ if ($action === 'extract_hdmove99_details') {
         $serverNum++;
     }
 
-    $primary_stream = !empty($play_links) ? ($play_links[0]['resolved_url'] ?? $play_links[0]['url']) : '';
+    $primary_stream = !empty($play_links) ? ($play_links[0]['url']) : '';
     $hosted_poster = !empty($poster) ? download_and_host_image($poster) : '';
 
     json_response(true, [
@@ -4377,43 +4377,52 @@ if ($action === 'fetch_tellyhd_catalog') {
 
     $items = [];
     if (!empty($html)) {
-        if (preg_match_all('/<article[^>]*id=["\x27]post-(\d+)["\x27][^>]*>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $m) {
-                $art_content = $m[2];
-                $url = '';
-                if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
-                    $url = $um[1];
-                }
-                if (empty($url) || strpos($url, '/movies/') === false) continue;
-
-                $title = '';
-                if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
-                    $title = trim(strip_tags($tm[1]));
-                } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
-                    $title = trim($tm[1]);
-                } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
-                    $title = trim(strip_tags($tm[1]));
-                }
-
-                $poster = '';
-                if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
-                    $poster = $pm[1];
-                }
-
-                $year = '';
-                if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
-                    $year = $ym[1];
-                }
-
-                $items[] = [
-                    'id' => $m[1],
-                    'title' => html_entity_decode($title),
-                    'page_url' => $url,
-                    'poster' => $poster,
-                    'year' => $year,
-                    'date' => $year,
-                ];
+        $raw_blocks = [];
+        if (preg_match_all('/<div class=["\x27]result-item["\x27]>(.*?)<\/div>\s*<\/div>\s*<\/article>/is', $html, $r_matches, PREG_SET_ORDER)) {
+            foreach ($r_matches as $rm) {
+                $raw_blocks[] = $rm[1];
             }
+        } else if (preg_match_all('/<article([^>]*)>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                if (strpos($m[1], 'w_item') !== false) continue; // skip sidebar trending widgets
+                $raw_blocks[] = $m[2];
+            }
+        }
+
+        foreach ($raw_blocks as $art_content) {
+            $url = '';
+            if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
+                $url = $um[1];
+            }
+            if (empty($url) || (strpos($url, '/movies/') === false && strpos($url, '/tvshows/') === false)) continue;
+
+            $title = '';
+            if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
+                $title = trim(strip_tags($tm[1]));
+            } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
+                $title = trim($tm[1]);
+            } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
+                $title = trim(strip_tags($tm[1]));
+            }
+
+            $poster = '';
+            if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
+                $poster = $pm[1];
+            }
+
+            $year = '';
+            if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
+                $year = $ym[1];
+            }
+
+            $items[] = [
+                'id' => md5($url),
+                'title' => html_entity_decode($title),
+                'page_url' => $url,
+                'poster' => $poster,
+                'year' => $year,
+                'date' => $year,
+            ];
         }
     }
 
@@ -4440,43 +4449,52 @@ if ($action === 'search_tellyhd_catalog') {
 
     $items = [];
     if (!empty($html)) {
-        if (preg_match_all('/<article[^>]*id=["\x27]post-(\d+)["\x27][^>]*>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $m) {
-                $art_content = $m[2];
-                $url = '';
-                if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
-                    $url = $um[1];
-                }
-                if (empty($url) || strpos($url, '/movies/') === false) continue;
-
-                $title = '';
-                if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
-                    $title = trim(strip_tags($tm[1]));
-                } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
-                    $title = trim($tm[1]);
-                } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
-                    $title = trim(strip_tags($tm[1]));
-                }
-
-                $poster = '';
-                if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
-                    $poster = $pm[1];
-                }
-
-                $year = '';
-                if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
-                    $year = $ym[1];
-                }
-
-                $items[] = [
-                    'id' => $m[1],
-                    'title' => html_entity_decode($title),
-                    'page_url' => $url,
-                    'poster' => $poster,
-                    'year' => $year,
-                    'date' => $year,
-                ];
+        $raw_blocks = [];
+        if (preg_match_all('/<div class=["\x27]result-item["\x27]>(.*?)<\/div>\s*<\/div>\s*<\/article>/is', $html, $r_matches, PREG_SET_ORDER)) {
+            foreach ($r_matches as $rm) {
+                $raw_blocks[] = $rm[1];
             }
+        } else if (preg_match_all('/<article([^>]*)>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                if (strpos($m[1], 'w_item') !== false) continue; // skip sidebar trending widgets
+                $raw_blocks[] = $m[2];
+            }
+        }
+
+        foreach ($raw_blocks as $art_content) {
+            $url = '';
+            if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
+                $url = $um[1];
+            }
+            if (empty($url) || (strpos($url, '/movies/') === false && strpos($url, '/tvshows/') === false)) continue;
+
+            $title = '';
+            if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
+                $title = trim(strip_tags($tm[1]));
+            } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
+                $title = trim($tm[1]);
+            } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
+                $title = trim(strip_tags($tm[1]));
+            }
+
+            $poster = '';
+            if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
+                $poster = $pm[1];
+            }
+
+            $year = '';
+            if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
+                $year = $ym[1];
+            }
+
+            $items[] = [
+                'id' => md5($url),
+                'title' => html_entity_decode($title),
+                'page_url' => $url,
+                'poster' => $poster,
+                'year' => $year,
+                'date' => $year,
+            ];
         }
     }
 
@@ -4651,7 +4669,7 @@ if ($action === 'extract_tellyhd_details') {
         $sNum++;
     }
 
-    $primary_stream = !empty($play_links) ? ($play_links[0]['resolved_url'] ?? $play_links[0]['url']) : '';
+    $primary_stream = !empty($play_links) ? ($play_links[0]['url']) : '';
     $hosted_poster = !empty($poster) ? download_and_host_image($poster) : '';
 
     json_response(true, [

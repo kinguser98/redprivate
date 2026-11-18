@@ -118,12 +118,6 @@ class CustomDnsProxy {
         '104.18.21.12',
       ];
     }
-    if (cleanHost.contains('streamtape') ||
-        cleanHost.contains('tapecontent') ||
-        cleanHost.contains('strcloud') ||
-        cleanHost.contains('stape')) {
-      return ['104.26.1.182', '104.26.2.182'];
-    }
     if (cleanHost.contains('luluvdo') ||
         cleanHost.contains('lulustream') ||
         cleanHost.contains('lulucdn')) {
@@ -149,9 +143,23 @@ class CustomDnsProxy {
         cleanHost.contains('aagmaal') ||
         cleanHost.contains('hdmaal') ||
         cleanHost.contains('uffmaal') ||
+        cleanHost.contains('streamtape') ||
+        cleanHost.contains('tapecontent') ||
+        cleanHost.contains('strcloud') ||
+        cleanHost.contains('stape') ||
+        cleanHost.contains('streamta.pe') ||
+        cleanHost.contains('adblocktape') ||
+        cleanHost.contains('advtpe') ||
+        cleanHost.contains('tpead') ||
+        cleanHost.contains('shavetape') ||
+        cleanHost.contains('tapepops') ||
         cleanHost.contains('tellyhd') ||
         cleanHost.contains('dotelly') ||
         cleanHost.contains('cdntelly') ||
+        cleanHost.contains('filemoon') ||
+        cleanHost.contains('bysezoxexe') ||
+        cleanHost.contains('sprintcdn') ||
+        cleanHost.contains('owphbf24') ||
         cleanHost.contains('pixeldrain');
 
     final List<String> ips = [];
@@ -210,8 +218,9 @@ class CustomDnsProxy {
           final answers = data['Answer'] as List?;
           if (answers != null) {
             for (final ans in answers) {
-              if (ans['data'] != null && !ans['data'].toString().contains(':')) {
-                ips.add(ans['data'].toString());
+              final ipStr = ans['data']?.toString().trim();
+              if (ipStr != null && InternetAddress.tryParse(ipStr) != null) {
+                ips.add(ipStr);
               }
             }
           }
@@ -400,12 +409,34 @@ class CustomDnsProxy {
         await request.response.close();
         return;
       }
-      final referer = request.uri.queryParameters['r'] ?? 'https://dropmms.co/';
+      String referer = request.uri.queryParameters['r'] ?? '';
+      final lowerTarget = target.toLowerCase();
+      if (referer.isEmpty || referer == 'https://dropmms.co/') {
+        if (lowerTarget.contains('tnmr') || lowerTarget.contains('luluvdo') || lowerTarget.contains('lulustream') || lowerTarget.contains('cdntelly')) {
+          referer = 'https://cdntelly.sbs/';
+        } else if (lowerTarget.contains('sprintcdn') || lowerTarget.contains('owphbf24') || lowerTarget.contains('filemoon') || lowerTarget.contains('bysezoxexe')) {
+          referer = 'https://bysezoxexe.com/';
+        } else if (lowerTarget.contains('pixeldrain')) {
+          referer = 'https://pixeldrain.com/';
+        } else if (lowerTarget.contains('streamtape') || lowerTarget.contains('tapecontent') || lowerTarget.contains('strcloud')) {
+          referer = 'https://streamtape.com/';
+        } else if (lowerTarget.contains('vidara') || lowerTarget.contains('merivo')) {
+          referer = 'https://merivo.fit/';
+        } else {
+          referer = 'https://dropmms.co/';
+        }
+      }
 
       final req = await client.getUrl(Uri.parse(target));
       req.followRedirects = true;
       req.headers.set('User-Agent', _mediaUa);
       req.headers.set('Referer', referer);
+      try {
+        final rUri = Uri.parse(referer);
+        req.headers.set('Origin', '${rUri.scheme}://${rUri.host}');
+      } catch (_) {
+        req.headers.set('Origin', referer);
+      }
       req.headers.set('Accept', '*/*');
       req.headers.set('Connection', 'close');
       req.headers.set('Accept-Encoding', 'identity');
@@ -524,22 +555,23 @@ String? mediaForwardUrlIfNeeded(String url) {
       lower.contains('surrit') ||
       lower.contains('tnmr.org') ||
       lower.contains('cdn-tnmr.org') ||
+      lower.contains('.tnmr.') ||
       lower.contains('luluvdo') ||
       lower.contains('lulustream') ||
       lower.contains('lulucdn') ||
+      lower.contains('cdntelly') ||
       lower.contains('merivo') ||
       lower.contains('vidara') ||
       lower.contains('playmate') ||
       lower.contains('vibevdo') ||
       lower.contains('vidsonic') ||
       lower.contains('pixeldrain') ||
-      lower.contains('cdntelly') ||
+      lower.contains('filemoon') ||
+      lower.contains('bysezoxexe') ||
+      lower.contains('sprintcdn') ||
+      lower.contains('owphbf24') ||
       lower.contains('tellyhd') ||
       lower.contains('dotelly') ||
-      lower.contains('streamtape') ||
-      lower.contains('tapecontent') ||
-      lower.contains('strcloud') ||
-      lower.contains('stape') ||
       lower.contains('dropmms') ||
       lower.contains('imagetwist');
 
@@ -559,8 +591,12 @@ String? mediaForwardUrlIfNeeded(String url) {
     referer = 'https://aagmaal.mba/';
   } else if (lower.contains('hdmove99')) {
     referer = 'https://hdmove99.com/';
+  } else if (lower.contains('cdntelly')) {
+    referer = 'https://cdntelly.sbs/';
   } else if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('tnmr.org') || lower.contains('cdn-tnmr.org') || lower.contains('lulucdn')) {
-    referer = 'https://luluvdo.com/';
+    referer = 'https://cdntelly.sbs/';
+  } else if (lower.contains('filemoon') || lower.contains('bysezoxexe') || lower.contains('sprintcdn') || lower.contains('owphbf24')) {
+    referer = 'https://bysezoxexe.com/';
   } else if (lower.contains('streamtape') || lower.contains('tapecontent') || lower.contains('strcloud') || lower.contains('stape')) {
     referer = 'https://streamtape.com/';
   } else if (lower.contains('merivo') || lower.contains('vidara')) {
@@ -569,7 +605,7 @@ String? mediaForwardUrlIfNeeded(String url) {
     referer = 'https://vibevdo.xyz/';
   } else if (lower.contains('vidsonic')) {
     referer = 'https://vidsonic.net/';
-  } else if (lower.contains('tellyhd') || lower.contains('dotelly') || lower.contains('cdntelly')) {
+  } else if (lower.contains('tellyhd') || lower.contains('dotelly')) {
     referer = 'https://tellyhd.at/';
   } else if (lower.contains('pixeldrain')) {
     referer = 'https://pixeldrain.com/';
@@ -629,7 +665,17 @@ class MyHttpOverrides extends HttpOverrides {
     'luluvdo',
     'lulustream',
     'lulucdn',
+    'cdntelly',
+    'tellyhd',
+    'dotelly',
+    'filemoon',
+    'bysezoxexe',
+    'owphbf24',
+    'sprintcdn',
+    'pixeldrain',
     'tnmr.org',
+    'cdn-tnmr.org',
+    '.tnmr.',
     'vidara',
     'merivo',
     'playmate',

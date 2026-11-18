@@ -121,13 +121,26 @@ class TellyhdScraper {
         final html = await _fetchHtml(searchUrl, referer: '$base/');
         if (html.isEmpty) return items;
 
-        final articleRegex = RegExp(r'<article[^>]*id=["\x27]post-(\d+)["\x27][^>]*>(.*?)</article>', caseSensitive: false, dotAll: true);
-        final matches = articleRegex.allMatches(html);
+        // 1. Look for DooPlay search result-item blocks
+        final resultItemRegex = RegExp(r'<div class=["\x27]result-item["\x27]>(.*?)</div>\s*</div>\s*</article>', caseSensitive: false, dotAll: true);
+        final itemMatches = resultItemRegex.allMatches(html).toList();
 
-        for (final m in matches) {
-          final id = m.group(1)!;
-          final artContent = m.group(2)!;
+        final rawBlocks = <String>[];
+        if (itemMatches.isNotEmpty) {
+          for (final im in itemMatches) {
+            rawBlocks.add(im.group(1)!);
+          }
+        } else {
+          // Fallback: match <article> tags that are NOT sidebar widgets (w_item)
+          final artRegex = RegExp(r'<article([^>]*)>(.*?)</article>', caseSensitive: false, dotAll: true);
+          for (final am in artRegex.allMatches(html)) {
+            final tagAttrs = am.group(1)!;
+            if (tagAttrs.contains('w_item')) continue; // skip sidebar trending widgets
+            rawBlocks.add(am.group(2)!);
+          }
+        }
 
+        for (final artContent in rawBlocks) {
           final urlMatch = RegExp(r'''href=["\x27](https?://[^\s"\x27]+)["\x27]''', caseSensitive: false).firstMatch(artContent);
           if (urlMatch == null) continue;
           final postUrl = urlMatch.group(1)!;
@@ -151,7 +164,7 @@ class TellyhdScraper {
           final epNum = parseEpisodeNumber(title, postUrl);
 
           items.add({
-            'id': id,
+            'id': postUrl.hashCode.toString(),
             'title': title,
             'page_url': postUrl,
             'poster': poster,

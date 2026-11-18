@@ -105,14 +105,8 @@ Future<void> playVideo(
       finalUrl = rawUrl;
     } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn') || lowerRaw.contains('cdntelly')) {
       finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
-      if ((finalUrl == null || finalUrl.isEmpty) && context.mounted) {
-        finalUrl = await EmbedResolver.resolve(context, rawUrl);
-      }
     } else if (FilemoonResolver.isFilemoonUrl(rawUrl)) {
       finalUrl = await FilemoonResolver.resolveStream(rawUrl, forceRefresh: true);
-      if ((finalUrl == null || finalUrl.isEmpty) && context.mounted) {
-        finalUrl = await EmbedResolver.resolve(context, rawUrl);
-      }
     } else if (lowerRaw.contains('vidara') || lowerRaw.contains('merivo') || lowerRaw.contains('as9u')) {
       // Vidara / Merivo — resolve to direct CDN stream URL
       final resolved = await DropmmsService.resolveDirectStream(rawUrl);
