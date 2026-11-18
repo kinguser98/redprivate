@@ -148,7 +148,11 @@ class CustomDnsProxy {
         cleanHost.contains('eporner') ||
         cleanHost.contains('aagmaal') ||
         cleanHost.contains('hdmaal') ||
-        cleanHost.contains('uffmaal');
+        cleanHost.contains('uffmaal') ||
+        cleanHost.contains('tellyhd') ||
+        cleanHost.contains('dotelly') ||
+        cleanHost.contains('cdntelly') ||
+        cleanHost.contains('pixeldrain');
 
     final List<String> ips = [];
 
@@ -515,6 +519,10 @@ String? mediaForwardUrlIfNeeded(String url) {
       lower.contains('playmate') ||
       lower.contains('vibevdo') ||
       lower.contains('vidsonic') ||
+      lower.contains('pixeldrain') ||
+      lower.contains('cdntelly') ||
+      lower.contains('tellyhd') ||
+      lower.contains('dotelly') ||
       lower.contains('streamtape') ||
       lower.contains('tapecontent') ||
       lower.contains('strcloud') ||
@@ -548,6 +556,10 @@ String? mediaForwardUrlIfNeeded(String url) {
     referer = 'https://vibevdo.xyz/';
   } else if (lower.contains('vidsonic')) {
     referer = 'https://vidsonic.net/';
+  } else if (lower.contains('tellyhd') || lower.contains('dotelly') || lower.contains('cdntelly')) {
+    referer = 'https://tellyhd.at/';
+  } else if (lower.contains('pixeldrain')) {
+    referer = 'https://pixeldrain.com/';
   }
 
   return 'http://127.0.0.1:$p/ep?u=${Uri.encodeComponent(url)}&r=${Uri.encodeComponent(referer)}';

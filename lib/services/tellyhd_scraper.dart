@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
+import 'dns_proxy.dart';
 
 class TellyhdScraper {
   static const String defaultDomain = 'https://tellyhd.at';
@@ -53,29 +54,53 @@ class TellyhdScraper {
     return null;
   }
 
-  /// Fetches HTML with standard browser headers
+  /// Fetches HTML with standard browser headers and DoH proxy bypass for blocked ISPs
   static Future<String> _fetchHtml(String url, {String referer = 'https://tellyhd.at/'}) async {
+    final cleanUrl = url.trim();
+    if (cleanUrl.isEmpty) return '';
+
+    // 1. Try via CustomDnsProxy (DoH) first if running, bypassing ISP DNS blocks
+    final p = CustomDnsProxy().port;
+    if (p != null) {
+      try {
+        final proxyUrl = 'http://127.0.0.1:$p/ep?u=${Uri.encodeComponent(cleanUrl)}&r=${Uri.encodeComponent(referer)}';
+        final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
+        client.connectionTimeout = const Duration(seconds: 5);
+        final req = await client.getUrl(Uri.parse(proxyUrl));
+        final resp = await req.close().timeout(const Duration(seconds: 5));
+        if (resp.statusCode == 200) {
+          final html = await utf8.decodeStream(resp);
+          client.close();
+          if (html.isNotEmpty) return html;
+        }
+        client.close();
+      } catch (e) {
+        developer.log("CustomDnsProxy fetch failed for $cleanUrl, trying direct: $e");
+      }
+    }
+
+    // 2. Direct fetch fallback with fast 5s timeout
     try {
       final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
-      client.connectionTimeout = const Duration(seconds: 12);
-      final req = await client.getUrl(Uri.parse(url.trim()));
+      client.connectionTimeout = const Duration(seconds: 5);
+      final req = await client.getUrl(Uri.parse(cleanUrl));
       req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
       req.headers.set('Referer', referer);
       req.headers.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
-      final resp = await req.close();
+      final resp = await req.close().timeout(const Duration(seconds: 5));
       if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.value('location') != null) {
         String loc = resp.headers.value('location')!;
         if (!loc.startsWith('http')) {
-          loc = Uri.parse(url).resolve(loc).toString();
+          loc = Uri.parse(cleanUrl).resolve(loc).toString();
         }
         client.close();
-        return _fetchHtml(loc, referer: url);
+        return _fetchHtml(loc, referer: cleanUrl);
       }
       final html = await utf8.decodeStream(resp);
       client.close();
       return html;
     } catch (e) {
-      developer.log("Error fetching TellyHD URL ($url): $e");
+      developer.log("Direct fetch error for TellyHD URL ($cleanUrl): $e");
     }
     return '';
   }

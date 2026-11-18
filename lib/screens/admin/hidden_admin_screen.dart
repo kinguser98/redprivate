@@ -11150,6 +11150,10 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         referer = 'https://vidara.to/';
       } else if (lower.contains('hdmove99')) {
         referer = 'https://hdmove99.com/';
+      } else if (lower.contains('pixeldrain')) {
+        referer = 'https://pixeldrain.com/';
+      } else if (lower.contains('tellyhd') || lower.contains('dotelly') || lower.contains('cdntelly')) {
+        referer = 'https://tellyhd.at/';
       }
 
       final client = HttpClient()..badCertificateCallback = (c, h, p) => true;
