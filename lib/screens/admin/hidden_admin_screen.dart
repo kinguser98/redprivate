@@ -27,6 +27,7 @@ import '../../services/movies07prime_scraper.dart';
 import '../../services/filmywap_scraper.dart';
 import '../../services/hotullu_mastiwala_scraper.dart';
 import '../../services/hdmove99_scraper.dart';
+import '../../services/tellyhd_scraper.dart';
 import '../dropmms_browser_screen.dart';
 import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -81,6 +82,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     '⚡ Extractor Cinema (Ad-Free Player)',
     '✈️ Telegram Channel Studio',
     '🧪 Link Tester (CDN Health)',
+    'TellyHD Auto Importer',
   ];
 
   final List<IconData> _navIcons = [
@@ -108,6 +110,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     Icons.bolt_rounded,
     Icons.send_rounded,
     Icons.science_rounded,
+    Icons.tv_rounded,
   ];
 
   // Data lists
@@ -160,6 +163,12 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   int _aagmaalPage = 1;
   final _aagmaalSearchCtrl = TextEditingController();
 
+  // TellyHD Auto Importer State
+  List<dynamic> _tellyhdCatalog = [];
+  bool _tellyhdLoading = false;
+  int _tellyhdPage = 1;
+  final _tellyhdSearchCtrl = TextEditingController();
+
   // ⚡ Extractor Cinema (Ad-Free Player) State
   int _cinemaSource = 0; // 0: UFFMaal, 1: HDMaal, 2: AAGMaal, 3: UncutMasti, 4: HDMove99, 5: SkyMoviesHD
   List<Map<String, dynamic>> _cinemaCatalog = [];
@@ -185,6 +194,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   final TextEditingController _aagmaalDomainCtrl = TextEditingController(text: 'https://aagmaal.mba');
   final TextEditingController _uffmaalDomainCtrl = TextEditingController(text: 'https://uffmaal.com');
   final TextEditingController _aagmaalBzDomainCtrl = TextEditingController(text: 'https://aagmaal.group');
+  final TextEditingController _tellyhdDomainCtrl = TextEditingController(text: 'https://tellyhd.at');
   List<dynamic> _skymoviesCatalog = [];
   bool _skymoviesLoading = false;
   String _skymoviesCat = 'Hot-Short-Film';
@@ -2539,6 +2549,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         return _buildTelegramStudioView();
       case 23:
         return _buildLinkTesterView();
+      case 24:
+        return _buildTellyhdImporterView();
       default:
         return _buildDashboardView();
     }
@@ -8409,6 +8421,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
                     child: TextField(
+                      controller: _tellyhdDomainCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "TellyHD Domain",
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintText: "https://tellyhd.at",
+                        prefixIcon: const Icon(Icons.language_rounded, color: Colors.tealAccent),
+                        filled: true,
+                        fillColor: const Color(0xFF090A0F),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                    child: TextField(
                       controller: _skymoviesDomainCtrl,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
@@ -8558,6 +8587,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         _aagmaalDomainCtrl.text = settings['aagmaal_domain']?.toString() ?? 'https://aagmaal.mba';
         _uffmaalDomainCtrl.text = settings['uffmaal_domain']?.toString() ?? 'https://uffmaal.com';
         _aagmaalBzDomainCtrl.text = settings['aagmaal_bz_domain']?.toString() ?? 'https://aagmaal.bz';
+        _tellyhdDomainCtrl.text = settings['tellyhd_domain']?.toString() ?? 'https://tellyhd.at';
 
         if (_tgBotTokenCtrl.text.isEmpty && settings['tg_bot_token'] != null) {
           _tgBotTokenCtrl.text = settings['tg_bot_token'].toString();
@@ -8609,6 +8639,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         'aagmaal_domain': _aagmaalDomainCtrl.text.trim(),
         'uffmaal_domain': _uffmaalDomainCtrl.text.trim(),
         'aagmaal_bz_domain': _aagmaalBzDomainCtrl.text.trim(),
+        'tellyhd_domain': _tellyhdDomainCtrl.text.trim(),
         'tg_bot_token': _tgBotTokenCtrl.text.trim(),
         'tg_channel_id': _tgChannelIdCtrl.text.trim(),
         'tg_caption_template': _tgCaptionTemplateCtrl.text.trim(),
@@ -8624,6 +8655,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       await prefs.setString('aagmaal_domain', _aagmaalDomainCtrl.text.trim());
       await prefs.setString('uffmaal_domain', _uffmaalDomainCtrl.text.trim());
       await prefs.setString('aagmaal_bz_domain', _aagmaalBzDomainCtrl.text.trim());
+      await prefs.setString('tellyhd_domain', _tellyhdDomainCtrl.text.trim());
     } catch (_) {}
 
     if (!mounted) return;
@@ -9790,6 +9822,382 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   //
+  // ── TELLYHD AUTO IMPORTER VIEW ──
+  //
+  Widget _buildTellyhdImporterView() {
+    if (_tellyhdCatalog.isEmpty && !_tellyhdLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _tellyhdCatalog.isEmpty && !_tellyhdLoading) _loadTellyhdCatalog();
+      });
+    }
+
+    final isWide = MediaQuery.of(context).size.width > 600;
+    final crossCount = isWide ? (MediaQuery.of(context).size.width > 1000 ? 5 : 4) : 2;
+
+    return Column(
+      children: [
+        // Header Banner
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF142426), Color(0xFF0F171A)]),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.tealAccent.withOpacity(0.35)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.tealAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.tv_rounded, color: Colors.tealAccent, size: 22),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("TellyHD Auto Importer", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                      Text("Direct MP4 & Vidara Stream Extract • Bulk & Single Episode Auto-Import", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => _loadTellyhdCatalog(forceRefresh: true),
+                  icon: const Icon(Icons.refresh_rounded, size: 14),
+                  label: const Text("REFRESH LATEST", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.tealAccent.withOpacity(0.2),
+                    foregroundColor: Colors.tealAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.tealAccent, width: 0.8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Search Bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _tellyhdSearchCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: "Search TellyHD catalog (e.g. Rain Basera, Khichdi, Nadaan)...",
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: Colors.tealAccent),
+                    suffixIcon: _tellyhdSearchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white38),
+                            onPressed: () {
+                              _tellyhdSearchCtrl.clear();
+                              _tellyhdPage = 1;
+                              _loadTellyhdCatalog();
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF141722),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                  onSubmitted: (_) {
+                    _tellyhdPage = 1;
+                    _loadTellyhdCatalog();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () {
+                  _tellyhdPage = 1;
+                  _loadTellyhdCatalog();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.tealAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text("SEARCH", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+
+        // Poster Grid View
+        Expanded(
+          child: _tellyhdLoading
+              ? const Center(child: CircularProgressIndicator(color: Colors.tealAccent))
+              : _tellyhdCatalog.isEmpty
+                  ? const Center(child: Text("No items found in TellyHD catalog", style: TextStyle(color: Colors.white54)))
+                  : GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossCount,
+                        childAspectRatio: 0.65,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: _tellyhdCatalog.length,
+                      itemBuilder: (context, index) {
+                        final item = _tellyhdCatalog[index];
+                        final poster = (item['poster'] ?? '').toString();
+                        final title = (item['title'] ?? 'Untitled').toString();
+                        final date = (item['date'] ?? item['year'] ?? '').toString();
+
+                        return Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF142426), Color(0xFF0F171A)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withOpacity(0.08)),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 6, offset: const Offset(0, 3)),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Poster Image
+                              Expanded(
+                                child: Stack(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                      child: poster.isNotEmpty
+                                          ? CachedNetworkImage(
+                                              imageUrl: poster,
+                                              width: double.infinity,
+                                              height: double.infinity,
+                                              fit: BoxFit.cover,
+                                              errorWidget: (c, u, e) => Container(color: const Color(0xFF1A2628), child: const Icon(Icons.movie, color: Colors.white24, size: 36)),
+                                            )
+                                          : Container(color: const Color(0xFF1A2628), child: const Icon(Icons.movie, color: Colors.white24, size: 36)),
+                                    ),
+                                    if (date.isNotEmpty)
+                                      Positioned(
+                                        top: 6,
+                                        right: 6,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(color: Colors.black.withOpacity(0.75), borderRadius: BorderRadius.circular(6)),
+                                          child: Text(date, style: const TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              // Title & Auto-Import Button
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _autoImportTellyhdItem(item),
+                                        icon: const Icon(Icons.download_rounded, size: 13),
+                                        label: const Text("AUTO-IMPORT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.tealAccent,
+                                          foregroundColor: Colors.black,
+                                          padding: const EdgeInsets.symmetric(vertical: 6),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          visualDensity: VisualDensity.compact,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+        ),
+
+        // Pagination Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: const Color(0xFF0F171A),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: _tellyhdPage > 1
+                    ? () {
+                        setState(() => _tellyhdPage--);
+                        _loadTellyhdCatalog();
+                      }
+                    : null,
+              ),
+              Text("Page $_tellyhdPage", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 18),
+                onPressed: () {
+                  setState(() => _tellyhdPage++);
+                  _loadTellyhdCatalog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadTellyhdCatalog({bool forceRefresh = false}) async {
+    setState(() => _tellyhdLoading = true);
+    final q = _tellyhdSearchCtrl.text.trim();
+    List<dynamic> items = [];
+
+    // 1. Client-side search first
+    if (q.isNotEmpty) {
+      final clientResults = await TellyhdScraper.searchCatalog(q, customDomain: _tellyhdDomainCtrl.text.trim());
+      if (clientResults.isNotEmpty) {
+        items = clientResults;
+      }
+    }
+
+    // 2. PHP backend catalog fetch
+    if (items.isEmpty) {
+      final res = await _adminPhpApi('fetch_tellyhd_catalog', {
+        'query': q,
+        'page': _tellyhdPage,
+        'refresh': forceRefresh ? 1 : 0,
+      });
+      if (res['status'] == 'success' && res['data']?['items'] != null) {
+        items = res['data']['items'];
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _tellyhdLoading = false;
+      _tellyhdCatalog = items;
+    });
+  }
+
+  Future<void> _autoImportTellyhdItem(dynamic item) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        backgroundColor: Color(0xFF141722),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.tealAccent),
+            SizedBox(width: 16),
+            Expanded(child: Text("Extracting TellyHD details & downloading poster to server...", style: TextStyle(color: Colors.white, fontSize: 12))),
+          ],
+        ),
+      ),
+    );
+
+    Map<String, dynamic>? d;
+    final pageUrl = (item['page_url'] ?? '').toString();
+    try {
+      final clientData = await TellyhdScraper.extractDetails(pageUrl);
+      if (clientData.isNotEmpty && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+        d = clientData;
+      }
+    } catch (_) {}
+
+    if (d == null || (d['stream_url'] ?? '').toString().isEmpty) {
+      final res = await _adminPhpApi('extract_tellyhd_details', {'page_url': pageUrl});
+      if (res['status'] == 'success' && res['data'] != null) {
+        d = Map<String, dynamic>.from(res['data']);
+      }
+    }
+
+    if (mounted) Navigator.pop(context);
+
+    if (d != null && d.isNotEmpty) {
+      final playLinks = (d['play_links'] as List<dynamic>? ?? []);
+      final primaryUrl = (d['stream_url'] ?? '').toString().trim();
+
+      setState(() {
+        _addType = 'movie';
+        _addTitleCtrl.text = d!['title'] ?? item['title'] ?? '';
+        _addDescCtrl.text = d['description'] ?? "Watch ${d['title'] ?? item['title']} online in HD.";
+        _addPosterUrlCtrl.text = d['poster'] ?? d['raw_poster'] ?? item['poster'] ?? '';
+        _addThumbUrlCtrl.text = d['poster'] ?? d['raw_poster'] ?? item['poster'] ?? '';
+        if (d['release_date'] != null && (d['release_date'] as String).isNotEmpty) {
+          _addReleaseDateCtrl.text = d['release_date'];
+        } else if (item['date'] != null) {
+          _addReleaseDateCtrl.text = item['date'];
+        }
+        final mainUrl = (playLinks.isNotEmpty && playLinks.first['url'] != null && playLinks.first['url'].toString().isNotEmpty)
+            ? playLinks.first['url'].toString().trim()
+            : primaryUrl;
+
+        if (mainUrl.isNotEmpty) {
+          _addStreamUrlCtrl.text = mainUrl;
+          if (mainUrl.contains('pixeldrain') || mainUrl.endsWith('.mp4') || mainUrl.endsWith('.mkv')) {
+            _streamType = 'MP4/MKV Direct Link';
+          } else if (mainUrl.contains('vidara') || mainUrl.contains('merivo') || mainUrl.contains('as9u')) {
+            _streamType = 'Vidara Stream';
+          } else if (mainUrl.contains('cdntelly') || mainUrl.contains('lulu') || mainUrl.contains('tnmr.org')) {
+            _streamType = 'Luluvdo Stream';
+          } else {
+            _streamType = 'MP4/MKV Direct Link';
+          }
+        } else {
+          _addStreamUrlCtrl.clear();
+        }
+
+        _extraMovieServers.clear();
+        for (int i = 1; i < playLinks.length; i++) {
+          final pl = playLinks[i];
+          _extraMovieServers.add({
+            'name': pl['name'] ?? 'Server ${i + 1}',
+            'type': pl['type'] ?? 'Vidara Stream',
+            'ctrl': TextEditingController(text: pl['url'] ?? ''),
+          });
+        }
+        _selectedIndex = 2; // Switch to Add Content studio tab
+      });
+
+      final serverCount = playLinks.length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(serverCount > 0
+              ? "TellyHD: Extracted $serverCount server link(s)! Review & tap Publish."
+              : "TellyHD details extracted (No stream links found on page)."),
+          backgroundColor: serverCount > 0 ? Colors.green : Colors.orange,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Extraction failed for selected TellyHD post"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  //
   // ── AAGMAAL AUTO IMPORTER VIEW ──
   //
   Widget _buildAagmaalImporterView() {
@@ -10801,7 +11209,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
-    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
+    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS, 9=TellyHD
     bool checkLinkBeforeImport = true;
     bool isSearching = false;
     bool isExtracting = false;
@@ -10997,6 +11405,17 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   }
                 }
 
+                // 11. TellyHD direct URL
+                if (q.contains('tellyhd') || tab == 9) {
+                  final clientData = await TellyhdScraper.extractDetails(q);
+                  if (clientData.isNotEmpty && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    final streamUrl = clientData['stream_url'].toString();
+                    final poster = (clientData['poster'] ?? clientData['raw_poster'] ?? '').toString();
+                    await deliverExtractedLink(streamUrl, posterUrl: poster.isNotEmpty ? poster : null, successMsg: "TellyHD stream link & poster extracted!");
+                    return;
+                  }
+                }
+
                 // Generic Server-side Fallback
                 String extractAction = 'extract_uncutmasti_details';
                 if (tab == 1) extractAction = 'extract_hdmaal_details';
@@ -11004,6 +11423,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 if (tab == 3 || tab == 4 || tab == 5) extractAction = 'extract_maal_network_episode';
                 if (tab == 6) extractAction = 'extract_skymovies_details';
                 if (tab == 7) extractAction = 'extract_hdmove99_details';
+                if (tab == 9) extractAction = 'extract_tellyhd_details';
 
                 final res = await _adminPhpApi(extractAction, {'page_url': q});
                 if (!dialogCtx.mounted) return;
@@ -11135,6 +11555,15 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     'page_url': r.topicUrl,
                     'poster': r.poster,
                   }).toList();
+                } else if (tab == 9) {
+                  // TellyHD search
+                  items = await TellyhdScraper.searchCatalog(q, customDomain: _tellyhdDomainCtrl.text.trim());
+                  if (items.isEmpty) {
+                    final sRes = await _adminPhpApi('search_tellyhd_catalog', {'query': q});
+                    if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                      items = sRes['data']['items'];
+                    }
+                  }
                 }
               } catch (e) {
                 errorText = "Search error: $e";
@@ -11246,6 +11675,19 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       streamUrl = d.downloadLinks.first.url;
                     }
                   }
+                } else if (tab == 9) {
+                  // TellyHD
+                  final clientData = await TellyhdScraper.extractDetails(pageUrl);
+                  if (clientData.isNotEmpty && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
+                    streamUrl = clientData['stream_url'].toString();
+                    extractedPoster = (clientData['poster'] ?? clientData['raw_poster'] ?? '').toString();
+                  } else {
+                    final res = await _adminPhpApi('extract_tellyhd_details', {'page_url': pageUrl});
+                    if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
+                      streamUrl = res['data']['stream_url'].toString().trim();
+                      extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                    }
+                  }
                 }
               } catch (e) {
                 errorText = "Extraction error: $e";
@@ -11335,6 +11777,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           buildTabButton(6, "✨ SkyMovies", Colors.cyanAccent),
                           buildTabButton(7, "🎥 HDMove99", Colors.lightGreenAccent),
                           buildTabButton(8, "📦 DropMMS", Colors.indigoAccent),
+                          buildTabButton(9, "📺 TellyHD", Colors.tealAccent),
                         ],
                       ),
                     ),
@@ -11496,7 +11939,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     required List<dynamic> currentEpisodes,
     required Future<void> Function() refresh,
   }) {
-    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS
+    int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS, 9=TellyHD
     final searchCtrl = TextEditingController(text: seriesTitle);
     bool checkLinksBeforeImport = true;
     bool isSearching = false;
@@ -11654,6 +12097,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'ep_num': epIdx++,
                         'selected': true,
                       }).toList();
+                    }
+                  } else if (q.contains('tellyhd') || tab == 9) {
+                    final details = await TellyhdScraper.extractDetails(q);
+                    final streamUrl = (details['stream_url'] ?? '').toString();
+                    final playLinks = details['play_links'] as List<dynamic>? ?? [];
+                    if (streamUrl.isNotEmpty || playLinks.isNotEmpty) {
+                      episodeItems = [{
+                        'raw_title': details['title'] ?? 'Episode 1',
+                        'title': details['title'] ?? 'Episode 1',
+                        'url': q,
+                        'stream_url': streamUrl,
+                        'play_links': playLinks,
+                        'poster': (details['poster'] ?? details['raw_poster'] ?? '').toString(),
+                        'ep_num': TellyhdScraper.parseEpisodeNumber(details['title'] ?? '', q) ?? _parseEpisodeNumber(details['title'] ?? '', q) ?? 1,
+                        'selected': true,
+                        'site_name': 'TellyHD',
+                      }];
                     }
                   }
                 } else {
@@ -11896,6 +12356,37 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                         'selected': true,
                       };
                     }).toList();
+                  } else if (tab == 9) {
+                    // TellyHD search
+                    final results = await TellyhdScraper.searchCatalog(q, customDomain: _tellyhdDomainCtrl.text.trim());
+                    if (results.isEmpty) {
+                      final sRes = await _adminPhpApi('search_tellyhd_catalog', {'query': q});
+                      if (sRes['status'] == 'success' && sRes['data']?['items'] != null) {
+                        final items = sRes['data']['items'] as List<dynamic>;
+                        for (final r in items) {
+                          results.add({
+                            'id': r['id'],
+                            'title': (r['title'] ?? 'Episode').toString(),
+                            'page_url': (r['page_url'] ?? '').toString(),
+                            'poster': (r['poster'] ?? '').toString(),
+                          });
+                        }
+                      }
+                    }
+                    episodeItems = results.map((r) {
+                      final titleStr = (r['title'] ?? 'Episode').toString();
+                      final urlStr = (r['page_url'] ?? '').toString();
+                      final parsedNum = (r['ep_num'] as int?) ?? TellyhdScraper.parseEpisodeNumber(titleStr, urlStr) ?? _parseEpisodeNumber(titleStr, urlStr) ?? 1;
+                      return {
+                        'raw_title': titleStr,
+                        'title': titleStr,
+                        'url': urlStr,
+                        'poster': (r['poster'] ?? '').toString(),
+                        'ep_num': parsedNum,
+                        'selected': true,
+                        'site_name': 'TellyHD',
+                      };
+                    }).toList();
                   }
                 }
 
@@ -12049,6 +12540,22 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                     if (d != null && d.videoLinks.isNotEmpty) {
                       streamUrl = d.videoLinks.first.url;
                       if (poster.isEmpty) poster = d.poster;
+                    }
+                  } else if (pageUrl.contains('tellyhd') || tab == 9) {
+                    var d = await TellyhdScraper.extractDetails(pageUrl);
+                    if (d.isEmpty || (d['stream_url'] ?? '').toString().isEmpty) {
+                      final sRes = await _adminPhpApi('extract_tellyhd_details', {'page_url': pageUrl});
+                      if (sRes['status'] == 'success' && sRes['data'] != null) {
+                        d = Map<String, dynamic>.from(sRes['data']);
+                      }
+                    }
+                    if (d.isNotEmpty) {
+                      streamUrl = (d['stream_url'] ?? '').toString().trim();
+                      if (poster.isEmpty) poster = (d['poster'] ?? d['raw_poster'] ?? '').toString().trim();
+                      final pls = (d['play_links'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
+                      if (pls.isNotEmpty) {
+                        playLinks = pls;
+                      }
                     }
                   }
                 }
@@ -12281,6 +12788,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                           buildBatchTabButton(6, "✨ SkyMovies", Colors.cyanAccent),
                           buildBatchTabButton(7, "🎥 HDMove99", Colors.lightGreenAccent),
                           buildBatchTabButton(8, "📦 DropMMS", Colors.indigoAccent),
+                          buildBatchTabButton(9, "📺 TellyHD", Colors.tealAccent),
                         ],
                       ),
                     ),

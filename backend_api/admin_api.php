@@ -3764,8 +3764,9 @@ function get_scraper_domains($pdo) {
     $hdmove99_domain = 'https://hdmove99.com';
     $aagmaal_domain = 'https://aagmaal.mba';
     $uffmaal_domain = 'https://uffmaal.com';
+    $tellyhd_domain = 'https://tellyhd.at';
     try {
-        $stmt = $pdo->query("SELECT skey, svalue FROM app_settings WHERE skey IN ('skymovies_domain', 'hdmaal_domain', 'uncutmasti_domain', 'hdmove99_domain', 'aagmaal_domain', 'uffmaal_domain')");
+        $stmt = $pdo->query("SELECT skey, svalue FROM app_settings WHERE skey IN ('skymovies_domain', 'hdmaal_domain', 'uncutmasti_domain', 'hdmove99_domain', 'aagmaal_domain', 'uffmaal_domain', 'tellyhd_domain')");
         foreach ($stmt->fetchAll() as $row) {
             $val = rtrim(trim($row['svalue']), '/');
             if ($row['skey'] === 'skymovies_domain' && !empty($val)) $skymovies_domain = $val;
@@ -3774,9 +3775,10 @@ function get_scraper_domains($pdo) {
             if ($row['skey'] === 'hdmove99_domain' && !empty($val)) $hdmove99_domain = $val;
             if ($row['skey'] === 'aagmaal_domain' && !empty($val)) $aagmaal_domain = $val;
             if ($row['skey'] === 'uffmaal_domain' && !empty($val)) $uffmaal_domain = $val;
+            if ($row['skey'] === 'tellyhd_domain' && !empty($val)) $tellyhd_domain = $val;
         }
     } catch (Exception $e) {}
-    return [$skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain, $uffmaal_domain];
+    return [$skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain, $uffmaal_domain, $tellyhd_domain];
 }
 
 function download_and_host_image($img_url, $title = '', $episode = '') {
@@ -4252,6 +4254,289 @@ if ($action === 'extract_hdmove99_details') {
         'play_links' => $play_links,
         'page_url' => $page_url,
     ], 'HDMove99 details extracted');
+}
+
+if ($action === 'fetch_tellyhd_catalog') {
+    $query = trim($input['query'] ?? $_POST['query'] ?? $_GET['query'] ?? '');
+    $page = intval($input['page'] ?? $_POST['page'] ?? $_GET['page'] ?? 1);
+    if ($page <= 0) $page = 1;
+
+    list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain, $uffmaal_domain, $tellyhd_domain) = get_scraper_domains($pdo);
+
+    if (!empty($query)) {
+        $fetch_url = "$tellyhd_domain/page/$page/?s=" . urlencode($query);
+    } else {
+        $fetch_url = "$tellyhd_domain/movies/page/$page/";
+    }
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $fetch_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    $items = [];
+    if (!empty($html)) {
+        if (preg_match_all('/<article[^>]*id=["\x27]post-(\d+)["\x27][^>]*>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                $art_content = $m[2];
+                $url = '';
+                if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
+                    $url = $um[1];
+                }
+                if (empty($url) || strpos($url, '/movies/') === false) continue;
+
+                $title = '';
+                if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
+                    $title = trim(strip_tags($tm[1]));
+                } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
+                    $title = trim($tm[1]);
+                } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
+                    $title = trim(strip_tags($tm[1]));
+                }
+
+                $poster = '';
+                if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
+                    $poster = $pm[1];
+                }
+
+                $year = '';
+                if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
+                    $year = $ym[1];
+                }
+
+                $items[] = [
+                    'id' => $m[1],
+                    'title' => html_entity_decode($title),
+                    'page_url' => $url,
+                    'poster' => $poster,
+                    'year' => $year,
+                    'date' => $year,
+                ];
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items, 'page' => $page], 'TellyHD catalog fetched');
+}
+
+if ($action === 'search_tellyhd_catalog') {
+    $raw_query = trim($input['query'] ?? $_POST['query'] ?? '');
+    if (empty($raw_query)) json_response(false, [], 'Query required');
+
+    list($skymovies_domain, $hdmaal_domain, $uncutmasti_domain, $hdmove99_domain, $aagmaal_domain, $uffmaal_domain, $tellyhd_domain) = get_scraper_domains($pdo);
+    $search_url = "$tellyhd_domain/?s=" . urlencode($raw_query);
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $search_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    $items = [];
+    if (!empty($html)) {
+        if (preg_match_all('/<article[^>]*id=["\x27]post-(\d+)["\x27][^>]*>(.*?)<\/article>/is', $html, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                $art_content = $m[2];
+                $url = '';
+                if (preg_match('/href=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $um)) {
+                    $url = $um[1];
+                }
+                if (empty($url) || strpos($url, '/movies/') === false) continue;
+
+                $title = '';
+                if (preg_match('/<div class=["\x27]title["\x27]>\s*<a[^>]*>(.*?)<\/a>/is', $art_content, $tm)) {
+                    $title = trim(strip_tags($tm[1]));
+                } elseif (preg_match('/alt=["\x27](.*?)["\x27]/i', $art_content, $tm)) {
+                    $title = trim($tm[1]);
+                } elseif (preg_match('/<h3>(.*?)<\/h3>/is', $art_content, $tm)) {
+                    $title = trim(strip_tags($tm[1]));
+                }
+
+                $poster = '';
+                if (preg_match('/src=["\x27](https?:\/\/[^\s"\x27]+)["\x27]/i', $art_content, $pm)) {
+                    $poster = $pm[1];
+                }
+
+                $year = '';
+                if (preg_match('/<span class=["\x27]year["\x27]>(\d{4})<\/span>/i', $art_content, $ym)) {
+                    $year = $ym[1];
+                }
+
+                $items[] = [
+                    'id' => $m[1],
+                    'title' => html_entity_decode($title),
+                    'page_url' => $url,
+                    'poster' => $poster,
+                    'year' => $year,
+                    'date' => $year,
+                ];
+            }
+        }
+    }
+
+    json_response(true, ['items' => $items], 'TellyHD catalog search completed');
+}
+
+if ($action === 'extract_tellyhd_details') {
+    $page_url = trim($input['page_url'] ?? '');
+    if (empty($page_url)) json_response(false, [], 'Page URL required');
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $page_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+
+    if (!$html) {
+        json_response(false, [], 'Failed to fetch TellyHD page');
+    }
+
+    // 1. Title
+    $title = '';
+    if (preg_match('/<h1[^>]*>(.*?)<\/h1>/is', $html, $m)) {
+        $title = trim(strip_tags($m[1]));
+    } elseif (preg_match('/<title>\s*(.*?)\s*<\/title>/is', $html, $m)) {
+        $title = trim(preg_replace('/ - TellyHD|TellyHD/i', '', strip_tags(html_entity_decode($m[1]))));
+    }
+
+    // 2. Poster
+    $poster = '';
+    if (preg_match('/<meta\s+property=["\x27]og:image["\x27]\s+content=["\x27]([^"\x27]+)["\x27]/i', $html, $m)) {
+        $poster = $m[1];
+    } elseif (preg_match('/<div class=["\x27]poster["\x27]>\s*<img[^>]+src=["\x27]([^"\x27]+)["\x27]/i', $html, $m)) {
+        $poster = $m[1];
+    }
+
+    // 3. Release Date / Year
+    $release_date = date('Y-m-d');
+    if (preg_match('/<meta\s+property=["\x27]article:published_time["\x27]\s+content=["\x27]([^"\x27]+)["\x27]/i', $html, $m)) {
+        $release_date = date('Y-m-d', strtotime($m[1]));
+    } elseif (preg_match('/<span class=["\x27]date["\x27]>(\d{4}-\d{2}-\d{2})<\/span>/i', $html, $m)) {
+        $release_date = $m[1];
+    } elseif (preg_match('/\((\d{4})\)/', $title, $m)) {
+        $release_date = $m[1] . '-01-01';
+    }
+
+    // 4. Candidate Content: check both main HTML and dotelly.cfd protector if present
+    $candidate_html = $html;
+    if (preg_match('/https?:\/\/dotelly\.cfd\/[^\s"\'\x3c\x3e]+/i', $html, $dm)) {
+        $dch = curl_init();
+        curl_setopt_array($dch, [
+            CURLOPT_URL            => $dm[0],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ]);
+        $dotelly_html = curl_exec($dch);
+        curl_close($dch);
+        if (!empty($dotelly_html)) {
+            $candidate_html .= "\n" . $dotelly_html;
+        }
+    }
+
+    // 5. Extract Server Links
+    $pixeldrain_url = '';
+    $vidara_url = '';
+    $cdntelly_url = '';
+    $filemoon_url = '';
+
+    if (preg_match('/https?:\/\/pixeldrain\.com\/u\/([a-zA-Z0-9]+)/i', $candidate_html, $pm)) {
+        $pixeldrain_url = "https://pixeldrain.com/api/file/" . $pm[1];
+    }
+    if (preg_match('/https?:\/\/(?:vidara\.to|merivo\.to)\/v\/([a-zA-Z0-9]+)/i', $candidate_html, $vm)) {
+        $vidara_url = $vm[0];
+    } elseif (preg_match('/https?:\/\/mxzhxco8dft\.com\/e\/([a-zA-Z0-9]+)/i', $candidate_html, $vm)) {
+        $vidara_url = $vm[0];
+    }
+    if (preg_match('/https?:\/\/cdntelly\.sbs\/(?:[dv]\/)?([a-zA-Z0-9]+)/i', $candidate_html, $cm)) {
+        $cdntelly_url = $cm[0];
+    }
+    if (preg_match('/https?:\/\/(?:filemoon\.(?:to|sx)|bysezoxexe\.com)\/(?:[dv]\/)?([a-zA-Z0-9]+)/i', $candidate_html, $fm)) {
+        $filemoon_url = $fm[0];
+    }
+
+    $play_links = [];
+    $sNum = 1;
+
+    // Server 1: Pixeldrain direct stream & download link (Primary)
+    if (!empty($pixeldrain_url)) {
+        $play_links[] = [
+            'name' => "Server $sNum",
+            'quality' => '720p',
+            'url' => $pixeldrain_url,
+            'resolved_url' => $pixeldrain_url,
+            'type' => 'MP4/MKV Direct Link',
+        ];
+        $sNum++;
+    }
+
+    // Server 2: Vidara HLS stream
+    if (!empty($vidara_url)) {
+        $play_links[] = [
+            'name' => "Server $sNum",
+            'quality' => '720p',
+            'url' => $vidara_url,
+            'resolved_url' => $vidara_url,
+            'type' => 'Vidara Stream',
+        ];
+        $sNum++;
+    }
+
+    // Server 3: Cdntelly LuluStream mirror
+    if (!empty($cdntelly_url)) {
+        $resolvedCdntelly = resolve_server_stream_url($cdntelly_url);
+        $play_links[] = [
+            'name' => "Server $sNum",
+            'quality' => '720p',
+            'url' => $cdntelly_url,
+            'resolved_url' => !empty($resolvedCdntelly) ? $resolvedCdntelly : $cdntelly_url,
+            'type' => 'Luluvdo Stream',
+        ];
+        $sNum++;
+    }
+
+    // Server 4: Filemoon
+    if (!empty($filemoon_url)) {
+        $play_links[] = [
+            'name' => "Server $sNum",
+            'quality' => '720p',
+            'url' => $filemoon_url,
+            'resolved_url' => $filemoon_url,
+            'type' => 'Embed Player',
+        ];
+        $sNum++;
+    }
+
+    $primary_stream = !empty($play_links) ? ($play_links[0]['resolved_url'] ?? $play_links[0]['url']) : '';
+    $hosted_poster = !empty($poster) ? download_and_host_image($poster) : '';
+
+    json_response(true, [
+        'title' => $title,
+        'description' => "Watch $title online in HD.",
+        'poster' => $hosted_poster,
+        'raw_poster' => $poster,
+        'release_date' => $release_date,
+        'stream_url' => $primary_stream,
+        'play_links' => $play_links,
+        'page_url' => $page_url,
+    ], 'TellyHD details extracted');
 }
 
 if ($action === 'resolve_server_stream') {
