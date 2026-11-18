@@ -25,31 +25,10 @@ class LuluvdoResolver {
     return p;
   }
 
-  static HttpClient _createDohClient() {
+  static HttpClient _createClient() {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 8)
       ..badCertificateCallback = (cert, host, port) => true;
-    client.findProxy = (uri) => 'DIRECT';
-    client.connectionFactory = (uri, host, port) async {
-      final ips = [
-        '104.26.6.79',
-        '172.67.68.215',
-        '104.26.7.79',
-        '104.20.19.112',
-        '172.66.167.168'
-      ];
-      for (final ip in ips) {
-        try {
-          final s = await Socket.connect(ip, uri.port, timeout: const Duration(seconds: 4));
-          if (uri.scheme == 'https') {
-            final sec = await SecureSocket.secure(s, host: uri.host, onBadCertificate: (c) => true);
-            return ConnectionTask.fromSocket(Future.value(sec), () {});
-          }
-          return ConnectionTask.fromSocket(Future.value(s), () {});
-        } catch (_) {}
-      }
-      throw Exception("Could not connect to ${uri.host}");
-    };
     return client;
   }
 
@@ -93,12 +72,18 @@ class LuluvdoResolver {
       'Referer': 'https://luluvdo.com/',
     };
 
-    final ioClient = _createDohClient();
+    final ioClient = _createClient();
     final client = IOClient(ioClient);
     try {
       for (final targetUrl in urlsToTry) {
         try {
-          final res = await client.get(Uri.parse(targetUrl), headers: headers).timeout(const Duration(seconds: 8));
+          final reqHeaders = Map<String, String>.from(headers);
+          if (targetUrl.contains('cdntelly')) {
+            reqHeaders['Referer'] = 'https://cdntelly.sbs/';
+          } else {
+            reqHeaders['Referer'] = 'https://luluvdo.com/';
+          }
+          final res = await client.get(Uri.parse(targetUrl), headers: reqHeaders).timeout(const Duration(seconds: 8));
           if (res.statusCode != 200) continue;
           final html = res.body;
 

@@ -7,6 +7,7 @@ import '../services/streamtape_service.dart';
 import '../services/dropmms_service.dart';
 import '../services/embed_resolver.dart';
 import '../services/luluvdo_resolver.dart';
+import '../services/filemoon_resolver.dart';
 import '../services/xhamster_resolver.dart';
 import '../services/eporner_resolver.dart';
 import '../services/tnaflix_resolver.dart';
@@ -95,8 +96,23 @@ Future<void> playVideo(
           finalUrl = d['stream_url'].toString().trim();
         }
       }
-    } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn')) {
+    } else if (lowerRaw.contains('pixeldrain.com/u/')) {
+      final id = rawUrl.split('/u/').last.split('?').first.split('/').first;
+      if (id.isNotEmpty) {
+        finalUrl = 'https://pixeldrain.com/api/file/$id';
+      }
+    } else if (lowerRaw.contains('pixeldrain.com/api/file/')) {
+      finalUrl = rawUrl;
+    } else if (lowerRaw.contains('luluvdo') || lowerRaw.contains('lulustream') || lowerRaw.contains('lulucdn') || lowerRaw.contains('cdntelly')) {
       finalUrl = await LuluvdoResolver.resolveOnDevice(rawUrl, forceRefresh: true);
+      if ((finalUrl == null || finalUrl.isEmpty) && context.mounted) {
+        finalUrl = await EmbedResolver.resolve(context, rawUrl);
+      }
+    } else if (FilemoonResolver.isFilemoonUrl(rawUrl)) {
+      finalUrl = await FilemoonResolver.resolveStream(rawUrl, forceRefresh: true);
+      if ((finalUrl == null || finalUrl.isEmpty) && context.mounted) {
+        finalUrl = await EmbedResolver.resolve(context, rawUrl);
+      }
     } else if (lowerRaw.contains('vidara') || lowerRaw.contains('merivo') || lowerRaw.contains('as9u')) {
       // Vidara / Merivo — resolve to direct CDN stream URL
       final resolved = await DropmmsService.resolveDirectStream(rawUrl);
@@ -208,8 +224,20 @@ Future<void> playVideo(
       effectiveHeaders['Referer'] = 'https://skymovieshd.ceo/';
       effectiveHeaders['Origin'] = 'https://skymovieshd.ceo';
     } else if (lowerFinal.contains('merivo') || lowerFinal.contains('vidara')) {
-      effectiveHeaders['Referer'] = 'https://vidara.so/';
-      effectiveHeaders['Origin'] = 'https://vidara.so';
+      effectiveHeaders['Referer'] = 'https://merivo.fit/';
+      effectiveHeaders['Origin'] = 'https://merivo.fit';
+    } else if (lowerFinal.contains('dropmms') || lowerFinal.contains('droplink')) {
+      effectiveHeaders['Referer'] = 'https://dropmms.co/';
+    } else if (lowerFinal.contains('streamtape') || lowerFinal.contains('strcloud') || lowerFinal.contains('tapecontent') || lowerFinal.contains('stape') || lowerFinal.contains('streamta.pe')) {
+      effectiveHeaders['Referer'] = 'https://streamtape.com/';
+    } else if (lowerFinal.contains('cdntelly') || lowerFinal.contains('luluvdo') || lowerFinal.contains('lulustream') || lowerFinal.contains('tnmr') || lowerFinal.contains('lulucdn')) {
+      effectiveHeaders['Referer'] = 'https://cdntelly.sbs/';
+      effectiveHeaders['Origin'] = 'https://cdntelly.sbs';
+    } else if (lowerFinal.contains('sprintcdn') || lowerFinal.contains('owphbf24') || lowerFinal.contains('filemoon') || lowerFinal.contains('bysezoxexe')) {
+      effectiveHeaders['Referer'] = 'https://bysezoxexe.com/';
+      effectiveHeaders['Origin'] = 'https://bysezoxexe.com';
+    } else if (lowerFinal.contains('pixeldrain')) {
+      effectiveHeaders['Referer'] = 'https://pixeldrain.com/';
     }
 
     Navigator.push(

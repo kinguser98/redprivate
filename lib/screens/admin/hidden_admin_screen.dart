@@ -29,6 +29,7 @@ import '../../services/hotullu_mastiwala_scraper.dart';
 import '../../services/hdmove99_scraper.dart';
 import '../../services/tellyhd_scraper.dart';
 import '../../services/luluvdo_resolver.dart';
+import '../../services/filemoon_resolver.dart';
 import '../dropmms_browser_screen.dart';
 import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -15730,8 +15731,26 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
       }
     }
 
+    // 1b. Check Filemoon / Byse direct M3U8 extraction
+    if (finalUrl.contains('filemoon') || finalUrl.contains('bysezoxexe')) {
+      try {
+        final fm = await FilemoonResolver.resolveStream(finalUrl);
+        if (fm != null && fm.isNotEmpty) {
+          finalUrl = fm;
+        } else {
+          final serverRes = await _adminPhpApi('resolve_server_stream', {'url': finalUrl});
+          if (serverRes['status'] == 'success' && serverRes['data']?['stream_url'] != null) {
+            final stUrl = serverRes['data']['stream_url'].toString().trim();
+            if (stUrl.isNotEmpty) finalUrl = stUrl;
+          }
+        }
+      } catch (e) {
+        debugPrint("Error resolving Filemoon: $e");
+      }
+    }
+
     // 2. Check Dropmms multi-host stream resolver (Streamtape, Vidara, LuluStream, VidSonic, VibeVdo)
-    if (!finalUrl.contains('.m3u8') && !finalUrl.contains('.mp4')) {
+    if (!finalUrl.contains('.m3u8') && !finalUrl.contains('.mp4') && !finalUrl.contains('pixeldrain.com/api/file/')) {
       final dropmmsResolved = await DropmmsService.resolveDirectStream(finalUrl);
       if (dropmmsResolved != null && dropmmsResolved.isNotEmpty) {
         finalUrl = dropmmsResolved;
@@ -15745,44 +15764,49 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         if (aagRes != null && aagRes.isNotEmpty) {
           finalUrl = aagRes;
         }
+      } else {
+        // Fallback to server resolver for any remaining stream host
+        try {
+          final serverRes = await _adminPhpApi('resolve_server_stream', {'url': finalUrl});
+          if (serverRes['status'] == 'success' && serverRes['data']?['stream_url'] != null) {
+            final stUrl = serverRes['data']['stream_url'].toString().trim();
+            if (stUrl.isNotEmpty) finalUrl = stUrl;
+          }
+        } catch (_) {}
       }
     }
 
     if (!mounted) return;
 
-    final isDirectMedia = finalUrl.contains('.m3u8') ||
-        finalUrl.contains('.mp4') ||
-        finalUrl.contains('pixeldrain.com/api/file/') ||
-        finalUrl.contains('tapecontent') ||
-        finalUrl.contains('/hls/') ||
-        finalUrl.contains('/hls2/') ||
-        finalUrl.contains('storage') ||
-        finalUrl.contains('blob:');
-
-    if (isDirectMedia) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => VideoPlayerScreen(
-            videoUrl: finalUrl,
-            videoTitle: videoTitle,
-            playlist: playlist,
-            initialEpisodeIndex: episodeIndex,
-          ),
-        ),
-      );
-    } else {
-      // Launch in dedicated full-screen zero-ad InAppWebView player
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => WebViewPlayerScreen(
-            embedUrl: finalUrl,
-            videoTitle: videoTitle,
-          ),
-        ),
-      );
+    final effectiveHeaders = <String, String>{};
+    final lowerFinal = finalUrl.toLowerCase();
+    if (lowerFinal.contains('cdntelly') || lowerFinal.contains('luluvdo') || lowerFinal.contains('lulustream') || lowerFinal.contains('tnmr') || lowerFinal.contains('lulucdn')) {
+      effectiveHeaders['Referer'] = 'https://cdntelly.sbs/';
+      effectiveHeaders['Origin'] = 'https://cdntelly.sbs';
+    } else if (lowerFinal.contains('sprintcdn') || lowerFinal.contains('owphbf24') || lowerFinal.contains('filemoon') || lowerFinal.contains('bysezoxexe')) {
+      effectiveHeaders['Referer'] = 'https://bysezoxexe.com/';
+      effectiveHeaders['Origin'] = 'https://bysezoxexe.com';
+    } else if (lowerFinal.contains('pixeldrain')) {
+      effectiveHeaders['Referer'] = 'https://pixeldrain.com/';
+    } else if (lowerFinal.contains('merivo') || lowerFinal.contains('vidara')) {
+      effectiveHeaders['Referer'] = 'https://merivo.fit/';
+      effectiveHeaders['Origin'] = 'https://merivo.fit';
+    } else if (lowerFinal.contains('streamtape') || lowerFinal.contains('strcloud') || lowerFinal.contains('tapecontent') || lowerFinal.contains('stape')) {
+      effectiveHeaders['Referer'] = 'https://streamtape.com/';
     }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VideoPlayerScreen(
+          videoUrl: finalUrl,
+          videoTitle: videoTitle,
+          headers: effectiveHeaders.isNotEmpty ? effectiveHeaders : null,
+          playlist: playlist,
+          initialEpisodeIndex: episodeIndex,
+        ),
+      ),
+    );
   }
 
   void _testPlayStream(String rawUrl, {String title = 'Test Stream'}) {

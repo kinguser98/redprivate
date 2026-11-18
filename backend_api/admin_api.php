@@ -3716,11 +3716,95 @@ function resolve_uplinks24_urls($url) {
     return [];
 }
 
+function resolve_filemoon_url($url) {
+    if (empty($url)) return '';
+    $url = trim($url);
+    if (!preg_match('/(?:filemoon\.[a-z]+|bysezoxexe\.com)\/(?:[dev]\/)?([a-zA-Z0-9]+)/i', $url, $m)) {
+        return '';
+    }
+    $file_code = $m[1];
+    $domains = ['bysezoxexe.com', 'filemoon.to', 'filemoon.sx'];
+    foreach ($domains as $d) {
+        $meta_url = "https://$d/api/videos/$file_code/";
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $meta_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => [
+                "Referer: https://$d/e/$file_code",
+                "X-Requested-With: XMLHttpRequest",
+            ],
+        ]);
+        $json_raw = curl_exec($ch);
+        curl_close($ch);
+        if (!$json_raw) continue;
+        $json = json_decode($json_raw, true);
+        if (!isset($json['playback']) || !isset($json['playback']['payload'])) continue;
+        $pb = $json['playback'];
+        $iv_b64 = $pb['iv'] ?? '';
+        $payload_b64 = $pb['payload'] ?? '';
+        $key_parts = $pb['key_parts'] ?? [];
+        $version = intval($pb['version'] ?? 0);
+        
+        if (empty($iv_b64) || empty($payload_b64) || empty($key_parts) || $version < 1) continue;
+
+        $b64url_decode = function($str) {
+            $remainder = strlen($str) % 4;
+            if ($remainder) {
+                $str .= str_repeat('=', 4 - $remainder);
+            }
+            return base64_decode(strtr($str, '-_', '+/'));
+        };
+
+        $iv = $b64url_decode($iv_b64);
+        $payload = $b64url_decode($payload_b64);
+        if (strlen($payload) <= 16) continue;
+
+        $idx1 = $version;
+        $idx2 = 31 - $version;
+        $k1 = isset($key_parts[$idx1 - 1]) ? $b64url_decode($key_parts[$idx1 - 1]) : '';
+        $k2 = isset($key_parts[$idx2 - 1]) ? $b64url_decode($key_parts[$idx2 - 1]) : '';
+        $key = $k1 . $k2;
+        if (strlen($key) !== 32) continue;
+
+        $tag = substr($payload, -16);
+        $ciphertext = substr($payload, 0, -16);
+
+        $decrypted = openssl_decrypt($ciphertext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+        if ($decrypted === false) {
+            $ctr_iv = $iv . "\x00\x00\x00\x02";
+            $decrypted = openssl_decrypt($ciphertext, 'aes-256-ctr', $key, OPENSSL_RAW_DATA, $ctr_iv);
+        }
+
+        if (!empty($decrypted)) {
+            $dec_json = json_decode($decrypted, true);
+            if (isset($dec_json['sources']) && is_array($dec_json['sources']) && count($dec_json['sources']) > 0) {
+                $stream_url = $dec_json['sources'][0]['url'] ?? '';
+                if (!empty($stream_url)) {
+                    return $stream_url;
+                }
+            }
+        }
+    }
+    return '';
+}
+
 function resolve_server_stream_url($url) {
     if (empty($url)) return '';
     $url = trim($url);
 
-    // 0. Check uplinks24
+    // 0. Pixeldrain direct API URL
+    if (strpos($url, 'pixeldrain.com/u/') !== false) {
+        if (preg_match('/pixeldrain\.com\/u\/([a-zA-Z0-9]+)/', $url, $pm)) {
+            return 'https://pixeldrain.com/api/file/' . $pm[1];
+        }
+    }
+
+    // 0a. Check uplinks24
     if (strpos($url, 'uplinks24.com') !== false) {
         $u_links = resolve_uplinks24_urls($url);
         foreach ($u_links as $ul) {
@@ -3744,6 +3828,12 @@ function resolve_server_stream_url($url) {
         return resolve_luluvdo_url($url);
     }
 
+    // 2b. Check Filemoon / Byse
+    if (strpos($url, 'filemoon') !== false || strpos($url, 'bysezoxexe') !== false) {
+        $fm = resolve_filemoon_url($url);
+        if (!empty($fm)) return $fm;
+    }
+
     // 3. Direct M3U8 or MP4
     if (preg_match('/\.m3u8|\.mp4/i', $url)) {
         return $url;
@@ -3755,6 +3845,9 @@ function resolve_server_stream_url($url) {
 
     $lulu = resolve_luluvdo_url($url);
     if (!empty($lulu)) return $lulu;
+
+    $fm = resolve_filemoon_url($url);
+    if (!empty($fm)) return $fm;
 
     return '';
 }
@@ -4547,12 +4640,13 @@ if ($action === 'extract_tellyhd_details') {
 
     // Server 4: Filemoon
     if (!empty($filemoon_url)) {
+        $resolvedFilemoon = resolve_server_stream_url($filemoon_url);
         $play_links[] = [
             'name' => "Server $sNum",
-            'quality' => '720p',
+            'quality' => '1080p',
             'url' => $filemoon_url,
-            'resolved_url' => $filemoon_url,
-            'type' => 'Embed Player',
+            'resolved_url' => !empty($resolvedFilemoon) ? $resolvedFilemoon : $filemoon_url,
+            'type' => !empty($resolvedFilemoon) ? 'HLS/M3U8 Stream' : 'Filemoon Stream',
         ];
         $sNum++;
     }
@@ -4579,8 +4673,12 @@ if ($action === 'resolve_server_stream') {
     $resolved = resolve_server_stream_url($url);
     if (!empty($resolved)) {
         $referer = 'https://streamtape.com/';
-        if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($resolved, 'tnmr.org') !== false || strpos($resolved, 'lulucdn') !== false) {
-            $referer = 'https://luluvdo.com/';
+        if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($resolved, 'tnmr.org') !== false || strpos($resolved, 'lulucdn') !== false || strpos($url, 'cdntelly') !== false) {
+            $referer = 'https://cdntelly.sbs/';
+        } elseif (strpos($url, 'filemoon') !== false || strpos($url, 'bysezoxexe') !== false || strpos($resolved, 'sprintcdn') !== false || strpos($resolved, 'owphbf24') !== false) {
+            $referer = 'https://bysezoxexe.com/';
+        } elseif (strpos($url, 'pixeldrain') !== false) {
+            $referer = 'https://pixeldrain.com/';
         }
 
         json_response(true, [

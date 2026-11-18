@@ -12,6 +12,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'streamtape_service.dart';
 import 'luluvdo_resolver.dart';
+import 'filemoon_resolver.dart';
 
 class DropmmsItem {
   final String title;
@@ -699,10 +700,22 @@ class DropmmsService {
         }
       }
 
-      // 3. LuluStream / LuluVdo
-      if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('luluvid') || lower.contains('lulucdn')) {
+      // 3. LuluStream / LuluVdo / cdntelly
+      if (lower.contains('luluvdo') || lower.contains('lulustream') || lower.contains('luluvid') || lower.contains('lulucdn') || lower.contains('cdntelly')) {
         final luluRes = await LuluvdoResolver.resolveOnDevice(url, forceRefresh: true);
         if (luluRes != null && luluRes.isNotEmpty) return luluRes;
+      }
+
+      // 3b. Filemoon / Byse
+      if (lower.contains('filemoon') || lower.contains('bysezoxexe')) {
+        final fmRes = await FilemoonResolver.resolveStream(url, forceRefresh: true);
+        if (fmRes != null && fmRes.isNotEmpty) return fmRes;
+      }
+
+      // 3c. Pixeldrain direct API URL
+      if (lower.contains('pixeldrain.com/u/')) {
+        final id = url.split('/u/').last.split('?').first.split('/').first;
+        if (id.isNotEmpty) return 'https://pixeldrain.com/api/file/$id';
       }
 
       // 4. Playmate

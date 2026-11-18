@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'dns_proxy.dart';
+import 'luluvdo_resolver.dart';
+import 'filemoon_resolver.dart';
 
 class TellyhdScraper {
   static const String defaultDomain = 'https://tellyhd.at';
@@ -357,24 +359,32 @@ class TellyhdScraper {
 
       // Server 3: Cdntelly LuluStream mirror
       if (cdntellyUrl.isNotEmpty) {
+        String? resolvedLulu;
+        try {
+          resolvedLulu = await LuluvdoResolver.resolveOnDevice(cdntellyUrl);
+        } catch (_) {}
         resultLinks.add({
           'name': 'Server $sNum',
           'quality': '720p',
           'url': cdntellyUrl,
-          'resolved_url': cdntellyUrl,
-          'type': 'Luluvdo Stream',
+          'resolved_url': (resolvedLulu != null && resolvedLulu.isNotEmpty) ? resolvedLulu : cdntellyUrl,
+          'type': (resolvedLulu != null && resolvedLulu.isNotEmpty) ? 'HLS/M3U8 Stream' : 'Luluvdo Stream',
         });
         sNum++;
       }
 
       // Server 4: Filemoon
       if (filemoonUrl.isNotEmpty) {
+        String? resolvedFm;
+        try {
+          resolvedFm = await FilemoonResolver.resolveStream(filemoonUrl);
+        } catch (_) {}
         resultLinks.add({
           'name': 'Server $sNum',
-          'quality': '720p',
+          'quality': '1080p',
           'url': filemoonUrl,
-          'resolved_url': filemoonUrl,
-          'type': 'Embed Player',
+          'resolved_url': (resolvedFm != null && resolvedFm.isNotEmpty) ? resolvedFm : filemoonUrl,
+          'type': (resolvedFm != null && resolvedFm.isNotEmpty) ? 'HLS/M3U8 Stream' : 'Filemoon Stream',
         });
         sNum++;
       }
