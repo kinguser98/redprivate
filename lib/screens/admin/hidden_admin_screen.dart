@@ -28,6 +28,7 @@ import '../../services/filmywap_scraper.dart';
 import '../../services/hotullu_mastiwala_scraper.dart';
 import '../../services/hdmove99_scraper.dart';
 import '../../services/tellyhd_scraper.dart';
+import '../../services/luluvdo_resolver.dart';
 import '../dropmms_browser_screen.dart';
 import '../aagmaal_browser_screen.dart';
 import '../streamtape_domains_screen.dart';
@@ -1397,6 +1398,19 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   ? (firstLink?['type'] ?? 'MP4/MKV Direct Link').toString()
                   : 'MP4/MKV Direct Link';
 
+              // Extra Episode Servers (Server 2, Server 3, ...)
+              final List<Map<String, dynamic>> extraEpisodeServers = [];
+              if (links.length > 1) {
+                for (int i = 1; i < links.length; i++) {
+                  extraEpisodeServers.add({
+                    'name': (links[i]['name'] ?? 'Server ${i + 1}').toString(),
+                    'type': (links[i]['type'] ?? epStreamType).toString(),
+                    'quality': (links[i]['quality'] ?? selectedQuality).toString(),
+                    'ctrl': TextEditingController(text: (links[i]['url'] ?? '').toString()),
+                  });
+                }
+              }
+
               await showDialog(
                 context: ctx,
                 builder: (dctx) => StatefulBuilder(
@@ -1686,11 +1700,50 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                 ),
                                 const SizedBox(width: 4),
                                 ElevatedButton.icon(
-                                  onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                                  onPressed: () {
+                                    final url = epUrlCtrl.text.trim();
+                                    if (url.isNotEmpty) {
+                                      _testPlayStream(url, title: "$selectedEpName (Server 1)");
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter stream URL first")));
+                                    }
+                                  },
+                                  icon: const Icon(Icons.play_arrow_rounded, size: 14),
+                                  label: const Text("PLAY", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF10281D),
+                                    foregroundColor: Colors.greenAccent,
+                                    side: const BorderSide(color: Colors.greenAccent, width: 0.8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                ElevatedButton.icon(
+                                  onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl, allServers, streamType}) {
                                     setDlgState(() {
                                       epUrlCtrl.text = extractedUrl;
                                       if (posterUrl != null && posterUrl.isNotEmpty) {
                                         epImageCtrl.text = posterUrl;
+                                      }
+                                      if (streamType != null && streamType.isNotEmpty) {
+                                        epStreamType = streamType;
+                                      }
+                                      if (allServers != null && allServers.length > 1) {
+                                        for (final s in extraEpisodeServers) {
+                                          (s['ctrl'] as TextEditingController?)?.dispose();
+                                        }
+                                        extraEpisodeServers.clear();
+                                        for (int i = 1; i < allServers.length; i++) {
+                                          final s = allServers[i];
+                                          extraEpisodeServers.add({
+                                            'name': s['name'] ?? 'Server ${i + 1}',
+                                            'type': s['type'] ?? epStreamType,
+                                            'quality': s['quality'] ?? selectedQuality,
+                                            'ctrl': TextEditingController(text: (s['url'] ?? '').toString()),
+                                          });
+                                        }
                                       }
                                     });
                                   }, defaultSearchText: (seriesTitle.isNotEmpty ? seriesTitle : (_editingItem?['name'] ?? _addTitleCtrl.text)).trim()),
@@ -1705,6 +1758,94 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                   ),
                                 ),
                               ],
+                            ),
+                            if (extraEpisodeServers.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              const Text("Extra Episode Servers / Mirrors:", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 6),
+                              ...extraEpisodeServers.asMap().entries.map((entry) {
+                                final sIdx = entry.key;
+                                final sData = entry.value;
+                                final sCtrl = sData['ctrl'] as TextEditingController;
+                                final sName = (sData['name'] ?? 'Server ${sIdx + 2}').toString();
+
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF141722),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(sName, style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                icon: const Icon(Icons.play_circle_fill_rounded, color: Colors.greenAccent, size: 20),
+                                                onPressed: () => _testPlayStream(sCtrl.text.trim(), title: "$selectedEpName ($sName)"),
+                                                tooltip: "Test Play $sName",
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              IconButton(
+                                                icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                                onPressed: () {
+                                                  setDlgState(() {
+                                                    sCtrl.dispose();
+                                                    extraEpisodeServers.removeAt(sIdx);
+                                                  });
+                                                },
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      TextField(
+                                        controller: sCtrl,
+                                        style: const TextStyle(color: Colors.white, fontSize: 11),
+                                        decoration: InputDecoration(
+                                          hintText: "$sName Stream URL...",
+                                          hintStyle: const TextStyle(color: Colors.white30, fontSize: 10),
+                                          isDense: true,
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Colors.white12)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                            const SizedBox(height: 6),
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                setDlgState(() {
+                                  extraEpisodeServers.add({
+                                    'name': 'Server ${extraEpisodeServers.length + 2}',
+                                    'type': epStreamType,
+                                    'quality': selectedQuality,
+                                    'ctrl': TextEditingController(),
+                                  });
+                                });
+                              },
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.cyanAccent, size: 14),
+                              label: const Text("+ Add Extra Server", style: TextStyle(color: Colors.cyanAccent, fontSize: 11)),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              ),
                             ),
                             const SizedBox(height: 20),
 
@@ -1735,7 +1876,16 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                           'type': epStreamType,
                                           'quality': selectedQuality,
                                           'url': epUrlCtrl.text.trim(),
-                                        }
+                                        },
+                                        ...extraEpisodeServers.map((s) {
+                                          final ctrl = s['ctrl'] as TextEditingController?;
+                                          return {
+                                            'name': (s['name'] ?? 'Server').toString(),
+                                            'type': (s['type'] ?? epStreamType).toString(),
+                                            'quality': (s['quality'] ?? selectedQuality).toString(),
+                                            'url': (ctrl != null ? ctrl.text.trim() : (s['url'] ?? '').toString().trim()),
+                                          };
+                                        }).where((s) => s['url']!.isNotEmpty),
                                       ];
 
                                       // Auto-upload episode image to server if external
@@ -2115,6 +2265,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                                                 ],
                                               ),
                                             ),
+                                            if (linkUrl.isNotEmpty)
+                                              _iconAction(Icons.play_circle_fill_rounded, Colors.greenAccent, () => _testPlayStream(linkUrl, title: "$seriesTitle - $epName")),
                                             _iconAction(Icons.edit_rounded, Colors.orangeAccent, () => showEpisodeDialog(existing: ep)),
                                             _iconAction(Icons.delete_outline_rounded, Colors.redAccent, () => confirmDeleteEpisode(ep)),
                                           ],
@@ -3713,14 +3865,50 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                       ),
                       const SizedBox(width: 8),
                       Padding(
+                        padding: const EdgeInsets.only(top: 20.0, right: 6.0),
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            final u = _addStreamUrlCtrl.text.trim();
+                            if (u.isNotEmpty) {
+                              _testPlayStream(u, title: _addTitleCtrl.text.trim().isNotEmpty ? _addTitleCtrl.text.trim() : "Test Movie Stream");
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter a Stream URL first")));
+                            }
+                          },
+                          icon: const Icon(Icons.play_arrow_rounded, size: 16, color: Colors.greenAccent),
+                          label: const Text("PLAY", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10281D),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.greenAccent, width: 0.8)),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                          ),
+                        ),
+                      ),
+                      Padding(
                         padding: const EdgeInsets.only(top: 20.0, right: 12.0),
                         child: ElevatedButton.icon(
-                          onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                          onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl, allServers, streamType}) {
                             setState(() {
                               _addStreamUrlCtrl.text = extractedUrl;
                               if (posterUrl != null && posterUrl.isNotEmpty) {
                                 _addPosterUrlCtrl.text = posterUrl;
                                 _addThumbUrlCtrl.text = posterUrl;
+                              }
+                              if (streamType != null && streamType.isNotEmpty) {
+                                _streamType = streamType;
+                              }
+                              if (allServers != null && allServers.length > 1) {
+                                for (final s in _extraMovieServers) {
+                                  (s['ctrl'] as TextEditingController?)?.dispose();
+                                }
+                                _extraMovieServers.clear();
+                                for (int i = 1; i < allServers.length; i++) {
+                                  _extraMovieServers.add({
+                                    'name': allServers[i]['name'] ?? 'Server ${i + 1}',
+                                    'type': allServers[i]['type'] ?? 'MP4/MKV Direct Link',
+                                    'ctrl': TextEditingController(text: (allServers[i]['url'] ?? '').toString()),
+                                  });
+                                }
                               }
                             });
                           }),
@@ -3810,7 +3998,25 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               ),
                               const SizedBox(width: 6),
                               ElevatedButton(
-                                onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl}) {
+                                onPressed: () {
+                                  final u = ctrl.text.trim();
+                                  if (u.isNotEmpty) {
+                                    _testPlayStream(u, title: "${_addTitleCtrl.text.trim()} (Server $sNum)");
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter a Server URL first")));
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green.withOpacity(0.15),
+                                  foregroundColor: Colors.greenAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: const BorderSide(color: Colors.greenAccent, width: 0.8)),
+                                ),
+                                child: const Text("PLAY", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                              const SizedBox(width: 4),
+                              ElevatedButton(
+                                onPressed: () => _showQuickLinkExtractorDialog((extractedUrl, {posterUrl, allServers, streamType}) {
                                   setState(() => ctrl.text = extractedUrl);
                                 }),
                                 style: ElevatedButton.styleFrom(
@@ -4227,6 +4433,31 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                               errorWidget: (c, u, e) => const Center(child: Icon(Icons.movie, color: Colors.grey, size: 48)),
                             ),
                             Positioned(
+                              top: 6,
+                              right: 6,
+                              child: GestureDetector(
+                                onTap: () {
+                                  final rawUrl = (item['stream_url'] ?? item['url'] ?? '').toString();
+                                  if (rawUrl.isNotEmpty) {
+                                    _testPlayStream(rawUrl, title: name);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("No stream URL found for this movie")),
+                                    );
+                                  }
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.65),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.greenAccent.withOpacity(0.7), width: 1.2),
+                                  ),
+                                  child: const Icon(Icons.play_arrow_rounded, color: Colors.greenAccent, size: 16),
+                                ),
+                              ),
+                            ),
+                            Positioned(
                               bottom: 0,
                               left: 0,
                               right: 0,
@@ -4269,6 +4500,20 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (isMovie) ...[
+              _actionButton(ctx, "▶ Test Play Movie", Icons.play_circle_fill_rounded, Colors.greenAccent, () {
+                Navigator.pop(ctx);
+                final rawUrl = (item['stream_url'] ?? item['url'] ?? '').toString();
+                if (rawUrl.isNotEmpty) {
+                  _testPlayStream(rawUrl, title: item['name'] ?? 'Movie');
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("No stream URL found for this movie")),
+                  );
+                }
+              }),
+              const SizedBox(height: 8),
+            ],
             _actionButton(ctx, "🚀 Broadcast to Telegram", Icons.send_rounded, const Color(0xFF229ED9), () {
               Navigator.pop(ctx);
               _showTelegramBroadcastDialog(
@@ -4372,6 +4617,13 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
           ),
         ),
         actions: [
+          if (type == 'movie' && (item['stream_url'] ?? item['url'] ?? '').toString().isNotEmpty)
+            ElevatedButton.icon(
+              onPressed: () => _testPlayStream((item['stream_url'] ?? item['url']).toString(), title: item['name'] ?? 'Movie'),
+              icon: const Icon(Icons.play_arrow_rounded, size: 16),
+              label: const Text("TEST PLAY", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10281D), foregroundColor: Colors.greenAccent, elevation: 0),
+            ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close", style: TextStyle(color: Colors.cyanAccent))),
         ],
       ),
@@ -11209,8 +11461,295 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
     return {'live': false, 'code': 0, 'reason': 'Link unreachable or timeout'};
   }
 
+  // ── Server Selection & Stream Test Modal (For single episode / movie import) ──
+  void _showServerSelectionModal({
+    required BuildContext parentContext,
+    required String title,
+    required String posterUrl,
+    required List<Map<String, dynamic>> servers,
+    required dynamic onSelect,
+  }) {
+    showDialog(
+      context: parentContext,
+      builder: (modalCtx) {
+        return StatefulBuilder(
+          builder: (dCtx, setModalState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0D1117),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: Colors.white12),
+              ),
+              contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.cyanAccent.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.dns_rounded, color: Colors.cyanAccent, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      "Select Stream Server",
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+                    onPressed: () => Navigator.pop(modalCtx),
+                  ),
+                ],
+              ),
+              content: Container(
+                width: MediaQuery.of(parentContext).size.width * 0.92,
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header card with poster & title
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161B22),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: Row(
+                        children: [
+                          if (posterUrl.isNotEmpty) ...[
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: CachedNetworkImage(
+                                imageUrl: posterUrl,
+                                width: 50,
+                                height: 50,
+                                fit: BoxFit.cover,
+                                errorWidget: (c, u, e) => Container(
+                                  width: 50,
+                                  height: 50,
+                                  color: Colors.white10,
+                                  child: const Icon(Icons.movie, color: Colors.white24, size: 24),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.greenAccent.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    "${servers.length} Working Server${servers.length > 1 ? 's' : ''} Found",
+                                    style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      "Available Servers (Test play before import):",
+                      style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // List of servers
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: servers.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (c, idx) {
+                          final s = servers[idx];
+                          final sName = (s['name'] ?? 'Server ${idx + 1}').toString();
+                          final sType = (s['type'] ?? 'MP4/MKV Direct Link').toString();
+                          final sUrl = (s['url'] ?? '').toString();
+                          final sQuality = (s['quality'] ?? '720p').toString();
+
+                          return Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF141722),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: Colors.purpleAccent.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        sName,
+                                        style: const TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.cyanAccent.withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        sType,
+                                        style: const TextStyle(color: Colors.cyanAccent, fontSize: 10),
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orangeAccent.withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        sQuality,
+                                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  sUrl,
+                                  style: const TextStyle(color: Colors.white38, fontSize: 10),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    // ▶ TEST PLAY
+                                    ElevatedButton.icon(
+                                      onPressed: () => _testPlayStream(sUrl, title: "$title ($sName)"),
+                                      icon: const Icon(Icons.play_arrow_rounded, size: 14),
+                                      label: const Text("TEST PLAY", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFF10281D),
+                                        foregroundColor: Colors.greenAccent,
+                                        side: const BorderSide(color: Colors.greenAccent, width: 0.8),
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        elevation: 0,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    // SELECT
+                                    ElevatedButton(
+                                      onPressed: () {
+                                        Navigator.pop(modalCtx);
+                                        try {
+                                          onSelect(
+                                            sUrl,
+                                            posterUrl: posterUrl.isNotEmpty ? posterUrl : null,
+                                            allServers: [s],
+                                            streamType: sType,
+                                          );
+                                        } catch (_) {
+                                          try {
+                                            onSelect(sUrl, posterUrl: posterUrl.isNotEmpty ? posterUrl : null);
+                                          } catch (_) {
+                                            onSelect(sUrl);
+                                          }
+                                        }
+                                      },
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.cyanAccent.withOpacity(0.2),
+                                        foregroundColor: Colors.cyanAccent,
+                                        side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        elevation: 0,
+                                      ),
+                                      child: const Text("SELECT", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(modalCtx),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                ),
+                if (servers.length > 1)
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(modalCtx);
+                      try {
+                        onSelect(
+                          servers.first['url'].toString(),
+                          posterUrl: posterUrl.isNotEmpty ? posterUrl : null,
+                          allServers: servers,
+                          streamType: (servers.first['type'] ?? 'MP4/MKV Direct Link').toString(),
+                        );
+                      } catch (_) {
+                        try {
+                          onSelect(servers.first['url'].toString(), posterUrl: posterUrl.isNotEmpty ? posterUrl : null);
+                        } catch (_) {
+                          onSelect(servers.first['url'].toString());
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.done_all_rounded, size: 16),
+                    label: Text(
+                      "IMPORT ALL ${servers.length} SERVERS",
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amberAccent,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   // ── Quick Link Extractor Popup (Search or Paste URL) ──
-  void _showQuickLinkExtractorDialog(Function(String, {String? posterUrl}) onLinkSelected, {String defaultSearchText = ''}) {
+  void _showQuickLinkExtractorDialog(dynamic onLinkSelected, {String defaultSearchText = ''}) {
     final initialQuery = defaultSearchText.trim().isNotEmpty ? defaultSearchText.trim() : _addTitleCtrl.text.trim();
     final queryCtrl = TextEditingController(text: initialQuery);
     int tab = 0; // 0=Uncut, 1=HDMaal, 2=UFFMaal, 3=BMaal, 4=AagMaal, 5=Maal Net, 6=SkyMovies, 7=HDMove99, 8=DropMMS, 9=TellyHD
@@ -11415,7 +11954,22 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   if (clientData.isNotEmpty && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
                     final streamUrl = clientData['stream_url'].toString();
                     final poster = (clientData['poster'] ?? clientData['raw_poster'] ?? '').toString();
-                    await deliverExtractedLink(streamUrl, posterUrl: poster.isNotEmpty ? poster : null, successMsg: "TellyHD stream link & poster extracted!");
+                    final itemTitle = (clientData['title'] ?? 'TellyHD Video').toString();
+                    List<Map<String, dynamic>> links = [];
+                    if (clientData['play_links'] is List) {
+                      links = (clientData['play_links'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+                    }
+                    if (links.isEmpty && streamUrl.isNotEmpty) {
+                      links.add({'name': 'Server 1', 'url': streamUrl, 'type': 'MP4/MKV Direct Link', 'quality': '720p'});
+                    }
+                    Navigator.pop(ctx);
+                    _showServerSelectionModal(
+                      parentContext: context,
+                      title: itemTitle,
+                      posterUrl: poster,
+                      servers: links,
+                      onSelect: onLinkSelected,
+                    );
                     return;
                   }
                 }
@@ -11594,6 +12148,8 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
               String? streamUrl;
               String? extractedPoster;
+              String? extractedTitle = (item is Map ? (item['title'] ?? '') : '').toString();
+              List<Map<String, dynamic>> extractedServers = [];
 
               try {
                 if (tab == 0) {
@@ -11685,11 +12241,23 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                   if (clientData.isNotEmpty && (clientData['stream_url'] ?? '').toString().isNotEmpty) {
                     streamUrl = clientData['stream_url'].toString();
                     extractedPoster = (clientData['poster'] ?? clientData['raw_poster'] ?? '').toString();
+                    extractedTitle = (clientData['title'] ?? extractedTitle).toString();
+                    if (clientData['play_links'] is List) {
+                      extractedServers = (clientData['play_links'] as List)
+                          .map((e) => Map<String, dynamic>.from(e as Map))
+                          .toList();
+                    }
                   } else {
                     final res = await _adminPhpApi('extract_tellyhd_details', {'page_url': pageUrl});
                     if (res['status'] == 'success' && res['data']?['stream_url'] != null) {
                       streamUrl = res['data']['stream_url'].toString().trim();
                       extractedPoster = (res['data']['poster'] ?? res['data']['raw_poster'] ?? '').toString();
+                      extractedTitle = (res['data']['title'] ?? extractedTitle).toString();
+                      if (res['data']['play_links'] is List) {
+                        extractedServers = (res['data']['play_links'] as List)
+                            .map((e) => Map<String, dynamic>.from(e as Map))
+                            .toList();
+                      }
                     }
                   }
                 }
@@ -11697,10 +12265,30 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
                 errorText = "Extraction error: $e";
               }
 
+              if (extractedServers.isEmpty && streamUrl != null && streamUrl.isNotEmpty) {
+                extractedServers.add({
+                  'name': 'Server 1',
+                  'type': 'MP4/MKV Direct Link',
+                  'quality': '720p',
+                  'url': streamUrl,
+                });
+              }
+
               if (!dialogCtx.mounted) return;
               dialogSetState(() => isExtracting = false);
 
-              if (streamUrl != null && streamUrl.isNotEmpty) {
+              if (extractedServers.isNotEmpty) {
+                Navigator.pop(ctx);
+                _showServerSelectionModal(
+                  parentContext: context,
+                  title: (extractedTitle != null && extractedTitle.isNotEmpty)
+                      ? extractedTitle
+                      : (item is Map ? (item['title'] ?? '') : queryCtrl.text.trim()),
+                  posterUrl: (extractedPoster != null && extractedPoster.isNotEmpty) ? extractedPoster : '',
+                  servers: extractedServers,
+                  onSelect: onLinkSelected,
+                );
+              } else if (streamUrl != null && streamUrl.isNotEmpty) {
                 await deliverExtractedLink(
                   streamUrl,
                   posterUrl: (extractedPoster != null && extractedPoster.isNotEmpty) ? extractedPoster : null,
@@ -15113,21 +15701,50 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
   }
 
   Future<void> _playDirectStream(String rawUrl, String videoTitle, {List<Map<String, dynamic>>? playlist, int episodeIndex = 0}) async {
-    String finalUrl = rawUrl;
+    String finalUrl = rawUrl.trim();
+    if (finalUrl.isEmpty) return;
 
-    // 1. Check Dropmms multi-host stream resolver (Streamtape, Vidara, LuluStream, VidSonic, VibeVdo)
-    final dropmmsResolved = await DropmmsService.resolveDirectStream(finalUrl);
-    if (dropmmsResolved != null && dropmmsResolved.isNotEmpty) {
-      finalUrl = dropmmsResolved;
-    } else if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
-      final stRes = await StreamtapeService.getDirectStreamUrl(finalUrl);
-      if (stRes != null && stRes.isNotEmpty) {
-        finalUrl = stRes;
+    // 0. Check Pixeldrain direct file link
+    if (finalUrl.contains('pixeldrain.com/u/')) {
+      final id = finalUrl.split('/u/').last.split('?').first.split('/').first;
+      if (id.isNotEmpty) {
+        finalUrl = 'https://pixeldrain.com/api/file/$id';
       }
-    } else if (finalUrl.contains('aagmaal') || finalUrl.contains('hdmaal') || finalUrl.contains('uffmaal')) {
-      final aagRes = await AagmaalResolver.resolveStream(finalUrl);
-      if (aagRes != null && aagRes.isNotEmpty) {
-        finalUrl = aagRes;
+    }
+
+    // 1. Check Luluvdo / cdntelly direct M3U8 extraction
+    if (finalUrl.contains('cdntelly') || finalUrl.contains('luluvdo') || finalUrl.contains('lulustream') || finalUrl.contains('lulucdn')) {
+      try {
+        final lulu = await LuluvdoResolver.resolveOnDevice(finalUrl);
+        if (lulu != null && lulu.isNotEmpty) {
+          finalUrl = lulu;
+        } else {
+          final serverRes = await _adminPhpApi('resolve_server_stream', {'url': finalUrl});
+          if (serverRes['status'] == 'success' && serverRes['data']?['stream_url'] != null) {
+            final stUrl = serverRes['data']['stream_url'].toString().trim();
+            if (stUrl.isNotEmpty) finalUrl = stUrl;
+          }
+        }
+      } catch (e) {
+        debugPrint("Error resolving Luluvdo/cdntelly: $e");
+      }
+    }
+
+    // 2. Check Dropmms multi-host stream resolver (Streamtape, Vidara, LuluStream, VidSonic, VibeVdo)
+    if (!finalUrl.contains('.m3u8') && !finalUrl.contains('.mp4')) {
+      final dropmmsResolved = await DropmmsService.resolveDirectStream(finalUrl);
+      if (dropmmsResolved != null && dropmmsResolved.isNotEmpty) {
+        finalUrl = dropmmsResolved;
+      } else if (finalUrl.contains('streamtape.com') || finalUrl.contains('streamta.pe') || finalUrl.contains('streamtape.to') || finalUrl.contains('streamtape.net')) {
+        final stRes = await StreamtapeService.getDirectStreamUrl(finalUrl);
+        if (stRes != null && stRes.isNotEmpty) {
+          finalUrl = stRes;
+        }
+      } else if (finalUrl.contains('aagmaal') || finalUrl.contains('hdmaal') || finalUrl.contains('uffmaal')) {
+        final aagRes = await AagmaalResolver.resolveStream(finalUrl);
+        if (aagRes != null && aagRes.isNotEmpty) {
+          finalUrl = aagRes;
+        }
       }
     }
 
@@ -15135,6 +15752,7 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
 
     final isDirectMedia = finalUrl.contains('.m3u8') ||
         finalUrl.contains('.mp4') ||
+        finalUrl.contains('pixeldrain.com/api/file/') ||
         finalUrl.contains('tapecontent') ||
         finalUrl.contains('/hls/') ||
         finalUrl.contains('/hls2/') ||
@@ -15165,6 +15783,30 @@ class _HiddenAdminScreenState extends State<HiddenAdminScreen> {
         ),
       );
     }
+  }
+
+  void _testPlayStream(String rawUrl, {String title = 'Test Stream'}) {
+    final trimmed = rawUrl.trim();
+    if (trimmed.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Stream URL is empty")),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent)),
+            const SizedBox(width: 10),
+            Expanded(child: Text("Loading player: $title", maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+          ],
+        ),
+        duration: const Duration(seconds: 2),
+        backgroundColor: const Color(0xFF141722),
+      ),
+    );
+    _playDirectStream(trimmed, title);
   }
 
   void _showSeriesEpisodesSheet(Map<String, dynamic> details, String fallbackTitle, String fallbackPoster) {

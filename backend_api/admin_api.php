@@ -3600,6 +3600,8 @@ function resolve_luluvdo_url($url) {
     if (empty($file_code)) return '';
 
     $urls_to_try = [
+        "https://cdntelly.sbs/" . $file_code,
+        "https://cdntelly.sbs/e/" . $file_code,
         "https://lulucdn.com/e/" . $file_code,
         "https://lulucdn.com/" . $file_code,
         "https://luluvdo.com/e/" . $file_code,
@@ -3737,8 +3739,8 @@ function resolve_server_stream_url($url) {
         return resolve_streamtape_url($url);
     }
 
-    // 2. Check Luluvdo / LuluStream / LuluCDN / Luluvido
-    if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($url, 'lulucdn') !== false || strpos($url, 'luluvido') !== false) {
+    // 2. Check Luluvdo / LuluStream / LuluCDN / Luluvido / Cdntelly
+    if (strpos($url, 'luluvdo') !== false || strpos($url, 'lulustream') !== false || strpos($url, 'lulucdn') !== false || strpos($url, 'luluvido') !== false || strpos($url, 'cdntelly') !== false) {
         return resolve_luluvdo_url($url);
     }
 
@@ -4384,6 +4386,37 @@ if ($action === 'search_tellyhd_catalog') {
             }
         }
     }
+
+        // Smart Relevance Ranking & Filtering
+        $queryWords = array_values(array_filter(preg_split('/\s+/', strtolower($raw_query)), function($w) {
+            return strlen($w) >= 2;
+        }));
+
+        if (!empty($queryWords)) {
+            $hasExactMatches = false;
+            foreach ($items as &$it) {
+                $score = 0;
+                $tLower = strtolower($it['title']);
+                $uLower = strtolower($it['page_url']);
+                foreach ($queryWords as $kw) {
+                    if (strpos($tLower, $kw) !== false) $score += 15;
+                    if (strpos($uLower, $kw) !== false) $score += 10;
+                }
+                $it['match_score'] = $score;
+                if ($score > 0) $hasExactMatches = true;
+            }
+            unset($it);
+
+            if ($hasExactMatches) {
+                $items = array_values(array_filter($items, function($it) {
+                    return ($it['match_score'] ?? 0) > 0;
+                }));
+            }
+
+            usort($items, function($a, $b) {
+                return ($b['match_score'] ?? 0) <=> ($a['match_score'] ?? 0);
+            });
+        }
 
     json_response(true, ['items' => $items], 'TellyHD catalog search completed');
 }

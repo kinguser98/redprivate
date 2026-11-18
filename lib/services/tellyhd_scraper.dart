@@ -183,6 +183,35 @@ class TellyhdScraper {
       }
     }
 
+    // Smart Relevance Ranking & Filtering
+    final queryWords = query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.length >= 2).toList();
+    if (queryWords.isNotEmpty && results.isNotEmpty) {
+      bool hasExactMatches = false;
+      for (final it in results) {
+        int score = 0;
+        final tLower = (it['title'] ?? '').toString().toLowerCase();
+        final uLower = (it['page_url'] ?? '').toString().toLowerCase();
+        for (final kw in queryWords) {
+          if (tLower.contains(kw)) score += 15;
+          if (uLower.contains(kw)) score += 10;
+        }
+        it['match_score'] = score;
+        if (score > 0) hasExactMatches = true;
+      }
+
+      var filtered = results;
+      if (hasExactMatches) {
+        filtered = results.where((it) => ((it['match_score'] as int?) ?? 0) > 0).toList();
+      }
+
+      filtered.sort((a, b) {
+        final scoreComp = ((b['match_score'] as int?) ?? 0).compareTo((a['match_score'] as int?) ?? 0);
+        if (scoreComp != 0) return scoreComp;
+        return ((a['ep_num'] as int?) ?? 0).compareTo((b['ep_num'] as int?) ?? 0);
+      });
+      return filtered;
+    }
+
     return results;
   }
 

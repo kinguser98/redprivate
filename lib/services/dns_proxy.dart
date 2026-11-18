@@ -380,7 +380,20 @@ class CustomDnsProxy {
   Future<void> _handleMediaForward(HttpRequest request) async {
     final client = _getHttpClient();
     try {
-      final target = request.uri.queryParameters['u'] ?? '';
+      String target = '';
+      final rawQuery = request.uri.query;
+      if (rawQuery.contains('u=')) {
+        final uStart = rawQuery.indexOf('u=') + 2;
+        final rIdx = rawQuery.indexOf('&r=', uStart);
+        if (rIdx != -1) {
+          target = Uri.decodeComponent(rawQuery.substring(uStart, rIdx));
+        } else {
+          target = Uri.decodeComponent(rawQuery.substring(uStart));
+        }
+      }
+      if (target.isEmpty) {
+        target = request.uri.queryParameters['u'] ?? '';
+      }
       if (target.isEmpty ||
           !(target.startsWith('https://') || target.startsWith('http://'))) {
         request.response.statusCode = 400;

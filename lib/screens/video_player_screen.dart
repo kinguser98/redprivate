@@ -831,11 +831,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
     });
 
-    // DNS-poisoned hosts (eporner) stream through the local DoH proxy.
-    final playTarget = mediaForwardUrlIfNeeded(qUrl) ?? qUrl;
-    final sanitizedTarget = Uri.encodeFull(Uri.decodeFull(playTarget));
+    // DNS-poisoned hosts stream through the local DoH proxy.
+    final sanitizedUrl = Uri.encodeFull(Uri.decodeFull(qUrl));
+    final playTarget = mediaForwardUrlIfNeeded(sanitizedUrl) ?? sanitizedUrl;
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(sanitizedTarget),
+      Uri.parse(playTarget),
       httpHeaders: playHeaders,
     );
 

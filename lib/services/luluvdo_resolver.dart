@@ -72,14 +72,21 @@ class LuluvdoResolver {
     final fileCode = rawUrl.trim().replaceAll(RegExp(r'/+$'), '').split('/').last;
     if (fileCode.isEmpty) return null;
 
-    final urlsToTry = [
+    final urlsToTry = <String>[];
+    if (rawUrl.contains('cdntelly')) {
+      urlsToTry.add(rawUrl.trim());
+      urlsToTry.add('https://cdntelly.sbs/$fileCode');
+      urlsToTry.add('https://cdntelly.sbs/e/$fileCode');
+    }
+    urlsToTry.addAll([
       'https://luluvdo.com/e/$fileCode',
       'https://luluvdo.com/$fileCode',
       'https://lulustream.com/e/$fileCode',
       'https://lulustream.com/$fileCode',
       'https://lulucdn.com/e/$fileCode',
       'https://lulucdn.com/$fileCode',
-    ];
+      'https://cdntelly.sbs/$fileCode',
+    ]);
 
     final headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
